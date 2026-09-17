@@ -2,7 +2,7 @@ network_launch:
   launch_option: 2
   remote_pc:
     bridge_ip: 192.168.0.20
-    simulator_ip: 192.168.0.10
+    simulator_ip: 192.168.0.8
   open_ufw_for_remote: true
 
 vehicle_spec:
