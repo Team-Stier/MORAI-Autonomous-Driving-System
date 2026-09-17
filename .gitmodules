@@ -1,0 +1,7 @@
+[submodule "src/MORAI-ROS_morai_msgs"]
+	path = src/MORAI-ROS_morai_msgs
+	url = https://github.com/MORAI-Autonomous/MORAI-ROS_morai_msgs.git
+	branch = beta_drive
+[submodule "src/MORAI-UDP-Bridge-Node"]
+	path = src/MORAI-UDP-Bridge-Node
+	url = /Users/taeyunkim/Library/Mobile Documents/com~apple~CloudDocs/Workspaces/MORAI-UDP-Bridge-Node

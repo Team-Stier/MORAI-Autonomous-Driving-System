@@ -1,0 +1,27 @@
+network_launch:
+  launch_option: 2
+  remote_pc:
+    bridge_ip: 192.168.0.20
+    simulator_ip: 192.168.0.10
+  open_ufw_for_remote: true
+
+vehicle_spec:
+  base_frame_id: base_link
+  gps_frame_id: gps_link
+  imu_frame_id: imu_link
+  cameras:
+    front:
+      frame_id: camera_front_optical_frame
+      width: 1280
+      height: 720
+      horizontal_fov_deg: 90.0
+    left:
+      frame_id: camera_left_optical_frame
+      width: 640
+      height: 480
+      horizontal_fov_deg: 130.0
+    right:
+      frame_id: camera_right_optical_frame
+      width: 640
+      height: 480
+      horizontal_fov_deg: 130.0
