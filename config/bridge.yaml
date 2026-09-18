@@ -1,7 +1,6 @@
 network_launch:
   launch_option: 2
   remote_pc:
-    interface: enp5s0
     bridge_ip: 192.168.0.10
     simulator_ip: 192.168.0.1
   open_ufw_for_remote: true
@@ -26,3 +25,8 @@ vehicle_spec:
       width: 640
       height: 480
       horizontal_fov_deg: 130.0
+    camera_7:
+      frame_id: camera_7_optical_frame
+      width: 640
+      height: 480
+      horizontal_fov_deg: 90.0
