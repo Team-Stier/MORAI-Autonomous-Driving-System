@@ -19,6 +19,7 @@ MORAI Windows PC의 센서 송신 목적지는 `192.168.0.10`이다. 주요 포�
 같다.
 
 - Front/Left/Right camera: `9291`, `9293`, `9295`
+- Camera 7: `9297`, 위치 `(0.0, 0.0, 1.5m)`, `640x480`, FOV `90°`
 - GPS: `9301`
 - IMU: `9999`
 - Competition status: `9099`
