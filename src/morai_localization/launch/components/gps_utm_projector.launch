@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config" default="$(find morai_localization)/config/maps/molit_2026_kcity.yaml"/>
+
+  <node pkg="morai_localization"
+        type="gps_utm_projector_node"
+        name="gps_utm_projector"
+        output="screen"
+        required="true">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+</launch>

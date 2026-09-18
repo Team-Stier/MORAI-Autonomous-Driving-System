@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config"
+       default="$(find morai_localization)/config/maps/molit_2026_kcity.yaml"/>
+
+  <include file="$(find morai_localization)/launch/components/gps_utm_projector.launch">
+    <arg name="config" value="$(arg config)"/>
+  </include>
+
+  <node pkg="morai_localization"
+        type="imu_orientation_adapter_node"
+        name="imu_orientation_adapter"
+        output="screen"
+        required="true">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+
+  <node pkg="morai_localization"
+        type="localization_fusion_node"
+        name="localization_fusion"
+        output="screen"
+        required="true">
+    <rosparam command="load" file="$(arg config)"/>
+  </node>
+</launch>

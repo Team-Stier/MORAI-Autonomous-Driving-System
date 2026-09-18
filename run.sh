@@ -29,7 +29,14 @@ for pattern in "${BRIDGE_PROCESSES[@]}"; do
     pkill -KILL -f "$pattern" 2>/dev/null || true
 done
 
-if [[ ! -f devel/setup.bash || ! -f devel/lib/libdriver_nodelet.so || ! -f devel/lib/libtransform_nodelet.so ]]; then
+if [[ ! -f devel/setup.bash || ! -f devel/lib/libdriver_nodelet.so ||
+      ! -f devel/lib/libtransform_nodelet.so ||
+      ! -x devel/lib/morai_path_tracking/path_tracking_controller_node ||
+      src/morai_path_tracking/src/nodes/path_tracking_controller_node.cpp -nt \
+          devel/lib/morai_path_tracking/path_tracking_controller_node ||
+      src/morai_path_tracking/msg/ControllerStatus.msg -nt \
+          devel/include/morai_path_tracking/ControllerStatus.h ||
+      ! -x devel/lib/morai_tf/map_velodyne_tf_node ]]; then
     catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo
 fi
 source devel/setup.bash
@@ -105,5 +112,9 @@ if ! "$velodyne_ready"; then
     echo "Velodyne nodelets did not become ready" >&2
     exit 1
 fi
+
+setsid bash src/morai_path_tracking/launch.sh &
+controller_pid=$!
+children+=("$controller_pid")
 
 wait -n "${children[@]}"

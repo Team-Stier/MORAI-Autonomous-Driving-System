@@ -1,0 +1,12 @@
+<launch>
+  <arg name="config"
+       default="$(find morai_path_tracking)/config/controllers/molit_2026_path_tracking.yaml"/>
+
+  <rosparam command="load" file="$(arg config)"/>
+
+  <node pkg="morai_path_tracking"
+        type="path_tracking_controller_node"
+        name="path_tracking_controller_node"
+        output="screen"
+        required="true"/>
+</launch>

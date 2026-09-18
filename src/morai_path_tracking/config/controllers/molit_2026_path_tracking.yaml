@@ -1,0 +1,319 @@
+path_tracking_controller_node:
+  local_path_topic: /local_path
+  odometry_topic: /localization/odometry
+  vehicle_status_topic: /vehicle/competition_status
+  command_topic: /morai_udp_bridge/control_cmd
+  controller_status_topic: /control/controller_status
+  lookahead_point_topic: /control/lookahead_point
+  stanley_projection_point_topic: /control/stanley_projection_point
+  mpc_projection_point_topic: /control/mpc_projection_point
+  mpc_compensated_path_topic: /control/mpc_compensated_path
+  expected_frame_id: map
+  expected_velocity_frame_id: base_link
+  control_rate_hz: 30.0
+  path_timeout_sec: 0.25
+  odometry_timeout_sec: 0.25
+  vehicle_status_timeout_sec: 0.25
+  # local_path와 odometry는 동일 localization generation stamp를 사용한다.
+  maximum_input_skew_sec: 0.0
+  input_sync_queue_size: 10
+  minimum_control_dt_sec: 0.005
+  maximum_control_dt_sec: 0.10
+  safe_brake_command: 0.50
+  wheelbase_m: 3.0
+  # Supplied MGeo link widths are uniformly 3.5 m and do not describe the
+  # reported tight painted corridor. The route reaches about 0.104 1/m;
+  # 3.0 m is the narrowest validated corridor with positive measured clearance;
+  # 2.6 m, 2.8 m, and 2.9 m produced overlap on the tightest curve.
+  vehicle_width_m: 1.892
+  lane_half_width_m: 1.35
+  # Preserve the native IMM blend above the start margin. Between these
+  # margins, continuously prefer the stronger valid CTE-recovery candidate.
+  lane_clearance_recovery_start_m: 0.18
+  # 양의 여유가 남아 있을 때 곡률 목표속도보다 낮은 10 km/h로 급락하지
+  # 않도록 full emergency 감속은 실제 차선 접촉 경계(0 m)에서만 건다.
+  lane_clearance_recovery_full_m: 0.0
+  # Operator-facing speed unit is km/h; the controller converts at load time.
+  lane_clearance_recovery_speed_kph: 10.0
+  # S커브에서 CTE보다 먼저 커지는 헤딩 지연을 이용해 전륜 차선 접근 전에만
+  # 곡률 목표속도를 추가로 낮춘다. 정렬된 커브의 속도는 제한하지 않는다.
+  heading_error_speed_limit_start_deg: 14.0
+  heading_error_speed_limit_full_deg: 20.0
+  heading_error_recovery_speed_kph: 10.0
+  lookahead_base_m: 4.0
+  lookahead_speed_gain_sec: 0.75
+  lookahead_curvature_gain_m: 8.0
+  lookahead_min_m: 4.0
+  lookahead_max_m: 16.0
+  minimum_target_distance_m: 0.5
+  maximum_steering_angle_deg: 40.0
+  # 운영 선택은 mpc 또는 hybrid. pure_pursuit/stanley는 회귀시험용으로만 유지한다.
+  # 변경 후 노드를 재시작해야 한다.
+  lateral_controller: mpc
+  # 종방향도 MPC를 기본 사용한다. 회귀 비교 시 pid로 변경할 수 있다.
+  longitudinal_controller: mpc
+
+  # 팀원 morai_mpc_sandbox의 readiness 설정을 ROS 파라미터로 이관했다.
+  # 대회 제한보다 1 km/h 낮게 목표를 제한한다. 절대 상한은 아래 60 km/h이다.
+  mpc_test_speed_limit_kph: 59.0
+  # 워크스페이스 외부 의존성이 없는 자체 projected-gradient 솔버를 사용한다.
+  mpc_solver: projected_gradient
+  mpc_prediction_time_sec: 1.2
+  mpc_horizon_steps: 24
+  mpc_time_based_horizon: true
+  mpc_adaptive_prediction_time: true
+  mpc_minimum_prediction_time_sec: 1.2
+  mpc_maximum_prediction_time_sec: 1.8
+  mpc_minimum_horizon_steps: 12
+  mpc_maximum_horizon_steps: 60
+  mpc_minimum_preview_distance_m: 8.0
+  mpc_prediction_speed_gain_sec_per_mps: 0.04
+  mpc_resample_distance_m: 0.5
+  mpc_maximum_steering_rate_deg_per_sec: 60.0
+  mpc_optimizer_iterations: 10
+  mpc_optimizer_initial_step_deg_per_sec: 30.0
+  mpc_optimizer_min_step_deg_per_sec: 0.125
+  mpc_optimizer_step_decay: 0.5
+  mpc_optimizer_gradient_epsilon_deg_per_sec: 0.25
+  mpc_optimizer_gradient_step: 0.05
+  mpc_optimizer_gradient_tolerance: 0.00001
+  mpc_optimizer_line_search_steps: 8
+  mpc_use_warm_start: true
+  mpc_use_multi_resolution: true
+  mpc_use_previous_control: true
+  mpc_model_actuator: true
+  mpc_actuator_delay_sec: 0.10
+  mpc_actuator_time_constant_sec: 0.15
+  mpc_weight_lateral: 12.0
+  mpc_weight_heading: 7.0
+  mpc_weight_steering: 0.7
+  mpc_weight_steering_rate: 0.24
+  mpc_weight_steering_rate_change: 4.8
+  mpc_weight_terminal_lateral: 30.0
+  mpc_weight_terminal_heading: 18.0
+  # 정확한 선형 QP에서는 전방 곡률이 잡힐 때 기하 조향/heading을 CTE보다
+  # 우선한다. S자 전환에서 순간 CTE 복귀 때문에 반대 방향으로 먼저 꺾는
+  # 현상을 막되 직선 가중치는 바꾸지 않는다.
+  mpc_adaptation_start_curvature_m_inv: 0.003
+  mpc_adaptation_full_curvature_m_inv: 0.020
+  mpc_curve_heading_weight_multiplier: 1.4
+  mpc_curve_steering_weight_multiplier: 2.5
+  mpc_curve_rate_change_weight_multiplier: 0.6
+  mpc_straight_rate_weight_multiplier: 1.0
+  mpc_straight_rate_change_weight_multiplier: 1.0
+  # yaw-rate 후단 직접 감쇠는 MPC 출력과 충돌해 조향 반전을 키우므로 사용하지 않는다.
+  mpc_yaw_rate_damping_gain: 0.0
+  mpc_yaw_rate_damping_fade_curvature_m_inv: 0.008
+  # 타이트한 곡선에서 뒷차축을 곡선 안쪽으로 이동시켜 앞바퀴 swept path와
+  # 뒷바퀴 여유를 균등화한다. 직선에서는 보정량이 0이다.
+  mpc_swept_path_compensation_enabled: true
+  mpc_swept_path_vehicle_width_m: 1.892
+  mpc_swept_path_compensation_gain: 1.0
+  mpc_swept_path_activation_start_curvature_m_inv: 0.005
+  mpc_swept_path_activation_full_curvature_m_inv: 0.020
+  mpc_swept_path_maximum_offset_m: 0.30
+  mpc_swept_path_curvature_smoothing_window_points: 5
+  # GPS 횡방향 계단 노이즈는 고속 직선에서만 짧게 필터링한다. 곡선 preview가
+  # 잡히면 즉시 원신호로 복귀해 조향 진입을 늦추지 않는다.
+  mpc_straight_cte_filter_time_constant_sec: 0.0
+  mpc_straight_cte_filter_minimum_speed_kph: 45.0
+  mpc_straight_cte_filter_maximum_curvature_m_inv: 0.003
+  # 시간축 CTE slew 제한은 raw CTE가 부호를 바꾼 뒤에도 과거 부호를 유지해
+  # 40~50 km/h 와리가리를 만들었으므로 비활성화한다.
+  mpc_straight_cte_maximum_rate_mps: 0.0
+  # 조향률 시간 필터는 작은 반전은 줄이지만 고속 1초 진폭을 키운
+  # 후보 21 결과에 따라 비활성화한다.
+  mpc_straight_steering_rate_filter_time_constant_sec: 0.0
+  mpc_straight_steering_rate_filter_minimum_speed_kph: 45.0
+  mpc_straight_steering_rate_filter_maximum_curvature_m_inv: 0.003
+  # Pure Pursuit lookahead의 공간 평균 효과를 MPC 상태 관측에 적용한다.
+  # 전방 4~10 m 경로점을 직선에서는 안정적인 1차 접선, 곡선에서는
+  # 곡률을 보존하는 2차 접선으로 연속 혼합한다. 이로써 RDDF 짧은
+  # 선분 경계의 heading 계단은 평균하고, 실제 중·고곡률은 직선으로
+  # 오인하지 않는다. 0.04 m^-1에서는 원래 MPC 상태로 복원한다.
+  mpc_straight_spatial_fit_enabled: true
+  mpc_straight_spatial_fit_start_speed_kph: 30.0
+  mpc_straight_spatial_fit_full_speed_kph: 40.0
+  mpc_straight_spatial_fit_full_curvature_m_inv: 0.001
+  mpc_straight_spatial_fit_off_curvature_m_inv: 0.040
+  mpc_straight_spatial_fit_base_preview_m: 4.0
+  mpc_straight_spatial_fit_speed_gain_sec: 0.25
+  mpc_straight_spatial_fit_maximum_preview_m: 10.0
+  mpc_straight_spatial_fit_lateral_weight_multiplier: 0.65
+  # OSQP를 2 m 앞 곡률의 기하학적 조향각으로 warm-start해 S자 진입 지연을 줄인다.
+  mpc_curve_feedforward_seed_gain: 0.0
+  mpc_curve_feedforward_seed_lookahead_m: 2.0
+  # 직선에서도 명령각을 실제 wheel angle로 오인하지 않도록 IMU yaw-rate로
+  # 유효 조향각을 관측한다. 0.10 s 저역통과와 50% blend는 센서 미세진동은
+  # 억제하면서 약 0.20 s로 계측된 조향 액추에이터 지연을 MPC 상태에 반영한다.
+  mpc_straight_yaw_rate_steering_estimate_gain: 0.0
+  mpc_straight_yaw_rate_steering_estimate_minimum_speed_kph: 30.0
+  mpc_straight_yaw_rate_steering_estimate_filter_time_constant_sec: 0.10
+  # CompetitionVehicleStatus에는 실제 wheel angle이 없으므로 곡선에서만
+  # delta_eff=atan(L*yaw_rate/v)로 유효 조향을 추정한다. 직선에서는 0%라
+  # IMU 미세 진동이 조향 명령으로 되먹임되지 않는다.
+  mpc_curve_yaw_rate_steering_estimate_gain: 1.0
+  mpc_curve_yaw_rate_steering_estimate_minimum_speed_kph: 5.0
+  # yaw-rate 기반 유효 조향각은 직선에서 끄고 확실한 곡선에서만 켄다.
+  # 경로 곡률/조향 반응은 즉시 유지하되, 0.02~0.05 m^-1 중간 곡률에서
+  # 지연된 yaw-rate 관측값이 명령각과 섞였다 빠지 않도록 혼합만 평활한다.
+  mpc_curve_yaw_rate_steering_estimate_activation_start_curvature_m_inv: 0.020
+  mpc_curve_yaw_rate_steering_estimate_activation_full_curvature_m_inv: 0.050
+  mpc_curve_yaw_rate_steering_estimate_blend_time_constant_sec: 0.15
+  # GPS 차분 횡속도 노이즈가 직선 진동을 증폭한 실차형 동적 bicycle QP는
+  # 비교 실험용으로 남기되 기본 비활성화한다.
+  mpc_straight_dynamic_model_enabled: false
+  mpc_straight_dynamic_model_minimum_speed_kph: 30.0
+  mpc_straight_dynamic_model_maximum_curvature_m_inv: 0.003
+  mpc_weight_straight_dynamic_sideslip: 1.0
+  mpc_weight_straight_dynamic_yaw_rate: 4.0
+  # 59 km/h에서 횡오차 1 m당 약 6.2 deg를 보정해 지속적인 우측 편향을 줄인다.
+  stanley_gain: 2.0
+  stanley_softening_speed_mps: 2.0
+  stanley_minimum_control_speed_mps: 1.0
+  # 앞차축 투영점 전후 총 4 m chord로 경로 heading을 공간 평활화한다.
+  stanley_heading_window_m: 4.0
+  # 지연된 heading feedback의 비중을 낮춰 고속 좌우 진동을 억제한다.
+  stanley_heading_error_gain: 0.6
+  # 경로 곡률에 필요한 정상상태 조향을 앞서 공급한다.
+  stanley_curvature_feedforward_gain: 1.0
+  # 앞차축 투영점부터 전방 8 m의 세 점으로 signed curvature를 계산한다.
+  stanley_curvature_preview_distance_m: 8.0
+  # measured yaw rate - speed * reference curvature에 대한 감쇠 gain [s].
+  stanley_yaw_rate_damping_gain_sec: 0.1
+  # 회전이 큰 S커브 진입/탈출에서만 감쇠 gain을 연속적으로 강화한다 [s^2].
+  stanley_yaw_rate_damping_nonlinear_gain_sec2: 0.4
+  # 30 Hz 기준 주기당 최대 2 deg 변화, 0 -> 40 deg 약 0.67 s.
+  stanley_maximum_steering_rate_deg_per_sec: 60.0
+  # IMM bicycle model. IONIQ 5에서 확인되지 않은 동역학 값은 MORAI 검증 논문의
+  # 3 m wheelbase 승용차 초기값이며 rosbag innovation으로 조정한다.
+  hybrid_mass_kg: 2000.0
+  hybrid_yaw_inertia_kgm2: 4000.0
+  hybrid_front_cornering_stiffness_n_per_rad: 60000.0
+  hybrid_rear_cornering_stiffness_n_per_rad: 60000.0
+  hybrid_front_axle_to_cg_m: 1.5
+  hybrid_rear_axle_to_cg_m: 1.5
+  hybrid_process_noise_sideslip: 0.1
+  hybrid_process_noise_yaw_rate: 0.01
+  hybrid_measurement_noise_sideslip: 0.001
+  hybrid_measurement_noise_yaw_rate: 0.001
+  hybrid_initial_covariance_sideslip: 0.1
+  hybrid_initial_covariance_yaw_rate: 0.01
+  hybrid_initial_pure_pursuit_probability: 0.8
+  hybrid_initial_stanley_probability: 0.2
+  # CTE 직접 복귀가 완전히 사라지거나 Stanley로 고착되지 않도록 연속 확률 제한.
+  hybrid_stanley_probability_min: 0.15
+  hybrid_stanley_probability_max: 0.90
+  # source controller -> destination model Markov transition probability.
+  hybrid_transition_pure_pursuit_to_pure_pursuit: 0.9
+  hybrid_transition_pure_pursuit_to_stanley: 0.1
+  hybrid_transition_stanley_to_pure_pursuit: 0.95
+  hybrid_transition_stanley_to_stanley: 0.05
+  # 기준 속도까지 올라갈수록 Stanley destination 확률에 최대 0.1을 연속 가산.
+  hybrid_transition_speed_gain: 0.1
+  hybrid_transition_reference_speed_kph: 60.0
+  hybrid_minimum_model_speed_mps: 1.0
+  # PP가 우세해도 횡오차 복귀가 남도록 Stanley CTE feedback의 일부만 더한다.
+  # 0.0은 native PP, 1.0은 CTE feedback 전량이며 standalone PP에는 영향이 없다.
+  hybrid_pure_pursuit_cross_track_correction_gain: 0.60
+  # 급커브 진입에서 corrected PP와 Stanley가 같은 방향이고 Stanley가 더 강하면
+  # 곡률에 따라 Stanley 최소 비중을 연속적으로 높여 heading 지연을 예방한다.
+  hybrid_curve_preview_stanley_weight_start_m_inv: 0.02
+  hybrid_curve_preview_stanley_weight_full_m_inv: 0.06
+  # Live narrow-lane trials regressed the validated IMM trajectory, so keep
+  # this experimental override available but disabled by default.
+  hybrid_curve_preview_stanley_minimum_weight: 0.0
+  # 곡률만으로 Stanley를 강제하지 않고, 두 후보가 같은 방향이며 Stanley가
+  # 실제 헤딩 지연을 더 강하게 줄이는 순간에만 최소 비중을 올린다.
+  hybrid_heading_lag_stanley_weight_start_deg: 8.0
+  hybrid_heading_lag_stanley_weight_full_deg: 14.0
+  hybrid_heading_lag_stanley_minimum_weight: 0.55
+  # 급커브/S커브에서 두 후보 조향 부호가 반대면, 기하학적으로 전방 경로를 보는
+  # corrected PP를 우선해 IMM 동역학 likelihood의 순간적인 오선택을 제한한다.
+  hybrid_candidate_conflict_curvature_threshold_m_inv: 0.015
+  hybrid_candidate_conflict_cross_track_threshold_m: 0.45
+  # CTE가 이 값의 절반을 넘으면 PP 복귀 비중을 부드럽게 높이고 전량 적용한다.
+  hybrid_cross_track_recovery_full_scale_m: 0.55
+  # 큰 heading 오차는 전륜 CTE를 부풀리므로 이 구간에서만 PP 강제 복귀를 줄인다.
+  hybrid_cross_track_recovery_heading_error_suppression_start_deg: 15.0
+  hybrid_cross_track_recovery_heading_error_suppression_full_deg: 17.5
+  hybrid_cross_track_recovery_heading_error_maximum_suppression_ratio: 0.30
+  # 두 후보를 혼합한 뒤 한 번만 적용하는 최종 조향 변화율.
+  hybrid_maximum_steering_rate_deg_per_sec: 60.0
+  # 저곡률에서는 짧은 CTE 변화에 대한 좌우 조향 반전을 줄이고, 아래 곡률까지
+  # 연속적으로 60 deg/s로 복원해 급커브 진입 응답은 유지한다.
+  hybrid_low_curvature_maximum_steering_rate_deg_per_sec: 45.0
+  hybrid_full_steering_rate_curvature_m_inv: 0.015
+  # 커브 탈출 시 같은 방향에서 조향 절대값을 줄이는 복귀율 배수.
+  hybrid_steering_return_rate_multiplier: 2.0
+  # 운전자 설정 단위는 km/h, 제어기 내부와 상태 토픽은 m/s를 사용한다.
+  target_speed_kph: 59.0
+  minimum_curve_speed_kph: 15.0
+  # 후보 20의 네 바퀴 안전 여유를 기준으로 곡선 속도를 단계적으로 상향한다.
+  maximum_lateral_acceleration_mps2: 2.7
+  # 클수록 곡률 증가에 따른 추가 감속이 강해진다. 0.0이면 기존 횡가속도 식만 사용한다.
+  curvature_speed_reduction_gain_m: 0.0
+  curvature_preview_distance_m: 45.0
+  lookahead_curvature_preview_distance_m: 8.0
+  curvature_sample_spacing_m: 2.0
+  # 전방 곡선의 도달 가능 속도를 높여 너무 이른 감속을 줄인다.
+  curve_approach_deceleration_mps2: 1.7
+  curvature_epsilon_m_inv: 0.001
+  target_speed_acceleration_limit_mps2: 2.0
+  # 전방 곡률이 남아 있어도 직전 급곡선의 저속 목표에 고착되지 않도록
+  # planner가 계산한 새 목표까지 합리적인 종가속도로 회복한다.
+  curve_target_speed_acceleration_limit_mps2: 1.2
+  target_speed_deceleration_limit_mps2: 5.0
+  # 곡률 raw 목표속도 LPF. 0.0이면 비활성.
+  target_speed_filter_time_constant_sec: 0.35
+  # Simulator 무노이즈 가정에서는 0.0(필터 비활성).
+  speed_filter_time_constant_sec: 0.0
+  speed_kp: 0.18
+  speed_ki: 0.02
+  speed_kd: 0.0
+  speed_integral_limit: 1.0
+  speed_integral_unwind_rate_per_sec: 0.5
+  speed_error_deadband_mps: 0.10
+  speed_accel_feedforward_gain_per_mps: 0.008
+  # 목표속도를 이만큼만 넘으면 제동 대신 타력주행한다.
+  speed_coast_overspeed_kph: 0.2
+  # 목표속도를 이만큼 넘을 때부터 정상 PID 제동을 허용한다.
+  speed_brake_overspeed_kph: 1.8
+  # 대회 제한 60 km/h보다 0.5 km/h 낮은 독립 안전제동 경계.
+  hard_brake_activation_speed_kph: 59.5
+  minimum_hard_brake_command: 0.25
+  # 0~1 정규화 페달 명령. MPC jerk/명령 변화율 제한은 그대로 유지한다.
+  maximum_accel_command: 0.70
+  maximum_brake_command: 0.60
+  # 정상 PID signed effort(accel-brake)의 초당 최대 변화량. 0.0이면 비활성.
+  longitudinal_command_rate_limit_per_sec: 2.0
+
+  # 종방향 MPC: v와 a를 예측하며 속도오차, 가속도, jerk, 페달 변화량을 최소화한다.
+  # 기본은 외부 OSQP. 자체 projected_gradient/coordinate_search도 선택 가능하다.
+  longitudinal_mpc_solver: projected_gradient
+  longitudinal_mpc_horizon_steps: 30
+  longitudinal_mpc_optimizer_iterations: 10
+  longitudinal_mpc_line_search_steps: 8
+  longitudinal_mpc_prediction_dt_sec: 0.10
+  longitudinal_mpc_gradient_epsilon: 0.01
+  longitudinal_mpc_gradient_step: 0.08
+  longitudinal_mpc_gradient_tolerance: 0.00001
+  longitudinal_mpc_coordinate_initial_step: 0.20
+  longitudinal_mpc_coordinate_minimum_step: 0.01
+  longitudinal_mpc_command_step_decay: 0.5
+  # 비용함수와 별개인 독립 절대 제한. 60 km/h를 초과하도록 설정할 수 없다.
+  maximum_speed_kph: 60.0
+  longitudinal_mpc_acceleration_gain_mps2: 3.0
+  longitudinal_mpc_braking_gain_mps2: 6.0
+  longitudinal_mpc_actuator_time_constant_sec: 0.25
+  longitudinal_mpc_maximum_acceleration_mps2: 2.5
+  longitudinal_mpc_maximum_deceleration_mps2: 5.0
+  longitudinal_mpc_maximum_jerk_mps3: 3.0
+  longitudinal_mpc_acceleration_filter_tau_sec: 0.20
+  longitudinal_mpc_weight_speed: 8.0
+  longitudinal_mpc_weight_acceleration: 0.20
+  longitudinal_mpc_weight_jerk: 1.2
+  longitudinal_mpc_weight_command: 0.08
+  longitudinal_mpc_weight_command_rate: 2.5
+  longitudinal_mpc_weight_terminal_speed: 24.0
+  longitudinal_mpc_fallback_to_pid: true

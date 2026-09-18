@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>morai_localization</name>
+  <version>0.1.0</version>
+  <description>GPS coordinate projection adapters for MORAI localization inputs.</description>
+
+  <maintainer email="stier@todo.todo">STIER</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>roscpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2_ros</depend>
+
+  <export/>
+</package>

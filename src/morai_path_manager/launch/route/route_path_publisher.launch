@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<launch>
+  <arg name="config"
+       default="$(find morai_path_manager)/config/routes/molit_2026_kcity_route_path.yaml"/>
+  <arg name="path_file"
+       default="$(find morai_path_manager)/map/R-KR_PG_K-City_2025/2026_molit_comp_global_path.txt"/>
+
+  <node pkg="morai_path_manager"
+        type="route_path_publisher_node"
+        name="route_path_publisher"
+        output="screen"
+        required="true">
+    <rosparam command="load" file="$(arg config)"/>
+    <param name="path_file" value="$(arg path_file)"/>
+  </node>
+</launch>

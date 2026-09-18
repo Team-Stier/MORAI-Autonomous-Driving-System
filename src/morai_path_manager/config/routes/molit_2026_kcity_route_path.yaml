@@ -1,0 +1,14 @@
+# Control handoff defaults for the verified 2026 K-City competition route.
+localization_topic: /localization/pose
+global_path_topic: /global_path
+local_path_topic: /local_path
+frame_id: map
+local_path_mode: distance
+local_path_point_count: 20
+local_path_length_m: 100.0
+max_path_point_spacing_m: 1.0
+search_backward_m: 20.0
+search_forward_m: 200.0
+reacquire_distance_m: 10.0
+flatten_z: true
+require_closed_loop: true

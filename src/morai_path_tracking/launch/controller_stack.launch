@@ -1,0 +1,6 @@
+<launch>
+  <include file="$(find morai_localization)/launch/stack/localization.launch"/>
+  <include file="$(find morai_path_manager)/launch/route/route_path_publisher.launch"/>
+  <include file="$(find morai_tf)/launch/map_velodyne.launch"/>
+  <include file="$(find morai_path_tracking)/launch/controllers/path_tracking.launch"/>
+</launch>
