@@ -5,6 +5,7 @@ WORKSPACE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$WORKSPACE"
 
 source /opt/ros/noetic/setup.bash
+export PATH="/usr/bin:$PATH"
 /opt/ros/noetic/bin/rosnode kill -a >/dev/null 2>&1 || true
 
 BRIDGE_PROCESSES=(
@@ -46,8 +47,10 @@ python3 scripts/prepare_bridge_config.py \
     src/MORAI-UDP-Bridge-Node/config/config.yaml \
     config/bridge.yaml /tmp/morai-bridge-workspace.yaml
 
-# The bridge launch runs in the background, so acquire sudo before it configures the wired NIC.
+# Configure the wired NIC before detaching the bridge from the terminal.
 sudo -v
+RUNTIME_CONFIG="$(python3 src/MORAI-UDP-Bridge-Node/scripts/network_launch.py \
+    /tmp/morai-bridge-workspace.yaml)"
 
 children=()
 cleanup() {
@@ -73,8 +76,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-setsid bash src/MORAI-UDP-Bridge-Node/launch.sh \
-    config:=/tmp/morai-bridge-workspace.yaml &
+setsid roslaunch morai_udp_bridge bridge.launch "config:=$RUNTIME_CONFIG" &
 bridge_pid=$!
 children+=("$bridge_pid")
 
