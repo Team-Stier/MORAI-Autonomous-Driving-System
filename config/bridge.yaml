@@ -5,6 +5,9 @@ network_launch:
     simulator_ip: 192.168.0.1
   open_ufw_for_remote: true
 
+imu:
+  port: 9999
+
 vehicle_spec:
   base_frame_id: base_link
   gps_frame_id: gps_link

@@ -6,6 +6,13 @@ cd "$WORKSPACE"
 
 source /opt/ros/noetic/setup.bash
 export PATH="/usr/bin:$PATH"
+if ! rosdep check --from-paths src --ignore-src --rosdistro noetic >/dev/null 2>&1 ||
+   [[ ! -x /opt/ros/noetic/bin/rviz ]] ||
+   ! rospack find compressed_image_transport >/dev/null 2>&1; then
+    sudo apt-get update
+    rosdep install --from-paths src --ignore-src --rosdistro noetic -y
+    sudo apt-get install -y ros-noetic-rviz ros-noetic-compressed-image-transport
+fi
 /opt/ros/noetic/bin/rosnode kill -a >/dev/null 2>&1 || true
 
 BRIDGE_PROCESSES=(
