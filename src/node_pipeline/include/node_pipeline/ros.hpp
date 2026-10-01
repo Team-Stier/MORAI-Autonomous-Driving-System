@@ -61,6 +61,7 @@ RosSettings<Id> loadRosConfig(ros::NodeHandle& node, ros::NodeHandle& params,
     if (trigger.empty() || trigger.front() != '/') throw std::invalid_argument("trigger_input must be an absolute topic name");
     result.execution.trigger_input = named(topics, node.resolveName(trigger));
   }
+  params.param("require_new_snapshot", result.execution.require_new_snapshot, false);
   // 정수 설정은 음수 상태에서 검사한 후 unsigned로 변환한다.
   int capacity, checks;
   params.param("queue_capacity", capacity, 8);
@@ -92,7 +93,7 @@ RosSettings<Id> loadRosConfig(ros::NodeHandle& node, ros::NodeHandle& params,
       selector.section_core_map[static_cast<std::uint8_t>(section)] = named(cores, static_cast<std::string>(entry->second));
     }
   }
-  if (!selector.section_core_map.count(0)) throw std::invalid_argument("UNKNOWN mapping required");
+  if (!cores.empty() && !selector.section_core_map.count(0)) throw std::invalid_argument("UNKNOWN mapping required");
   // health 규칙은 when의 AND 조건과 core 선택 priority를 갖는다.
   if (params.getParam("health_core_map", mapping)) {
     if (mapping.getType() != XmlRpc::XmlRpcValue::TypeArray) throw std::invalid_argument("health_core_map must be an array");

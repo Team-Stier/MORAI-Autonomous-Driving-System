@@ -1,0 +1,6 @@
+<launch>
+  <node pkg="velocity_planner" type="velocity_planner_node" name="velocity_planner_node" output="screen">
+    <rosparam command="load" file="$(find velocity_planner)/config/velocity_planner.yaml"/>
+    <param name="map_file" value="$(find velocity_planner)/../map/kcity_lanelet2.osm"/>
+  </node>
+</launch>

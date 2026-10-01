@@ -165,6 +165,9 @@ struct HealthLimits {
   double lower = -1, upper = 1;
   std::int64_t stale_ns = 300000000, receive_timeout_ns = 300000000, max_skew_ns = 100000000;
   std::string frame = "map";
+  bool check_stamp = true;
+  bool check_receive_timeout = true;
+  bool check_skew = true;
   void validate() const {
     if (!std::isfinite(lower) || !std::isfinite(upper) || lower > upper || frame.empty() || stale_ns <= 0 || receive_timeout_ns <= 0 || max_skew_ns <= 0)
       throw std::invalid_argument("invalid health limits");
@@ -198,14 +201,14 @@ template<class Id, std::size_t N, class Validator> class HealthChecker {
       if (!slot.present()) result.issues.push_back(Kind::Missing);
       else {
         validator_(*slot.sample.message, input_limits_[tag], result.issues);
-        if (slot.sample.stamp_ns <= 0) result.issues.push_back(Kind::InvalidStamp);
-        if (slot.sample.stamp_ns > clocks.ros_ns) result.issues.push_back(Kind::FutureStamp);
-        if (slot.sample.stamp_ns > 0 && exceeds(clocks.ros_ns, slot.sample.stamp_ns, input_limits_[tag].stale_ns)) result.issues.push_back(Kind::Stale);
+        if (input_limits_[tag].check_stamp && slot.sample.stamp_ns <= 0) result.issues.push_back(Kind::InvalidStamp);
+        if (input_limits_[tag].check_stamp && slot.sample.stamp_ns > clocks.ros_ns) result.issues.push_back(Kind::FutureStamp);
+        if (input_limits_[tag].check_stamp && slot.sample.stamp_ns > 0 && exceeds(clocks.ros_ns, slot.sample.stamp_ns, input_limits_[tag].stale_ns)) result.issues.push_back(Kind::Stale);
       }
-      if (exceeds(clocks.steady_ns, slot.present() ? slot.sample.receipt_steady_ns : started_, input_limits_[tag].receive_timeout_ns)) result.issues.push_back(Kind::ReceiveTimeout);
+      if (input_limits_[tag].check_receive_timeout && exceeds(clocks.steady_ns, slot.present() ? slot.sample.receipt_steady_ns : started_, input_limits_[tag].receive_timeout_ns)) result.issues.push_back(Kind::ReceiveTimeout);
     });
     for (std::size_t i = 0; i < N; ++i) for (std::size_t j = i + 1; j < N; ++j) {
-      if (!present[i] || !present[j] || std::fabs(static_cast<long double>(stamps[i]) - stamps[j]) <= limits_.max_skew_ns) continue;
+      if (!input_limits_[i].check_skew || !input_limits_[j].check_skew || !present[i] || !present[j] || std::fabs(static_cast<long double>(stamps[i]) - stamps[j]) <= limits_.max_skew_ns) continue;
       for (auto input : {i, j}) {
         auto& issues = health.inputs[input].issues;
         if (std::find(issues.begin(), issues.end(), Kind::Skew) == issues.end()) issues.push_back(Kind::Skew);
@@ -237,6 +240,8 @@ template<class Access> struct ClampLower {
 };
 // 데이터 타입과 무관하게 지정 입력을 Missing으로 바꾼다.
 struct RemoveInput {
+  // 공통 config 로더의 strategy 생성 인자를 받지만 수치 한도는 사용하지 않는다.
+  RemoveInput(double = 0) {}
   template<class DataType, class IssueType> void operator()(DataType& data, const IssueType& issue) const {
     each(data.inputs, [&](auto tag, auto& slot) { if (tag == static_cast<std::size_t>(issue.input)) slot.sample.message.reset(); });
   }

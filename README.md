@@ -16,8 +16,12 @@ MORAI SIM 기반 자율주행 시스템. ROS 1 Noetic을 사용한다.
 
 구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)와
 그 안의 [템플릿 코드](src/node_pipeline/templates/)를 참고한다.
-개발 단계에서 데모 테스트가 필요하면 각 패키지의 `config/<package_name>.yaml`에서
-Core 매핑을 변경해 작성한 Core를 바꿔 끼우며 개발한다.
+개발 단계에서 데모 테스트가 필요하면 먼저 노드의 `core_set.hpp`에서 Core 파일을
+include하고 Core ID·객체·필수 입력·`process()` 인자 연결을 등록한다.
+이후 각 패키지의 `config/<package_name>.yaml`에서 Core 매핑을 변경해
+등록한 Core를 바꿔 끼우며 개발한다. CoreSet 등록은 리드 개발자와 협의해 진행한다.
+각 노드의 등록 파일은 `include/<package_name>/core_set.hpp`,
+Core 작성 위치는 `include/<package_name>/cores/`다.
 
 ### 좌표계
 
@@ -265,7 +269,7 @@ flowchart TD
 | Object_Detector_Node | 수평화 점군을 클러스터링해 `/objects` 발행. |
 | Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 YOLO 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
 | Section_Annotator_Node | ego가 맵의 어느 구간에 위치해 있는지 발행. 각 노드는 콜백으로 자신의 모드를 스위치할 수 있다. |
-| TF_Publisher_Node | ego 기반 TF 발행. TF 트리는 TODO. |
+| TF_Publisher_Node | ego 콜백으로 동적 `map → base_link` 발행. 센서 장착 변환은 시작 시 정적 발행. |
 | Path_Planner_Node | ego 위치·자세와 `/vehicle/competition_status`의 차량 상태를 사용해 차선 추종·장애물 회피 경로 생성. |
 | Velocity_Planner_Node | 전달받은 경로의 속도 프로파일을 생성하고 TF로 `map`에서 `base_link`로 변환해 발행. 경로 형상을 다시 계획하지 않는다.     |
 | Control_Node | 속도 프로파일이 주입된 경로와 ego·차량 상태를 사용해 제어 명령 생성. |
@@ -313,19 +317,35 @@ flowchart TD
 | `/velodyne_points` | 원본 점군 | `sensor_msgs/PointCloud2` | `velodyne` | 드라이버 scan stamp 유지; 현재 설정은 마지막 패킷 시각 | 10 Hz (100 ms); scan 수신마다 |
 | `/velodyne_points/leveled` | 차량 기준 점군 | `sensor_msgs/PointCloud2` | `base_link` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
 | `/localization/ego` | 차량 위치·자세 | `geometry_msgs/PoseStamped` | `map`; 차량 뒷차축 중심의 pose | 추정 상태가 나타내는 시각; 발행 시각으로 대체하지 않음 | 50 Hz |
-| `/objects` | 장애물 검출 결과 | TODO (Header 포함) | `base_link` | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
+| `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `base_link` | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
 | `/traffic_light` | 신호등 인식 결과 | `interfaces/TrafficLight` | `camera_7_optical_frame` | 판정에 사용한 영상 stamp 유지 | 목표 5 Hz (200 ms); 최신 미처리 영상 사용 |
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf` | 동적 좌표 변환 | `tf2_msgs/TFMessage` | 각 변환의 `header.frame_id`가 부모, `child_frame_id`가 자식 | ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf_static` | 센서 고정 장착 변환 | `tf2_msgs/TFMessage` | `base_link` → 센서 frame (`velodyne`, `imu_link`, `gps_link`, 카메라 optical frame) | 발행 ROS 시각 | 시작 시 1회 (latched) |
-| `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 계획 기준 ego stamp; 각 point pose stamp도 동일 | 계획 갱신마다 (갱신 트리거 미정) |
+| `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 계획 기준 ego stamp; 각 point pose stamp도 동일 | 20 Hz 주기 |
 | `/local_path/velocity_injected` | 속도 프로파일이 주입된 경로 | `interfaces/Path` | `base_link`; 각 point의 pose도 `base_link` | 입력 경로 및 각 point pose stamp 유지 | `/local_path` 콜백마다 |
-| `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | 제어 주기마다 (주기 미정) |
+| `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | `/local_path/velocity_injected` 콜백마다 |
 | `/morai_udp_bridge/control_cmd` | 최종 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; Bridge가 수신 시각 기록 | `/control_cmd` 콜백마다 |
 
 
 
 #### 시간 및 frame 계약
+
+TF_Publisher가 아래 트리를 소유한다. 동적 변환은 ego stamp를 유지하고,
+정적 변환은 센서 장착 위치·자세와 camera optical 축 규약을 반영한다.
+정적 변환 전체는 시작 시 한 메시지로 latched 발행한다.
+
+```text
+map
+└── base_link                    # 동적: ego pose
+    ├── gps_link                 # 정적: 센서 장착 변환
+    ├── imu_link                 # 정적
+    ├── velodyne                 # 정적
+    ├── camera_front_optical_frame # 정적: optical 축 변환 포함
+    ├── camera_left_optical_frame  # 정적: optical 축 변환 포함
+    ├── camera_right_optical_frame # 정적: optical 축 변환 포함
+    └── camera_7_optical_frame     # 정적: optical 축 변환 포함
+```
 
 ### External inputs and outputs
 

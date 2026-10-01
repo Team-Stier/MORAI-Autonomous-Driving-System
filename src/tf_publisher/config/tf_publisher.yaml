@@ -1,0 +1,44 @@
+execution_mode: on_input
+frequency_hz: 50.0
+queue_capacity: 8
+max_health_checks: 10
+frame: map
+stale_after_sec: 0.3
+receive_timeout_sec: 0.3
+max_sensor_skew_sec: 0.1
+section_core_map:
+  "0": ego_tf
+  "1": ego_tf
+  "2": ego_tf
+  "3": ego_tf
+  "4": ego_tf
+  "5": ego_tf
+  "6": ego_tf
+  "7": ego_tf
+health_core_map: []
+trigger_input: /localization/ego
+inputs:
+  ego: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}
+# spec/0918sensors.json의 장착값. optical 축 회전을 포함한다.
+static_transforms:
+  - child: gps_link
+    translation: [0.0, 0.0, 1.2]
+    rotation: [0.0, 0.0, 0.0, 1.0]
+  - child: imu_link
+    translation: [1.5, 0.0, 0.5]
+    rotation: [0.0, 0.0, 0.0, 1.0]
+  - child: velodyne
+    translation: [1.5, 0.0, 1.403]
+    rotation: [0.0, 0.0, 0.0, 1.0]
+  - child: camera_front_optical_frame
+    translation: [1.9, 0.0, 1.2]
+    rotation: [-0.5086500507968373, 0.5086500507968372, -0.4911976443595539, 0.491197644359554]
+  - child: camera_left_optical_frame
+    translation: [1.15, 0.65, 1.2]
+    rotation: [-0.7544065067354889, 0.1330222215594889, -0.11161889704894962, 0.6330222215594892]
+  - child: camera_right_optical_frame
+    translation: [1.15, -0.65, 1.2]
+    rotation: [0.13302222155948917, -0.7544065067354888, 0.6330222215594892, -0.1116188970489499]
+  - child: camera_7_optical_frame
+    translation: [0.0, 0.0, 1.5]
+    rotation: [0.4545194776720437, -0.45451947767204354, 0.5416752204197018, -0.541675220419702]

@@ -87,6 +87,8 @@ struct ExecutionConfig {
   InputId trigger_input{};
   // 하나의 snapshot에 대한 최대 healthCheck 호출 횟수다. 기본값은 10회다.
   std::size_t max_health_checks = 10;
+  // 주기 실행에서도 이미 Core를 시도한 snapshot을 반복하지 않을 수 있다.
+  bool require_new_snapshot = false;
 };
 
 // 입력 ID 타입은 큐와 실행 설정에서 쓰는 타입과 같아야 한다.
@@ -212,7 +214,7 @@ class PipelineNode {
     auto snapshot = assembler_.assemble(buffer_, trigger);
     // 입력이 전혀 없어도 assembler를 먼저 호출해 빈 snapshot을 받는다.
     // callback 모드에서 이미 core를 시도한 bundle이면 계산을 다시 하지 않는다.
-    if (trigger.mode == ExecutionMode::OnInput && !snapshot.is_new) {
+    if ((trigger.mode == ExecutionMode::OnInput || config_.require_new_snapshot) && !snapshot.is_new) {
       // 중복 snapshot은 health 검사 전 종료하므로 checks는 0이다.
       return finish(ProcessStatus::Skipped, checks, "bundle already attempted");
     }

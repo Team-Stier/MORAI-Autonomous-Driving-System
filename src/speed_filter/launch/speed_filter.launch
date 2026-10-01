@@ -1,0 +1,6 @@
+<launch>
+  <node pkg="speed_filter" type="speed_filter_node" name="speed_filter_node" output="screen">
+    <rosparam command="load" file="$(find speed_filter)/config/speed_filter.yaml"/>
+    <param name="map_file" value="$(find speed_filter)/../map/kcity_lanelet2.osm"/>
+  </node>
+</launch>

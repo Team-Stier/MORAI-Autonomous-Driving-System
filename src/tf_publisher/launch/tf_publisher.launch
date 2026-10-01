@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="tf_publisher" type="tf_publisher_node" name="tf_publisher_node" output="screen">
+    <rosparam command="load" file="$(find tf_publisher)/config/tf_publisher.yaml"/>
+  </node>
+</launch>

@@ -1,0 +1,14 @@
+execution_mode: on_input
+frequency_hz: 10.0
+queue_capacity: 8
+max_health_checks: 10
+frame: base_link
+stale_after_sec: 0.3
+receive_timeout_sec: 0.3
+max_sensor_skew_sec: 0.1
+# TODO: Core 등록 후 이름으로 매핑한다. 현재는 계산·발행하지 않는다.
+section_core_map: {}
+health_core_map: []
+trigger_input: /velodyne_points/leveled
+inputs:
+  cloud: {stale_after_sec: 0.300000000, receive_timeout_sec: 0.300000000}

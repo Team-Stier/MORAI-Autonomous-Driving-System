@@ -1,0 +1,19 @@
+execution_mode: on_input
+frequency_hz: 20.0
+queue_capacity: 8
+max_health_checks: 10
+frame: base_link
+stale_after_sec: 0.3
+receive_timeout_sec: 0.3
+max_sensor_skew_sec: 0.1
+# TODO: Core 등록 후 이름으로 매핑한다. 현재는 계산·발행하지 않는다.
+section_core_map: {}
+health_core_map: []
+trigger_input: /local_path
+# 지도 자산은 노드 구성에서 읽어 Core 인자로 연결한다.
+inputs:
+  path: {stale_after_sec: 0.150000000, receive_timeout_sec: 0.150000000}
+  ego: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}
+  competition: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}
+  light: {stale_after_sec: 0.600000000, receive_timeout_sec: 0.600000000}
+  tf: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}

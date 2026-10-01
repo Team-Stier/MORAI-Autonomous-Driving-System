@@ -1,0 +1,17 @@
+execution_mode: periodic
+frequency_hz: 20.0
+queue_capacity: 8
+max_health_checks: 10
+frame: map
+stale_after_sec: 0.3
+receive_timeout_sec: 0.3
+max_sensor_skew_sec: 0.1
+# TODO: Core 등록 후 이름으로 매핑한다. 현재는 계산·발행하지 않는다.
+section_core_map: {}
+health_core_map: []
+# 지도 자산은 노드 구성에서 읽어 Core 인자로 연결한다.
+inputs:
+  ego: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}
+  competition: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}
+  objects: {stale_after_sec: 0.300000000, receive_timeout_sec: 0.300000000}
+  tf: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}

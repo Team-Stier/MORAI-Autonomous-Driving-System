@@ -8,6 +8,8 @@ add_message_files(FILES
   Path.msg
   TrafficLight.msg
   SectionAnnotation.msg
+  Object.msg
+  Objects.msg
 )
 generate_messages(DEPENDENCIES std_msgs geometry_msgs)
 catkin_package(CATKIN_DEPENDS message_runtime std_msgs geometry_msgs)
