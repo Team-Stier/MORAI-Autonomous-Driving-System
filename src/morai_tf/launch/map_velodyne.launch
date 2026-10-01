@@ -1,7 +1,0 @@
-<launch>
-  <arg name="config" default="$(find morai_tf)/config/map_velodyne.yaml"/>
-  <node pkg="morai_tf" type="map_velodyne_tf_node"
-        name="map_velodyne_tf" output="screen" required="true">
-    <rosparam command="load" file="$(arg config)"/>
-  </node>
-</launch>
