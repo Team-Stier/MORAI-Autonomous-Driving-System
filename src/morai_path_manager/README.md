@@ -11,7 +11,7 @@
 
 | 구분 | 토픽 | 타입 | 동작 |
 | --- | --- | --- | --- |
-| 입력 | `/localization/pose` | `geometry_msgs/PoseStamped` | 최종 localization pose |
+| 입력 | `/localization/ego` | `geometry_msgs/PoseStamped` | 최종 localization pose |
 | 출력 | `/global_path` | `nav_msgs/Path` | 전체 공식 경로, latched 1회 발행 |
 | 출력 | `/local_path` | `nav_msgs/Path` | 현재 위치부터 전방 경로, 위치 입력마다 갱신 |
 
@@ -39,7 +39,7 @@
 
 | 파라미터 | 현재값 | 설명 |
 | --- | --- | --- |
-| `localization_topic` | `/localization/pose` | 최종 localization 입력 |
+| `localization_topic` | `/localization/ego` | 최종 localization 입력 |
 | `global_path_topic` | `/global_path` | 전체 경로 출력 |
 | `local_path_topic` | `/local_path` | 제어용 부분 경로 출력 |
 | `frame_id` | `map` | 경로 좌표 frame |
@@ -121,7 +121,7 @@ roslaunch morai_bringup path.launch
 - 청록색: 전역경로
 - 초록색 구와 `START`: 전역경로 파일의 첫 점
 - 주황색: 전방 100 m local path
-- 빨간색 구·화살표: 현재 최종 위치와 IMU yaw
+- 빨간색 구·화살표: 현재 최종 위치와 GT yaw
 - 노란색: 전역경로 최근접 waypoint
 - 분홍색 선: 현재 위치와 최근접 waypoint 사이 거리
 

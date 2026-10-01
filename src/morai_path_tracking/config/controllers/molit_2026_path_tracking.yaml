@@ -1,6 +1,6 @@
 path_tracking_controller_node:
   local_path_topic: /local_path
-  odometry_topic: /localization/odometry
+  ego_topic: /localization/ego
   vehicle_status_topic: /vehicle/competition_status
   command_topic: /morai_udp_bridge/control_cmd
   controller_status_topic: /control/controller_status
@@ -12,7 +12,7 @@ path_tracking_controller_node:
   expected_velocity_frame_id: base_link
   control_rate_hz: 30.0
   path_timeout_sec: 0.25
-  odometry_timeout_sec: 0.25
+  ego_timeout_sec: 0.25
   vehicle_status_timeout_sec: 0.25
   # local_path와 odometry는 동일 localization generation stamp를 사용한다.
   maximum_input_skew_sec: 0.0

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "format": {
+    "container": "OSM XML",
+    "osm_version": "0.6",
+    "map_model": "Lanelet2",
+    "topology": "Use OSM node, way, and relation IDs and references to encode map geometry and Lanelet2 relationships.",
+    "node_coordinates": {
+      "lon": {
+        "type": "float64",
+        "crs": "WGS84 longitude",
+        "unit": "degree"
+      },
+      "lat": {
+        "type": "float64",
+        "crs": "WGS84 latitude",
+        "unit": "degree"
+      },
+      "local_x": {
+        "type": "float64 string tag",
+        "unit": "m",
+        "frame_id": "map"
+      },
+      "local_y": {
+        "type": "float64 string tag",
+        "unit": "m",
+        "frame_id": "map"
+      },
+      "local_z": {
+        "type": "float64 string tag",
+        "unit": "m",
+        "frame_id": "map"
+      },
+      "ele": {
+        "type": "float64 string tag",
+        "unit": "m",
+        "meaning": "Elevation; same vertical reference as local_z."
+      }
+    },
+    "tag_policy": "Unknown tags may be preserved; consumers use only tags required by their function."
+  },
+  "coordinate_system": {
+    "frame_id": "map",
+    "horizontal_crs": "EPSG:32652",
+    "coordinates": "local_x/local_y are UTM zone 52N coordinates with the map origin subtracted.",
+    "origin_utm": {
+      "easting_m": 302595.0,
+      "northing_m": 4124145.0
+    },
+    "axes": {
+      "x": "UTM grid east",
+      "y": "UTM grid north",
+      "z": "up"
+    },
+    "vertical_datum": null,
+    "transform": {
+      "x": "UTM_E - 302595.0",
+      "y": "UTM_N - 4124145.0",
+      "z": "Preserve elevation in metres; vertical datum is unspecified."
+    }
+  }
+}

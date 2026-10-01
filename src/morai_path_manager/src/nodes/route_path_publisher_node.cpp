@@ -26,7 +26,7 @@ Value requiredParameter(const ros::NodeHandle& private_node,
 
 struct PublisherConfig {
   std::string path_file;
-  std::string localization_topic = "/localization/pose";
+  std::string localization_topic = "/localization/ego";
   std::string global_path_topic = "/global_path";
   std::string local_path_topic = "/local_path";
   std::string frame_id = "map";
@@ -128,7 +128,7 @@ class RoutePathPublisherNode {
     local_publisher_ =
         node_.advertise<nav_msgs::Path>(config_.local_path_topic, 1, false);
     localization_subscriber_ =
-        node_.subscribe(config_.localization_topic, 10,
+        node_.subscribe(config_.localization_topic, 1,
                         &RoutePathPublisherNode::handleLocalization, this);
 
     global_publisher_.publish(makePathMessage(

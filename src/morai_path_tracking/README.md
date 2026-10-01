@@ -69,7 +69,7 @@ roslaunch morai_bringup molit_2026_autonomous.launch
 
 ```bash
 rostopic echo -n 1 /vehicle/competition_status
-rostopic echo -n 1 /localization/odometry
+rostopic echo -n 1 /localization/ego
 rostopic echo -n 1 /local_path
 rostopic echo -n 1 /control/controller_status
 rostopic echo -n 1 /morai_udp_bridge/control_cmd
@@ -105,7 +105,7 @@ roslaunch morai_path_tracking path_tracking.launch \
 ## 제어 구조
 
 ```text
-/local_path + /localization/odometry + /vehicle/competition_status
+/local_path + /localization/ego + /vehicle/competition_status
   -> 입력 좌표계·시간 검증
   -> 네 바퀴 가상 회랑 여유 계산
   -> 곡률·회랑·헤딩 기반 목표속도 계산
@@ -151,8 +151,8 @@ roslaunch morai_path_tracking path_tracking.launch \
 | 방향 | 토픽 | 타입 | 용도 |
 | --- | --- | --- | --- |
 | 입력 | `/local_path` | `nav_msgs/Path` | map 좌표계 local path |
-| 입력 | `/localization/odometry` | `nav_msgs/Odometry` | pose, 횡속도, yaw rate |
-| 입력 | `/vehicle/competition_status` | `interfaces/CompetitionVehicleStatus` | mode, gear, x속도(m/s) |
+| 입력 | `/localization/ego` | `geometry_msgs/PoseStamped` | map pose |
+| 입력 | `/vehicle/competition_status` | `interfaces/CompetitionVehicleStatus` | mode, gear, x속도(m/s), yaw rate |
 | 출력 | `/morai_udp_bridge/control_cmd` | `morai_msgs/CtrlCmd` | accel, brake, steering |
 | 출력 | `/control/controller_status` | `morai_path_tracking/ControllerStatus` | 제어기 진단값 |
 | 출력 | `/control/lookahead_point` | `geometry_msgs/PointStamped` | Pure Pursuit 추종점 |
@@ -278,14 +278,29 @@ morai_path_tracking/
 
 - `WAITING_FOR_COMPETITION_VEHICLE_STATUS`: MORAI Status 목적지 포트 `9094`, 브리지
   실행 여부, `/vehicle/competition_status` 수신을 확인한다.
-- 조금 가다 멈춤: `/local_path`, odometry, Competition Status의 timestamp와
+- 조금 가다 멈춤: `/local_path`, ego, Competition Status의 timestamp와
   timeout 상태를 함께 확인한다.
 - 속도가 3.6배 차이남: MORAI packet 원본 `km/h`와 ROS 메시지 `m/s` 변환 위치를
   확인한다.
 - 움직이지 않음: MORAI가 `AV-ExternalCtrl`인지, 기어가 Drive인지, sender가
   정확히 하나인지 확인한다.
-- 조향 방향이 반대임: path/odometry frame, yaw 부호, 차량 기준 좌표축을 먼저
+- 조향 방향이 반대임: path/ego frame, yaw 부호, 차량 기준 좌표축을 먼저
   확인한다. gain 부호를 임의로 뒤집지 않는다.
 
 자세한 수식·전체 파라미터·증상별 조정 순서는
 [이론·튜닝 상세 안내서](docs/CONTROLLER_THEORY_AND_TUNING_KO.md)를 참고한다.
+
+## Ego 입력과 횡속도
+
+위치·자세는 `/localization/ego` (`geometry_msgs/PoseStamped`), 전방 속도와 yaw rate는 `/vehicle/competition_status`에서 받는다.
+트랙커는 연속 ego 위치의 변화량을 원래 header.stamp 간격으로 나누고 현재 ego yaw로 차량 좌표계에 회전해 횡속도를 계산한다.
+
+```text
+vx_map = (x_now - x_previous) / dt
+vy_map = (y_now - y_previous) / dt
+v_y = -sin(yaw) * vx_map + cos(yaw) * vy_map
+```
+
+첫 표본에서는 횡속도를 계산하지 않고 두 번째 표본을 기다린다. 같은 stamp는 이전 추정값을 유지한다.
+시각 역행·ego timeout 초과 간격·비유한 결과는 추정치를 무효화하고 기존 안전제동 경로를 사용한다.
+다음 정상 간격의 두 표본에서 계산을 재개한다. IMU를 직접 구독하거나 가속도를 적분하지 않는다.

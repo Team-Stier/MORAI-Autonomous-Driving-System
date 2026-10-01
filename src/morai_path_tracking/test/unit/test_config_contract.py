@@ -21,7 +21,7 @@ class PurePursuitConfigContractTest(unittest.TestCase):
 
         expected = {
             "local_path_topic",
-            "odometry_topic",
+            "ego_topic",
             "vehicle_status_topic",
             "command_topic",
             "controller_status_topic",
@@ -32,7 +32,7 @@ class PurePursuitConfigContractTest(unittest.TestCase):
             "expected_velocity_frame_id",
             "control_rate_hz",
             "path_timeout_sec",
-            "odometry_timeout_sec",
+            "ego_timeout_sec",
             "vehicle_status_timeout_sec",
             "maximum_input_skew_sec",
             "input_sync_queue_size",

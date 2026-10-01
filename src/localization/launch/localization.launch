@@ -1,0 +1,5 @@
+<launch>
+  <node pkg="localization" type="localization_node" name="localization_node" output="screen">
+    <rosparam command="load" file="$(find localization)/config/localization.yaml"/>
+  </node>
+</launch>

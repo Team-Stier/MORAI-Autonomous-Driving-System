@@ -1,5 +1,5 @@
 # Control handoff defaults for the verified 2026 K-City competition route.
-localization_topic: /localization/pose
+localization_topic: /localization/ego
 global_path_topic: /global_path
 local_path_topic: /local_path
 frame_id: map

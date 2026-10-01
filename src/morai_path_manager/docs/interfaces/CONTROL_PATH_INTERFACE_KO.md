@@ -13,7 +13,7 @@
 | --- | --- | --- | --- |
 | `/global_path` | `nav_msgs/Path` | `map` | 시작 때 한 번 발행하는 **latched** 전체 공식 경로. 4,392 pose, 2.1846 km 폐루프다. 늦게 구독해도 마지막 메시지를 받는다. |
 | `/local_path` | `nav_msgs/Path` | `map` | 최종 localization pose를 받을 때마다 발행하는 **non-latched** 전방 경로다. 현재 위치에 가장 가까운 공식 waypoint부터 전방 100 m 이상을 포함하며 폐루프 끝에서는 처음으로 이어진다. 현재 약 0.5 m 간격 경로에서는 일반적으로 약 201 pose다. |
-| `/localization/pose` | `geometry_msgs/PoseStamped` | `map` | GPS X/Y와 IMU yaw를 결합한 최종 pose다. route path node는 position만 경로 검색에 사용하고 입력 `header.stamp`를 `/local_path`에 그대로 사용한다. |
+| `/localization/ego` | `geometry_msgs/PoseStamped` | `map` | GPS·관성항법 EKF 위치와 competition_status GT 자세의 최종 pose다. route path node는 position만 경로 검색에 사용하고 입력 `header.stamp`를 `/local_path`에 그대로 사용한다. |
 
 `/global_path`와 `/local_path`의 각 `PoseStamped.pose.position`은 공식 경로의
 XY 좌표이다. orientation은 인접 경로점으로 계산한 **경로 접선 방향**이며,
@@ -27,7 +27,7 @@ GPS projector가 만드는 위치는 **GPS 안테나 점**이다. 현재 GPS 안
 현재 구성은 noise-off 검증용 direct GPS/IMU localization을 사용한다. GPS X/Y와
 IMU yaw를 직접 결합하며 EKF/UKF, dead reckoning과 보간은 없다. GPS blackout,
 `NO_FIX`, IMU 중단 또는 두 센서 timestamp 차이가 허용값을 넘으면 새
-`/localization/pose`와 `/local_path`가 발행되지 않는다. 특히 `/local_path`는
+`/localization/ego`와 `/local_path`가 발행되지 않는다. 특히 `/local_path`는
 latched가 아니므로, 현재 구독자가 마지막 메시지를 보더라도 이를 최신 데이터로
 간주해서는 안 된다.
 
@@ -46,7 +46,7 @@ roslaunch morai_bringup molit_2026_stack.launch
 ```
 
 센서, localization, path manager는 서로 다른 bringup launch다. GPS projector
-대신 같은 `/localization/pose` 계약을 만족하는 다른 localization을 사용할
+대신 같은 `/localization/ego` 계약을 만족하는 다른 localization을 사용할
 때는 `molit_2026_path_manager.launch`만 실행하면 된다.
 
 토픽 타입/발행자와 갱신 상태는 다음처럼 확인한다.
@@ -54,7 +54,7 @@ roslaunch morai_bringup molit_2026_stack.launch
 ```bash
 rostopic info /global_path
 rostopic info /local_path
-rostopic hz /localization/pose
+rostopic hz /localization/ego
 rostopic hz /local_path
 ```
 
@@ -86,7 +86,7 @@ source devel/setup.bash
 
 | YAML 파라미터 | 기본값 | 의미 |
 | --- | ---: | --- |
-| `localization_topic` | `/localization/pose` | 구독할 `geometry_msgs/PoseStamped` 최종 pose |
+| `localization_topic` | `/localization/ego` | 구독할 `geometry_msgs/PoseStamped` 최종 pose |
 | `global_path_topic` | `/global_path` | latched 전체 `nav_msgs/Path` 출력 토픽 |
 | `local_path_topic` | `/local_path` | non-latched 전방 `nav_msgs/Path` 출력 토픽 |
 | `frame_id` | `map` | 입력 point가 일치해야 하는 frame 및 두 path의 frame |
@@ -127,9 +127,9 @@ node는 시작 시 파라미터를 읽으므로, 실행 중 변경한 값은 nod
 ### `/local_path`가 나오지 않음
 
 1. `rosnode list | grep route_path_publisher`로 path node가 실행 중인지 확인한다.
-2. `rostopic hz /localization/pose`로 GPS+IMU 최종 pose가 실제로 발행되는지
+2. `rostopic hz /localization/ego`로 GPS+IMU 최종 pose가 실제로 발행되는지
    확인한다. GPS blackout/`NO_FIX` 또는 IMU 중단에는 새 local path가 없다.
-3. `rostopic echo -n 1 /localization/pose/header`로 frame이 `map`인지 확인한다.
+3. `rostopic echo -n 1 /localization/ego/header`로 frame이 `map`인지 확인한다.
    비어 있지 않은 다른 frame 입력은 node가 버린다.
 4. node 로그에서 경로 파일 로드 실패 또는 파라미터 검증 오류를 확인한다.
 

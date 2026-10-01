@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "format": {
+    "container": "CSV",
+    "encoding": "UTF-8",
+    "delimiter": ",",
+    "header": true,
+    "columns": [
+      {
+        "name": "x",
+        "type": "float64",
+        "unit": "m",
+        "meaning": "map-frame x position"
+      },
+      {
+        "name": "y",
+        "type": "float64",
+        "unit": "m",
+        "meaning": "map-frame y position"
+      },
+      {
+        "name": "z",
+        "type": "float64",
+        "unit": "m",
+        "meaning": "map-frame height; vertical datum is unspecified"
+      },
+      {
+        "name": "yaw",
+        "type": "float64",
+        "unit": "deg",
+        "meaning": "checkpoint heading"
+      }
+    ],
+    "column_order": [
+      "x",
+      "y",
+      "z",
+      "yaw"
+    ],
+    "row_order": "Route traversal order; zero-based row index is the implicit checkpoint index.",
+    "record_rule": "Each data row contains one checkpoint; rows do not contain a separate ID field."
+  },
+  "coordinate_system": {
+    "frame_id": "map",
+    "horizontal_crs": "EPSG:32652",
+    "coordinates": "Local offsets from the map origin in UTM zone 52N.",
+    "origin_utm": {
+      "easting_m": 302595.0,
+      "northing_m": 4124145.0
+    },
+    "axes": {
+      "x": "UTM grid east",
+      "y": "UTM grid north",
+      "z": "up"
+    },
+    "vertical_datum": null
+  },
+  "heading": {
+    "zero_direction": "map +x (UTM grid east)",
+    "positive_direction": "counter-clockwise about +z",
+    "conversion_to_ros": "Convert degrees to radians before creating a yaw quaternion."
+  }
+}

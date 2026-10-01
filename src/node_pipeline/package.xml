@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!-- catkin 패키지 메타데이터다. format 2의 의존성 선언 규칙을 사용한다. -->
+<package format="2">
+  <!-- CMake project 이름 및 실행 패키지의 depend에 사용할 서비스 패키지 이름이다. -->
+  <name>node_pipeline</name>
+  <!-- 현재 템플릿 서비스의 패키지 버전이다. -->
+  <version>0.1.0</version>
+  <!-- typed pipeline 템플릿과 공통 orchestration helper를 제공한다는 설명이다. -->
+  <description>Header-only node pipeline service library and non-executable coding guide templates.</description>
+  <!-- 프로젝트의 패키지 관리 담당자 정보다. -->
+  <maintainer email="stier@todo.todo">Team STIER</maintainer>
+  <!-- 이 패키지에 선언된 라이선스다. -->
+  <license>MIT</license>
+  <!-- 빌드/설치 메타데이터를 처리하는 catkin을 build tool 의존성으로 선언한다. -->
+  <buildtool_depend>catkin</buildtool_depend>
+  <!-- 추가 plugin 등의 export는 없다. 공개 include 경로는 CMake의 catkin_package가 export한다. -->
+  <export/>
+</package>

@@ -92,7 +92,7 @@ roslaunch morai_bringup molit_2026_autonomous.launch
 
 ```bash
 rostopic echo -n 1 /vehicle/competition_status
-rostopic echo -n 1 /localization/odometry
+rostopic echo -n 1 /localization/ego
 rostopic echo -n 1 /local_path
 rostopic echo -n 1 /control/controller_status
 rostopic echo -n 1 /morai_udp_bridge/control_cmd
@@ -150,8 +150,8 @@ roslaunch morai_udp_bridge control_sender.launch
 ```text
 MORAI GPS/IMU
   -> morai_udp_bridge
-  -> morai_localization
-  -> /localization/odometry
+  -> localization
+  -> /localization/ego
 
 전역경로
   -> morai_path_manager
@@ -161,7 +161,7 @@ MORAI Competition Vehicle Status UDP :9094
   -> competition_vehicle_status_receiver_node
   -> /vehicle/competition_status
 
-/local_path + /localization/odometry + /vehicle/competition_status
+/local_path + /localization/ego + /vehicle/competition_status
   -> path_tracking_controller_node (기본 30 Hz)
      1) 좌표 변환과 입력 검증
      2) 네 바퀴 회랑 여유 계산
@@ -174,7 +174,7 @@ MORAI Competition Vehicle Status UDP :9094
   -> MORAI Ego Ctrl Cmd UDP :9093
 ```
 
-속도 PID는 `/localization/odometry.twist.twist.linear.x`를 사용하지 않는다.
+속도 PID는 `/vehicle/competition_status`의 `velocity_x_mps`를 사용한다.
 반드시 `/vehicle/competition_status.velocity_x_mps`만 사용하며, 이 입력이
 0.25초 이상 끊기면 자동 fallback하지 않고 안전제동으로 전환한다.
 
@@ -402,8 +402,7 @@ x = [β, r]ᵀ
 r: yaw rate [rad/s]
 ```
 
-odometry의 lateral velocity는 뒤차축 원점에서 측정되므로 무게중심 속도로
-옮긴다.
+트랙커가 ego 위치 변화로 계산한 뒤차축 기준 횡속도를 무게중심 속도로 옮긴다.
 
 ```text
 v_y,CG = v_y,rear + l_r r
@@ -805,14 +804,14 @@ effort = accel - brake
 
 ### 11.1 입력 계약
 
-`/local_path`와 `/localization/odometry`는 message filter로 source stamp를
+`/local_path`와 `/localization/ego`는 message filter로 source stamp를
 동기화한다. 현재 `maximum_input_skew_sec = 0.0`이므로 두 메시지는 동일한
 localization generation stamp를 가져야 한다. 새 path 하나만 먼저 들어온 짧은
 구간에는 직전 정상 pair를 timeout까지 유지한다.
 
 다음 조건이면 정상 제어를 중지한다.
 
-- path 또는 odometry pair가 없음
+- path 또는 ego pair가 없음
 - Competition Vehicle Status가 없음
 - 입력 수신 또는 source stamp age가 0.25초 초과
 - frame이 `map`, `base_link` 계약과 다름
@@ -852,7 +851,7 @@ steering = 0.0
 | 방향 | 토픽 | 타입 | 핵심 내용 |
 | --- | --- | --- | --- |
 | 입력 | `/local_path` | `nav_msgs/Path` | map frame local path |
-| 입력 | `/localization/odometry` | `nav_msgs/Odometry` | map pose, lateral velocity, yaw rate |
+| 입력 | `/localization/ego` | `geometry_msgs/PoseStamped` | map pose |
 | 입력 | `/vehicle/competition_status` | `interfaces/CompetitionVehicleStatus` | control mode, gear, 차량 x속도 m/s |
 | 출력 | `/morai_udp_bridge/control_cmd` | `morai_msgs/CtrlCmd` | accel/brake `[0,1]`, steering rad |
 | 출력 | `/control/controller_status` | `morai_path_tracking/ControllerStatus` | 제어기 내부 진단값 |
@@ -922,17 +921,17 @@ config/controllers/molit_2026_path_tracking.yaml
 | 파라미터 | 기본값 | 설명 |
 | --- | ---: | --- |
 | `local_path_topic` | `/local_path` | local path 입력 |
-| `odometry_topic` | `/localization/odometry` | pose/yaw-rate 입력 |
+| `ego_topic` | `/localization/ego` | pose 입력 |
 | `vehicle_status_topic` | `/vehicle/competition_status` | Competition 속도 입력 |
 | `command_topic` | `/morai_udp_bridge/control_cmd` | actuator 출력 |
 | `controller_status_topic` | `/control/controller_status` | 상세 상태 출력 |
 | `lookahead_point_topic` | `/control/lookahead_point` | PP 추종점 출력 |
 | `stanley_projection_point_topic` | `/control/stanley_projection_point` | Stanley 투영점 출력 |
-| `expected_frame_id` | `map` | path/odometry frame |
+| `expected_frame_id` | `map` | path/ego frame |
 | `expected_velocity_frame_id` | `base_link` | 속도와 차량 기준 frame |
 | `control_rate_hz` | `30.0` | WallTimer 제어 주기 |
 | `path_timeout_sec` | `0.25` | path timeout |
-| `odometry_timeout_sec` | `0.25` | odometry timeout |
+| `ego_timeout_sec` | `0.25` | ego timeout |
 | `vehicle_status_timeout_sec` | `0.25` | Competition Status timeout |
 | `maximum_input_skew_sec` | `0.0` | path/odom stamp 최대 차이 |
 | `input_sync_queue_size` | `10` | 동기화 queue |
@@ -1096,7 +1095,7 @@ projection은 앞차축 근처 경로 위에 있어야 정상이다. 좌우가 �
 - map yaw 부호가 ROS ENU 계약과 맞는가
 - `steering_sign`이 현재 MORAI 차량과 맞는가
 - local path의 pose 순서가 진행방향인가
-- path와 odometry stamp가 같은 generation인가
+- path와 ego stamp가 같은 generation인가
 
 수치 모니터링 예시는 다음과 같다.
 
@@ -1131,7 +1130,7 @@ mkdir -p "$HOME/controller_bags/$(date +%F)"
 rosbag record --duration=230 \
   -O "$HOME/controller_bags/$(date +%F)/candidate_01.bag" \
   /control/controller_status \
-  /localization/odometry \
+  /localization/ego \
   /local_path \
   /global_path \
   /morai_udp_bridge/control_cmd \
@@ -1358,7 +1357,7 @@ catkin_test_results build/test_results/morai_path_tracking --verbose
 - 곡률 속도 planner, LPF, target slew
 - wheel corridor와 smoothstep 속도 제한
 - PID deadband, coast, anti-windup, hard guard, 페달 상호배제
-- path/odometry 동기화와 timeout 안전동작
+- path/ego 동기화와 timeout 안전동작
 - 실제 ROS 메시지를 이용한 Pure Pursuit/Stanley/Hybrid integration
 - rosbag 분석기의 차선 접촉·CTE·조향률·페달 전환 통계
 
@@ -1455,7 +1454,7 @@ receiver에서 변환을 한 번만 해야 한다. PID나 YAML loader에서 같�
 
 ### 조금 가다가 반복해서 멈춤
 
-`/control/controller_status.state`를 먼저 본다. path/odometry/status 중 하나가
+`/control/controller_status.state`를 먼저 본다. path/ego/status 중 하나가
 0.25초 timeout이 나거나 path/odom stamp가 정확히 맞지 않으면 정상 PID가 아니라
 `brake=0.5` 안전상태가 반복될 수 있다.
 
@@ -1502,3 +1501,18 @@ rosmsg show interfaces/CompetitionVehicleStatus
 - 현재 한 번의 최종 run은 가정 차선 접촉 0회였지만 최소 여유가 1.25 cm이므로
   실제 가변 차선에 대한 절대 보증이나 추가 일괄 속도 상향 근거는 아니다.
 - 자율 제어 UDP 9093 sender는 반드시 하나만 실행한다.
+
+## Ego 입력과 횡속도
+
+위치·자세는 `/localization/ego` (`geometry_msgs/PoseStamped`), 전방 속도와 yaw rate는 `/vehicle/competition_status`에서 받는다.
+트랙커는 연속 ego 위치의 변화량을 원래 header.stamp 간격으로 나누고 현재 ego yaw로 차량 좌표계에 회전해 횡속도를 계산한다.
+
+```text
+vx_map = (x_now - x_previous) / dt
+vy_map = (y_now - y_previous) / dt
+v_y = -sin(yaw) * vx_map + cos(yaw) * vy_map
+```
+
+첫 표본에서는 횡속도를 계산하지 않고 두 번째 표본을 기다린다. 같은 stamp는 이전 추정값을 유지한다.
+시각 역행·ego timeout 초과 간격·비유한 결과는 추정치를 무효화하고 기존 안전제동 경로를 사용한다.
+다음 정상 간격의 두 표본에서 계산을 재개한다. IMU를 직접 구독하거나 가속도를 적분하지 않는다.

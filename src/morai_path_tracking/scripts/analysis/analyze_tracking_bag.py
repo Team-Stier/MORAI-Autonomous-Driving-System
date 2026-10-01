@@ -692,7 +692,7 @@ def load_bag(path):
         for topic, message, receipt in bag.read_messages(
             topics=[
                 "/control/controller_status",
-                "/localization/odometry",
+                "/localization/ego",
                 "/global_path",
             ]
         ):
@@ -705,18 +705,18 @@ def load_bag(path):
                     )
                     for pose in message.poses
                 ]
-            elif topic == "/localization/odometry":
+            elif topic == "/localization/ego":
                 odometry.append(
                     {
                         "t": timestamp,
                         "x": float(
-                            message.pose.pose.position.x
+                            message.pose.position.x
                         ),
                         "y": float(
-                            message.pose.pose.position.y
+                            message.pose.position.y
                         ),
                         "yaw": yaw_from_quaternion(
-                            message.pose.pose.orientation
+                            message.pose.orientation
                         ),
                     }
                 )

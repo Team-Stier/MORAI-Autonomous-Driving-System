@@ -1,0 +1,71 @@
+# 가이드 전용. TODO: 실제 노드의 토픽·한도·policy·Core 매핑을 지정한다.
+# 합성 scalar 예제 전용 설정이다. localization이나 차량 제어의 수치를 정한 파일이 아니다.
+# periodic은 timer 실행, on_input은 아래 trigger_input callback 안에서 실행한다.
+execution_mode: periodic
+# on_input에서만 읽는다. 계산을 시작할 등록 upstream의 절대 토픽 이름을 적는다.
+trigger_input: /node_pipeline_template/primary
+# periodic 계산 목표 빈도(Hz)다. on_input에서는 처리 timer를 만들지 않는다.
+frequency_hz: 50.0
+# input당 stamp 조립용 원본 큐의 최대 sample 개수다. ROS queue_size=1과 별개다.
+queue_capacity: 8
+# 한 snapshot에서 healthCheck를 호출할 최대 횟수다. 마지막 검사에서도 처리할 오류가 남으면 스냅샷을 폐기한다.
+max_health_checks: 10
+# 합성 입력/출력의 기대 frame이다. section 메시지는 map 계약을 별도로 따른다.
+frame: map
+# 합성 scalar 하한이다. 하한 미만 값을 이 값으로 clamp한다.
+lower: -1.0
+# 합성 scalar 상한이다. 상한 초과 값을 이 값으로 clamp한다.
+upper: 1.0
+# 현재 ROS 시각과 원본 stamp 차이의 stale 한도(초)다.
+stale_after_sec: 0.3
+# 선택 데이터의 수신 시각 기준 steady 경과 시간 한도(초)다.
+receive_timeout_sec: 0.3
+# 선택된 두 input의 최대 stamp 차이(초)다. 후보 제외는 assembler가 아니라 checker가 판단한다.
+max_sensor_skew_sec: 0.1
+# section enum 코드에서 preferred core 이름으로 연결한다. health_core_map이 지정한 core로 덮어쓸 수 있다.
+section_core_map:
+  # 최초 section 미수신/UNKNOWN(0)의 기본 core다. 숫자 코드를 문자열 key로 적는다.
+  "0": primary  # UNKNOWN
+# 입력 이상 대응 정책의 설정이다. InputPolicy의 switch는 라이브러리 strategy 객체를 호출한다.
+input_policy:
+  # 큰 값일수록 먼저 처리한다. 음수는 dismiss하여 추가 보정을 하지 않는다.
+  priority:
+    # Missing은 다른 입력의 보정을 막지 않으며 사용 가능한 core 선택 단계로 넘긴다.
+    Missing: -1
+    # 0 이하 stamp는 높은 priority로 작업 슬롯을 제거한다. 새 stamp를 만들지 않는다.
+    InvalidStamp: 200
+    # 미래 stamp도 작업 슬롯 제거 대상이다.
+    FutureStamp: 200
+    # frame 불일치에는 임의 좌표 변환 대신 해당 작업 슬롯 제거를 적용한다.
+    FrameMismatch: 200
+    # NaN은 range 비교에 맡기지 않고 별도 오류로 우선 제거한다.
+    NaN: 200
+    # Inf도 별도 오류로 제거해 core에 전달하지 않는다.
+    Inf: 200
+    # 상한 초과는 invalid류 처리 후 upper로 clamp하고 다시 검사한다.
+    OutRangePositive: 100
+    # 하한 미만은 lower로 clamp하고 다시 검사한다. 동률은 input/issue 순서다.
+    OutRangeNegative: 100
+    # Stale은 보정하지 않고 final health에 유지해 selector가 해당 input 사용을 막는다.
+    Stale: -1
+    # 수신 timeout도 유지한다. 보정 실행 시각을 새 수신처럼 취급하지 않는다.
+    ReceiveTimeout: -1
+    # 시차 오류는 stamp를 고쳐 숨기지 않고 selector 판단에 남긴다.
+    Skew: -1
+
+# section 선택을 덮어쓸 AND 조건 규칙이다. 가장 큰 priority가 우선한다.
+health_core_map:
+  - when:
+      - {input: primary, issue: Missing}
+    priority: 100
+    core: auxiliary
+  - when:
+      - {input: auxiliary, issue: Missing}
+    priority: 90
+    core: primary
+  # 여러 오류의 조합도 하나의 규칙으로 지정한다.
+  - when:
+      - {input: primary, issue: Stale}
+      - {input: primary, issue: ReceiveTimeout}
+    priority: 110
+    core: auxiliary

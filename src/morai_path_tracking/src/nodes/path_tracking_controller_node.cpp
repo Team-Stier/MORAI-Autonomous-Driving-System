@@ -15,7 +15,7 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
-#include <nav_msgs/Odometry.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <nav_msgs/Path.h>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <morai_msgs/CtrlCmd.h>
@@ -134,7 +134,7 @@ ros::WallDuration periodFromRate(double control_rate_hz) {
 
 struct ControllerConfig {
   std::string local_path_topic;
-  std::string odometry_topic;
+  std::string ego_topic;
   std::string vehicle_status_topic;
   std::string command_topic;
   std::string controller_status_topic;
@@ -146,7 +146,7 @@ struct ControllerConfig {
   std::string expected_velocity_frame_id;
   ros::WallDuration control_period;
   double path_timeout_sec{0.25};
-  double odometry_timeout_sec{0.25};
+  double ego_timeout_sec{0.25};
   double vehicle_status_timeout_sec{0.25};
   double maximum_input_skew_sec{0.0};
   int input_sync_queue_size{10};
@@ -228,7 +228,7 @@ struct LateralControlOutput {
 ControllerConfig loadConfig(const ros::NodeHandle& private_node) {
   ControllerConfig config;
   config.local_path_topic = requiredString(private_node, "local_path_topic");
-  config.odometry_topic = requiredString(private_node, "odometry_topic");
+  config.ego_topic = requiredString(private_node, "ego_topic");
   config.vehicle_status_topic =
       requiredString(private_node, "vehicle_status_topic");
   config.command_topic = requiredString(private_node, "command_topic");
@@ -250,8 +250,8 @@ ControllerConfig loadConfig(const ros::NodeHandle& private_node) {
   const double control_rate_hz =
       requiredDouble(private_node, "control_rate_hz");
   config.path_timeout_sec = requiredDouble(private_node, "path_timeout_sec");
-  config.odometry_timeout_sec =
-      requiredDouble(private_node, "odometry_timeout_sec");
+  config.ego_timeout_sec =
+      requiredDouble(private_node, "ego_timeout_sec");
   config.vehicle_status_timeout_sec =
       requiredDouble(private_node, "vehicle_status_timeout_sec");
   config.maximum_input_skew_sec =
@@ -800,7 +800,7 @@ ControllerConfig loadConfig(const ros::NodeHandle& private_node) {
   }
 
   requireRosName("local_path_topic", config.local_path_topic);
-  requireRosName("odometry_topic", config.odometry_topic);
+  requireRosName("ego_topic", config.ego_topic);
   requireRosName("vehicle_status_topic", config.vehicle_status_topic);
   requireRosName("command_topic", config.command_topic);
   requireRosName("controller_status_topic", config.controller_status_topic);
@@ -834,7 +834,7 @@ ControllerConfig loadConfig(const ros::NodeHandle& private_node) {
         "control_rate_hz period must be within control dt bounds");
   }
   requirePositive("path_timeout_sec", config.path_timeout_sec);
-  requirePositive("odometry_timeout_sec", config.odometry_timeout_sec);
+  requirePositive("ego_timeout_sec", config.ego_timeout_sec);
   requirePositive("vehicle_status_timeout_sec",
                   config.vehicle_status_timeout_sec);
   requireNonNegative("maximum_input_skew_sec", config.maximum_input_skew_sec);
@@ -1000,7 +1000,7 @@ class PathTrackingControllerNode {
  public:
   using InputSyncPolicy =
       message_filters::sync_policies::ApproximateTime<nav_msgs::Path,
-                                                       nav_msgs::Odometry>;
+                                                       geometry_msgs::PoseStamped>;
 
   PathTrackingControllerNode()
       : private_node_("~"),
@@ -1011,16 +1011,12 @@ class PathTrackingControllerNode {
         stanley_controller_(config_.stanley),
         hybrid_controller_(config_.hybrid),
         mpc_controller_(config_.mpc),
-        path_subscriber_(node_, config_.local_path_topic,
-                         static_cast<std::uint32_t>(
-                             config_.input_sync_queue_size)),
-        odometry_subscriber_(node_, config_.odometry_topic,
-                             static_cast<std::uint32_t>(
-                                 config_.input_sync_queue_size)),
+        path_subscriber_(node_, config_.local_path_topic, 1U),
+        ego_subscriber_(node_, config_.ego_topic, 1U),
         input_synchronizer_(
             InputSyncPolicy(
                 static_cast<std::uint32_t>(config_.input_sync_queue_size)),
-            path_subscriber_, odometry_subscriber_) {
+            path_subscriber_, ego_subscriber_) {
     publisher_ = node_.advertise<morai_msgs::CtrlCmd>(
         config_.command_topic, 1U);
     controller_status_publisher_ =
@@ -1036,7 +1032,7 @@ class PathTrackingControllerNode {
     mpc_compensated_path_publisher_ = node_.advertise<nav_msgs::Path>(
         config_.mpc_compensated_path_topic, 1U);
     vehicle_status_subscriber_ = node_.subscribe(
-        config_.vehicle_status_topic, 10U,
+        config_.vehicle_status_topic, 1U,
         &PathTrackingControllerNode::onVehicleStatus, this);
     input_synchronizer_.setMaxIntervalDuration(
         ros::Duration(config_.maximum_input_skew_sec));
@@ -1060,9 +1056,21 @@ class PathTrackingControllerNode {
  private:
   void onSynchronizedInputs(
       const nav_msgs::Path::ConstPtr& path,
-      const nav_msgs::Odometry::ConstPtr& odometry) {
+      const geometry_msgs::PoseStamped::ConstPtr& ego) {
+    if (latest_ego_) {
+      const double dt = (ego->header.stamp - latest_ego_->header.stamp).toSec();
+      if (dt > 0 && dt <= config_.ego_timeout_sec && finiteQuaternion(ego->pose.orientation)) {
+        const double yaw = tf2::getYaw(ego->pose.orientation);
+        const double vx_map = (ego->pose.position.x - latest_ego_->pose.position.x) / dt;
+        const double vy_map = (ego->pose.position.y - latest_ego_->pose.position.y) / dt;
+        lateral_velocity_mps_ = -std::sin(yaw) * vx_map + std::cos(yaw) * vy_map;
+      } else if (dt != 0) {
+        lateral_velocity_mps_ = std::numeric_limits<double>::quiet_NaN();
+      }
+      // 같은 stamp는 미분하지 않고 이전 추정값을 유지한다.
+    }
     latest_path_ = path;
-    latest_odometry_ = odometry;
+    latest_ego_ = ego;
     synchronized_input_receipt_time_ = ros::SteadyTime::now();
   }
 
@@ -1097,8 +1105,8 @@ class PathTrackingControllerNode {
                    double* speed_mps, double* lateral_velocity_mps,
                    double* yaw_rate_radps,
                    std::string* reason) const {
-    if (!latest_path_ || !latest_odometry_) {
-      *reason = "WAITING_FOR_SYNCHRONIZED_PATH_ODOMETRY";
+    if (!latest_path_ || !latest_ego_) {
+      *reason = "WAITING_FOR_SYNCHRONIZED_PATH_EGO";
       return false;
     }
     if (!has_vehicle_status_ || !latest_vehicle_status_) {
@@ -1106,12 +1114,12 @@ class PathTrackingControllerNode {
       return false;
     }
     const nav_msgs::Path& path_message = *latest_path_;
-    const nav_msgs::Odometry& odometry_message = *latest_odometry_;
+    const geometry_msgs::PoseStamped& ego_message = *latest_ego_;
     if (path_message.header.frame_id != config_.expected_frame_id ||
-        odometry_message.header.frame_id != config_.expected_frame_id ||
+        ego_message.header.frame_id != config_.expected_frame_id ||
         path_message.header.stamp.isZero() ||
-        odometry_message.header.stamp.isZero()) {
-      *reason = "INVALID_PATH_ODOMETRY_FRAME_OR_STAMP";
+        ego_message.header.stamp.isZero()) {
+      *reason = "INVALID_PATH_EGO_FRAME_OR_STAMP";
       return false;
     }
 
@@ -1120,8 +1128,8 @@ class PathTrackingControllerNode {
     if (!std::isfinite(synchronized_receipt_age) ||
         synchronized_receipt_age < 0.0 ||
         synchronized_receipt_age > config_.path_timeout_sec ||
-        synchronized_receipt_age > config_.odometry_timeout_sec) {
-      *reason = "STALE_SYNCHRONIZED_PATH_ODOMETRY";
+        synchronized_receipt_age > config_.ego_timeout_sec) {
+      *reason = "STALE_SYNCHRONIZED_PATH_EGO";
       return false;
     }
     const double status_receipt_age =
@@ -1134,16 +1142,16 @@ class PathTrackingControllerNode {
 
     const ros::Time ros_now = ros::Time::now();
     const double path_stamp_age = (ros_now - path_message.header.stamp).toSec();
-    const double odometry_stamp_age =
-        (ros_now - odometry_message.header.stamp).toSec();
+    const double ego_stamp_age =
+        (ros_now - ego_message.header.stamp).toSec();
     const double skew =
-        std::abs((path_message.header.stamp - odometry_message.header.stamp).toSec());
-    if (!std::isfinite(path_stamp_age) || !std::isfinite(odometry_stamp_age) ||
+        std::abs((path_message.header.stamp - ego_message.header.stamp).toSec());
+    if (!std::isfinite(path_stamp_age) || !std::isfinite(ego_stamp_age) ||
         !std::isfinite(skew) || path_stamp_age < 0.0 ||
-        odometry_stamp_age < 0.0 || path_stamp_age > config_.path_timeout_sec ||
-        odometry_stamp_age > config_.odometry_timeout_sec ||
+        ego_stamp_age < 0.0 || path_stamp_age > config_.path_timeout_sec ||
+        ego_stamp_age > config_.ego_timeout_sec ||
         skew > config_.maximum_input_skew_sec) {
-      *reason = "INVALID_PATH_ODOMETRY_SOURCE_TIME";
+      *reason = "INVALID_PATH_EGO_SOURCE_TIME";
       return false;
     }
 
@@ -1157,23 +1165,26 @@ class PathTrackingControllerNode {
       return false;
     }
 
-    const geometry_msgs::Point& position = odometry_message.pose.pose.position;
+    const geometry_msgs::Point& position = ego_message.pose.position;
     const geometry_msgs::Quaternion& orientation =
-        odometry_message.pose.pose.orientation;
-    const double lateral_velocity =
-        odometry_message.twist.twist.linear.y;
-    const double yaw_rate = odometry_message.twist.twist.angular.z;
+        ego_message.pose.orientation;
+    if (!std::isfinite(lateral_velocity_mps_)) {
+      *reason = "WAITING_FOR_EGO_VELOCITY";
+      return false;
+    }
+    const double lateral_velocity = lateral_velocity_mps_;
+    const double yaw_rate = vehicle_status.angular_velocity_z_radps;
     if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
         !std::isfinite(position.z) || !finiteQuaternion(orientation) ||
         !std::isfinite(filtered_velocity_x_mps_) ||
         !std::isfinite(lateral_velocity) ||
         !std::isfinite(yaw_rate)) {
-      *reason = "INVALID_ODOMETRY_POSE";
+      *reason = "INVALID_EGO_POSE";
       return false;
     }
     const double yaw = tf2::getYaw(orientation);
     if (!std::isfinite(yaw)) {
-      *reason = "INVALID_ODOMETRY_YAW";
+      *reason = "INVALID_EGO_YAW";
       return false;
     }
 
@@ -1787,12 +1798,13 @@ class PathTrackingControllerNode {
   ros::Publisher mpc_projection_point_publisher_;
   ros::Publisher mpc_compensated_path_publisher_;
   message_filters::Subscriber<nav_msgs::Path> path_subscriber_;
-  message_filters::Subscriber<nav_msgs::Odometry> odometry_subscriber_;
+  message_filters::Subscriber<geometry_msgs::PoseStamped> ego_subscriber_;
   message_filters::Synchronizer<InputSyncPolicy> input_synchronizer_;
   ros::Subscriber vehicle_status_subscriber_;
+  double lateral_velocity_mps_{std::numeric_limits<double>::quiet_NaN()};
   ros::WallTimer timer_;
   nav_msgs::Path::ConstPtr latest_path_;
-  nav_msgs::Odometry::ConstPtr latest_odometry_;
+  geometry_msgs::PoseStamped::ConstPtr latest_ego_;
   interfaces::CompetitionVehicleStatus::ConstPtr
       latest_vehicle_status_;
   ros::SteadyTime synchronized_input_receipt_time_;
