@@ -21,7 +21,9 @@ struct Validator {
   void operator()(const sensor_msgs::NavSatFix& msg, const np::HealthLimits&, std::vector<np::Kind>& issues) const {
     if (msg.header.frame_id != "gps_link") issues.push_back(np::Kind::FrameMismatch);
     numbers({msg.latitude, msg.longitude}, issues);
-    if (msg.status.status == sensor_msgs::NavSatStatus::STATUS_NO_FIX) issues.push_back(np::Kind::Missing);
+    if (msg.status.status == sensor_msgs::NavSatStatus::STATUS_NO_FIX ||
+        (msg.latitude == 0 && msg.longitude == 0 && msg.altitude == 0))
+      issues.push_back(np::Kind::Missing);
     if (msg.latitude < -80 || msg.latitude > 84 || msg.longitude < -180 || msg.longitude > 180)
       issues.push_back(np::Kind::OutRangePositive);
   }

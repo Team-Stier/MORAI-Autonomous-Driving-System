@@ -16,14 +16,27 @@ MORAI SIM 기반 자율주행 시스템. ROS 1 Noetic을 사용한다.
 
 구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)와
 그 안의 [템플릿 코드](src/node_pipeline/templates/)를 참고한다.
+
+### Core 등록
+
+각 노드의 등록 파일은 `include/<package_name>/core_set.hpp`,
+Core 작성 위치는 `include/<package_name>/cores/`다.
 개발 단계에서 데모 테스트가 필요하면 먼저 노드의 `core_set.hpp`에서 Core 파일을
 include하고 Core ID·객체·필수 입력·`process()` 인자 연결을 등록한다.
 config 로더의 이름→Core ID 등록 키와 YAML의 Core 매핑 값은 확장자를 포함한
 Core 파일 이름(예: `full_ekf.hpp`)으로 통일한다.
 이후 각 패키지의 `config/<package_name>.yaml`에서 Core 매핑을 변경해
 등록한 Core를 바꿔 끼우며 개발한다. CoreSet 등록은 리드 개발자와 협의해 진행한다.
-각 노드의 등록 파일은 `include/<package_name>/core_set.hpp`,
-Core 작성 위치는 `include/<package_name>/cores/`다.
+
+Core 내부에는 입력 valid 처리를 두지 않는다. `process()` 인자의 개수·타입은
+컴파일 시 고정하며, Pipeline은 등록된 필수 입력이 하나라도 Missing이면
+해당 Core 호출과 발행을 거부한다. 필수 입력 외의 추가 메시지는 허용한다.
+업스트림 메시지 환경에 대응하도록 사용할 입력 조합과 인자 개수별로 Core를 마련하고,
+`health_core_map`에서 input별 issue 조건을 해당 Core 파일 이름에 연결한다.
+`section_core_map`으로 기본 Core를 선택하고, 일치하는 health 매핑이 있으면 덮어쓴다.
+
+입력 불안정에 대한 fallback은 이 Core 교체로 수행한다.
+다른 곳, 특히 Core 내부에서 입력 대체나 별도의 fallback을 구현하지 않는다.
 
 ### 좌표계
 
