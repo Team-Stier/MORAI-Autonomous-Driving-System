@@ -18,6 +18,8 @@ MORAI SIM 기반 자율주행 시스템. ROS 1 Noetic을 사용한다.
 그 안의 [템플릿 코드](src/node_pipeline/templates/)를 참고한다.
 개발 단계에서 데모 테스트가 필요하면 먼저 노드의 `core_set.hpp`에서 Core 파일을
 include하고 Core ID·객체·필수 입력·`process()` 인자 연결을 등록한다.
+config 로더의 이름→Core ID 등록 키와 YAML의 Core 매핑 값은 확장자를 포함한
+Core 파일 이름(예: `full_ekf.hpp`)으로 통일한다.
 이후 각 패키지의 `config/<package_name>.yaml`에서 Core 매핑을 변경해
 등록한 Core를 바꿔 끼우며 개발한다. CoreSet 등록은 리드 개발자와 협의해 진행한다.
 각 노드의 등록 파일은 `include/<package_name>/core_set.hpp`,

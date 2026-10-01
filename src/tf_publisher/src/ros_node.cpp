@@ -31,7 +31,7 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/localization/ego"), pkg::Input::Ego}},
     std::map<std::string, pkg::Input>{{"ego", pkg::Input::Ego}},
-    std::map<std::string, pkg::CoreId>{{"ego_tf", pkg::CoreId::EgoTf}}, selector, policy);
+    std::map<std::string, pkg::CoreId>{{"ego_tf.hpp", pkg::CoreId::EgoTf}}, selector, policy);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
   limits[0].frame = "map";

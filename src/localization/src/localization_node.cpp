@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
   // 로더에서 공통 설정을 읽고 실제 처리 strategy는 모두 Remove로 연결한다.
   np::InputPolicy<loc::Input, np::ClampUpper<loc::Access>, np::ClampLower<loc::Access>> configured_policy({1}, {-1});
   const auto settings = np::loadRosConfig(nh, params, topics, inputs,
-    std::map<std::string, loc::CoreId>{{"full_EKF", loc::CoreId::FullEkf}}, mapping, configured_policy);
+    std::map<std::string, loc::CoreId>{{"full_ekf.hpp", loc::CoreId::FullEkf}}, mapping, configured_policy);
   loc::Policy policy({}, {});
   policy.priority.fill(100); // 모든 issue에 Remove를 적용한다. 제거한 입력은 다시 처리하지 않는다.
   loc::EkfParameters ekf;

@@ -7,14 +7,14 @@ stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
 section_core_map:
-  "0": ego_tf
-  "1": ego_tf
-  "2": ego_tf
-  "3": ego_tf
-  "4": ego_tf
-  "5": ego_tf
-  "6": ego_tf
-  "7": ego_tf
+  "0": ego_tf.hpp
+  "1": ego_tf.hpp
+  "2": ego_tf.hpp
+  "3": ego_tf.hpp
+  "4": ego_tf.hpp
+  "5": ego_tf.hpp
+  "6": ego_tf.hpp
+  "7": ego_tf.hpp
 health_core_map: []
 trigger_input: /localization/ego
 inputs:

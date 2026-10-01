@@ -12,14 +12,14 @@ inputs:
   imu: {stale_after_sec: 0.06, receive_timeout_sec: 0.06}
   competition_status: {stale_after_sec: 0.06, receive_timeout_sec: 0.06}
 section_core_map:
-  "0": full_EKF
-  "1": full_EKF
-  "2": full_EKF
-  "3": full_EKF
-  "4": full_EKF
-  "5": full_EKF
-  "6": full_EKF
-  "7": full_EKF
+  "0": full_ekf.hpp
+  "1": full_ekf.hpp
+  "2": full_ekf.hpp
+  "3": full_ekf.hpp
+  "4": full_ekf.hpp
+  "5": full_ekf.hpp
+  "6": full_ekf.hpp
+  "7": full_ekf.hpp
 health_core_map: []
 # 모든 issue의 strategy는 Remove로 고정한다. 세 입력이 모두 Green일 때만 Core를 호출한다.
 ekf:
