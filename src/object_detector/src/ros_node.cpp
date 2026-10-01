@@ -1,4 +1,4 @@
-#include <object_detector/template_components.hpp>
+#include <object_detector/components.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = object_detector;
 namespace np = node_pipeline;

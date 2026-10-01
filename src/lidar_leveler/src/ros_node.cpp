@@ -1,4 +1,4 @@
-#include <lidar_leveler/template_components.hpp>
+#include <lidar_leveler/components.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = lidar_leveler;
 namespace np = node_pipeline;

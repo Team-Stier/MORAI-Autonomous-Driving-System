@@ -1,4 +1,4 @@
-#include <traffic_light/template_components.hpp>
+#include <traffic_light/components.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = traffic_light;
 namespace np = node_pipeline;

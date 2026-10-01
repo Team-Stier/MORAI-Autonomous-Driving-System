@@ -1,4 +1,4 @@
-#include <section_annotator/template_components.hpp>
+#include <section_annotator/components.hpp>
 #include <node_pipeline/ros.hpp>
 #include <fstream>
 #include <iterator>

@@ -1,4 +1,4 @@
-#include <control/template_components.hpp>
+#include <control/components.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = control;
 namespace np = node_pipeline;

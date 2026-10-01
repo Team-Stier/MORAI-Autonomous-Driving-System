@@ -1,4 +1,4 @@
-#include <tf_publisher/template_components.hpp>
+#include <tf_publisher/components.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = tf_publisher;
 namespace np = node_pipeline;

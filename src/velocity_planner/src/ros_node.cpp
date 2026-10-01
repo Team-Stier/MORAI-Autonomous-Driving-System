@@ -1,4 +1,4 @@
-#include <velocity_planner/template_components.hpp>
+#include <velocity_planner/components.hpp>
 #include <node_pipeline/ros.hpp>
 #include <fstream>
 #include <iterator>

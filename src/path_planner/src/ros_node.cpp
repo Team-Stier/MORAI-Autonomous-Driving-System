@@ -1,4 +1,4 @@
-#include <path_planner/template_components.hpp>
+#include <path_planner/components.hpp>
 #include <node_pipeline/ros.hpp>
 #include <fstream>
 #include <iterator>

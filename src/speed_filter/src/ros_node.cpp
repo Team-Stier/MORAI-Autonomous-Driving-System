@@ -1,4 +1,4 @@
-#include <speed_filter/template_components.hpp>
+#include <speed_filter/components.hpp>
 #include <node_pipeline/ros.hpp>
 #include <fstream>
 #include <iterator>
