@@ -1,4 +1,5 @@
 #include <path_planner/components.hpp>
+#include <path_planner/config.hpp>
 #include <node_pipeline/ros.hpp>
 #include <fstream>
 #include <iterator>
@@ -14,7 +15,7 @@ using Message = pkg::Message;
 using Components = pkg::Components<RosAccess>;
 using IO = np::RosIO<Message>;
 struct RosHeaderInjector {
-  void injectHeader(interfaces::Path& message, const np::Context<4>& context) const {
+  void injectHeader(interfaces::Path& message, const Components::Buffer::ContextType& context) const {
     message.header.stamp.fromNSec(context.stamp_ns);
     message.header.frame_id = "map";
     for (auto& point : message.points) point.pose.header = message.header;
@@ -23,12 +24,13 @@ struct RosHeaderInjector {
 using Node = Components::Node<IO, RosHeaderInjector>;
 struct RosCallbacks {
   Node& node;
-  void onEgo(const geometry_msgs::PoseStamped::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
+  void onEgo(const nav_msgs::Odometry::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
   void onCompetition(const interfaces::CompetitionVehicleStatus::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Competition>{}, np::retainMessage(msg)); }
   void onObjects(const interfaces::Objects::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Objects>{}, np::retainMessage(msg)); }
   void onTf(const tf2_msgs::TFMessage::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Tf>{}, np::retainMessage(msg)); }
   void onSection(const interfaces::SectionAnnotation::ConstPtr& msg) {
     node.onSection(np::Section{true, msg->state, static_cast<std::int64_t>(msg->header.stamp.toNSec()), msg->header.frame_id});
+    node.onInput(pkg::InputTag<pkg::Input::Section>{}, np::retainMessage(msg));
   }
   void onPeriodic(const ros::SteadyTimerEvent&) { node.onPeriodic(); }
 };
@@ -37,11 +39,17 @@ int main(int argc, char** argv) {
   ros::NodeHandle nh, params("~");
   auto selector = Components::selector();
   auto policy = Components::policy(np::HealthLimits{});
+  const std::map<std::string, pkg::Input> topics{{nh.resolveName("/localization/ego"), pkg::Input::Ego}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}, {nh.resolveName("/objects"), pkg::Input::Objects}, {nh.resolveName("/tf"), pkg::Input::Tf}};
+  const std::map<std::string, pkg::Input> inputs{{"ego", pkg::Input::Ego}, {"competition", pkg::Input::Competition}, {"objects", pkg::Input::Objects}, {"tf", pkg::Input::Tf}};
   const auto settings = np::loadRosConfig(nh, params,
-    std::map<std::string, pkg::Input>{{nh.resolveName("/localization/ego"), pkg::Input::Ego}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}, {nh.resolveName("/objects"), pkg::Input::Objects}, {nh.resolveName("/tf"), pkg::Input::Tf}},
-    std::map<std::string, pkg::Input>{{"ego", pkg::Input::Ego}, {"competition", pkg::Input::Competition}, {"objects", pkg::Input::Objects}, {"tf", pkg::Input::Tf}},
-    std::map<std::string, pkg::CoreId>{}, selector, policy);
-  std::array<np::HealthLimits, 4> limits;
+    topics, inputs, std::map<std::string, pkg::FirstCoreId>{}, selector.core1, policy);
+  ros::NodeHandle core1_params(params, "core1"), core2_params(params, "core2");
+  auto mapping_policy = policy;
+  np::loadRosConfig(nh, core1_params, topics, inputs,
+    std::map<std::string, pkg::FirstCoreId>{{"global_path.hpp", pkg::FirstCoreId::GlobalPath}}, selector.core1, mapping_policy);
+  np::loadRosConfig(nh, core2_params, topics, inputs,
+    std::map<std::string, pkg::SecondCoreId>{{"local_path.hpp", pkg::SecondCoreId::LocalPath}}, selector.core2, mapping_policy);
+  std::array<np::HealthLimits, Components::Buffer::count> limits;
   limits.fill(settings.health);
   limits[0].frame = "map";
   limits[0].stale_ns = np::readDurationNs(params, "inputs/ego/stale_after_sec", 0.3);
@@ -66,8 +74,12 @@ int main(int argc, char** argv) {
   std::ifstream checkpoints_file_stream(checkpoints_file_path);
   if (!checkpoints_file_stream) throw std::runtime_error("cannot open " + checkpoints_file_path);
   const std::string checkpoints_file_data{std::istreambuf_iterator<char>(checkpoints_file_stream), std::istreambuf_iterator<char>()};
+  const auto global_path = pkg::readGlobalPathParameters(map_file_data, checkpoints_file_data);
+  const auto local_path = pkg::loadLocalPathParameters(core2_params, global_path.map);
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    pkg::CoreSet{pkg::GlobalPath(global_path,
+        nh.advertise<nav_msgs::Path>("/visualizer/global_path", 1, true)), pkg::LocalPath(local_path)}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_ego = nh.subscribe("/localization/ego", 1, &RosCallbacks::onEgo, &callbacks);
   const auto sub_competition = nh.subscribe("/vehicle/competition_status", 1, &RosCallbacks::onCompetition, &callbacks);

@@ -1,4 +1,5 @@
 #include <localization/components.hpp>
+#include <localization/config.hpp>
 #include <interfaces/SectionAnnotation.h>
 namespace loc = localization;
 namespace np = node_pipeline;
@@ -22,7 +23,7 @@ int main(int argc, char** argv) {
   const std::map<std::string, loc::Input> inputs{{"gps", loc::Input::Gps}, {"imu", loc::Input::Imu},
                                              {"competition_status", loc::Input::Competition}, {"lidar", loc::Input::Lidar}};
   np::CoreSelector<loc::Input, loc::CoreId> mapping;
-  for (std::uint8_t section = 0; section <= interfaces::SectionAnnotation::TRAFFIC_LIGHT_STATIC_OBSTACLE; ++section)
+  for (std::uint8_t section = 0; section <= interfaces::SectionAnnotation::SECTION_16; ++section)
     mapping.section_core_map[section] = loc::CoreId::FullEkf;
   // 로더에서 공통 설정을 읽고 실제 처리 strategy는 모두 Remove로 연결한다.
   np::InputPolicy<loc::Input, np::ClampUpper<loc::Access>, np::ClampLower<loc::Access>> configured_policy({1}, {-1});
@@ -30,17 +31,7 @@ int main(int argc, char** argv) {
     std::map<std::string, loc::CoreId>{{"full_ekf.hpp", loc::CoreId::FullEkf}}, mapping, configured_policy);
   loc::Policy policy({}, {});
   policy.priority.fill(100); // 모든 issue에 Remove를 적용한다. 제거한 입력은 다시 처리하지 않는다.
-  loc::EkfParameters ekf;
-  params.param("ekf/acceleration_noise", ekf.acceleration_noise, ekf.acceleration_noise);
-  params.param("ekf/yaw_rate_noise", ekf.yaw_rate_noise, ekf.yaw_rate_noise);
-  params.param("ekf/gps_position_noise", ekf.gps_position_noise, ekf.gps_position_noise);
-  params.param("ekf/velocity_noise", ekf.velocity_noise, ekf.velocity_noise);
-  params.param("ekf/yaw_noise", ekf.yaw_noise, ekf.yaw_noise);
-  params.param("ekf/gps_height_m", ekf.gps_height_m, ekf.gps_height_m);
-  params.param("ekf/yaw_offset_rad", ekf.yaw_offset_rad, ekf.yaw_offset_rad);
-  for (double value : {ekf.acceleration_noise, ekf.yaw_rate_noise, ekf.gps_position_noise, ekf.velocity_noise, ekf.yaw_noise})
-    if (!std::isfinite(value) || value <= 0) throw std::invalid_argument("invalid EKF noise parameter");
-  if (!std::isfinite(ekf.yaw_offset_rad) || !std::isfinite(ekf.gps_height_m)) throw std::invalid_argument("invalid heading offset");
+  const auto ekf = loc::loadEkfParameters(params);
   std::array<np::HealthLimits, 3> input_limits;
   input_limits.fill(settings.health);
   const std::array<std::string, 3> input_names{{"gps", "imu", "competition_status"}};
@@ -49,7 +40,7 @@ int main(int argc, char** argv) {
     input_limits[i].stale_ns = np::readDurationNs(params, "inputs/" + input_names[i] + "/stale_after_sec", default_timeouts[i]);
     input_limits[i].receive_timeout_ns = np::readDurationNs(params, "inputs/" + input_names[i] + "/receive_timeout_sec", default_timeouts[i]);
   }
-  loc::IO io{nh.advertise<geometry_msgs::PoseStamped>("/localization/ego", 1)};
+  loc::IO io{nh.advertise<nav_msgs::Odometry>("/localization/ego", 1)};
   loc::Node node(settings.execution, loc::Buffer(settings.queue_capacity), {},
     loc::Checker(input_limits, io.readClocks().steady_ns), policy, loc::Selector{mapping},
     loc::CoreSet{loc::FullEkf(ekf)}, {}, io);

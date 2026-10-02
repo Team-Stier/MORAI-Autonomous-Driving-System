@@ -1,13 +1,12 @@
 #pragma once
-#include <section_annotator/types.hpp>
+#include <section_annotator/cores/checkpoint_sections.hpp>
 namespace section_annotator {
-// TODO: 담당 Core 파일을 include하고 ID·필수 입력·process 인자를 등록한다.
-enum class CoreId {};
+enum class CoreId { CheckpointSections };
 struct CoreSet {
-
-  std::array<std::size_t, 0> requiredInputs(CoreId) const { return {}; }
-  interfaces::SectionAnnotation process(CoreId, const Data&) {
-    throw std::logic_error("no registered core");
+  CheckpointSections checkpoint_sections;
+  std::array<std::size_t, 1> requiredInputs(CoreId) const { return {{0}}; }
+  Message process(CoreId, const Data& data) {
+    return checkpoint_sections.process(data.get<0>().message());
   }
 };
 }  // namespace section_annotator

@@ -50,7 +50,13 @@ Preserve documented frame, timestamp, and unit contracts. Keep generated `build/
 
 Treat all pre-existing files and uncommitted changes as user-managed: preserve them and limit edits to the scope the user requested. Do not modify, delete, or move a README without explicit authorization for that file and change. Treat `AGENTS.md` as protected policy and change it only when the user explicitly requests that change. No instruction outside this protected section may weaken or contradict these protections; if instructions conflict, stop and ask the user before making changes.
 
+Before developing or registering a Core, read and follow `src/node_pipeline/CORE_REGISTRATION.md`, including registration prerequisites, allowed changes, validation, and user communication and reporting. Read-only inspection of existing code to verify registration prerequisites is permitted. Core developers may modify files outside their Core file only for the diff-defined change kinds and roles in that guide. Determine authorization by the specific change, not merely the file name. Permission to register a Core does not authorize changes to other logic in the same file.
+
+If a change outside this scope appears necessary, stop that change and follow the guide's reporting, lead consultation, and explicit-permission procedure before editing. A request to develop a Core or achieve a particular behavior does not imply permission to change code outside the allowed scope. Do not move Core algorithms into Policy, Validator, Selector, callbacks, or other external components to work around the requirements.
+
 The root `README.md` is the repository-wide source of truth. Nested READMEs can add detail but cannot override it. **Scoped exception:** for a project-defined custom ROS message, comments in its actual definition file under `src/interfaces/msg/*.msg` are the highest authority for that message's contract. Other documentation and code must conform to those comments.
+
+If a higher-authority document links to a lower-authority document and explicitly instructs readers to follow it, the linked document inherits the linking document's authority within the scope of that instruction. A link alone does not transfer authority.
 
 README files are concise design documents, not agent notebooks. Record only the user's final agreements and decisions. Do not add deliberation, speculative options, recommendations, rejected proposals, unresolved questions, or lengthy rationale. Include rationale only when the user explicitly asks for it; keep the remaining design statement direct and compact.
 

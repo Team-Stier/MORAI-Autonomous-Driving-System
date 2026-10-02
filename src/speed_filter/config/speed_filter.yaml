@@ -1,16 +1,44 @@
 execution_mode: on_input
 frequency_hz: 20.0
-queue_capacity: 8
+queue_capacity: 1
 max_health_checks: 10
 frame: base_link
 stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
-# TODO: Core 등록 후 이름으로 매핑한다. 현재는 계산·발행하지 않는다.
-section_core_map: {}
+section_core_map:
+  "0": speed_limit60.hpp
+  "1": speed_limit60.hpp
+  "2": speed_limit60.hpp
+  "3": speed_limit60.hpp
+  "4": speed_limit60.hpp
+  "5": speed_limit60.hpp
+  "6": speed_limit60.hpp
+  "7": speed_limit60.hpp
+  "8": speed_limit60.hpp
+  "9": speed_limit60.hpp
+  "10": no_speed_limit.hpp
+  "11": speed_limit60.hpp
+  "12": no_speed_limit.hpp
+  "13": speed_limit60.hpp
+  "14": speed_limit60.hpp
+  "15": speed_limit60.hpp
+  "16": speed_limit60.hpp
 health_core_map: []
 trigger_input: /control_cmd
 # 지도 자산은 노드 구성에서 읽어 Core 인자로 연결한다.
 inputs:
   command: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}
   competition: {stale_after_sec: 0.060000000, receive_timeout_sec: 0.060000000}
+speed_limit60:
+  speed_limit_kph: 60.0
+  stop_tolerance_sec: 30.0
+  start_duration_sec: 1.0
+  start_accel: 0.2
+  stop_speed_mps: 0.1
+no_speed_limit:
+  speed_limit_kph: 0.0  # 0이면 속도 제한 비활성, 양수이면 해당 km/h로 제한.
+  stop_tolerance_sec: 30.0
+  start_duration_sec: 1.0
+  start_accel: 0.2
+  stop_speed_mps: 0.1

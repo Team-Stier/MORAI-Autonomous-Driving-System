@@ -29,10 +29,17 @@ int main(int argc, char** argv) {
   ros::NodeHandle nh, params("~");
   auto selector = Components::selector();
   auto policy = Components::policy(np::HealthLimits{});
-  const auto settings = np::loadRosConfig(nh, params,
-    std::map<std::string, pkg::Input>{{nh.resolveName("/velodyne_points/leveled"), pkg::Input::Cloud}},
-    std::map<std::string, pkg::Input>{{"cloud", pkg::Input::Cloud}},
-    std::map<std::string, pkg::CoreId>{}, selector, policy);
+  const std::map<std::string, pkg::Input> topics{{nh.resolveName("/velodyne_points/leveled"), pkg::Input::Cloud}};
+  const std::map<std::string, pkg::Input> inputs{{"cloud", pkg::Input::Cloud}};
+  const auto settings = np::loadRosConfig(nh, params, topics, inputs,
+    std::map<std::string, pkg::FirstCoreId>{}, selector.core1, policy);
+  ros::NodeHandle core1_params(params, "core1"), core2_params(params, "core2");
+  auto mapping_policy = policy;
+  // TODO: 각 단계의 Core 파일 이름→ID를 등록한다.
+  np::loadRosConfig(nh, core1_params, topics, inputs,
+    std::map<std::string, pkg::FirstCoreId>{}, selector.core1, mapping_policy);
+  np::loadRosConfig(nh, core2_params, topics, inputs,
+    std::map<std::string, pkg::SecondCoreId>{}, selector.core2, mapping_policy);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
   limits[0].frame = "base_link";

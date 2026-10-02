@@ -1,7 +1,7 @@
 # node_pipeline
 
 공통 C++14 라이브러리를 제공하는 서비스 패키지 겸 코딩 가이드 템플릿 저장소다.
-`templates/` 소스는 가이드 전용이며 절대 실행·빌드 대상이 아니다. 각 실행 패키지가 `TODO:` 부분을 구체화해 자신의 소스를 작성한다.
+`templates/`와 `templates_two_core/` 소스는 가이드 전용이며 절대 실행·빌드 대상이 아니다. 각 실행 패키지가 `TODO:` 부분을 구체화해 자신의 소스를 작성한다.
 계산 알고리즘과 실제 입출력 메시지 연결은 실행 패키지가 소유한다.
 
 ## 처리 계약
@@ -14,22 +14,24 @@
 6. InputPolicy는 최고 우선순위 오류 하나를 선택하고 switch로 strategy 객체를 호출한다. 음수 priority는 dismiss다. 이미 Missing인 입력은 다시 보정하지 않는다. 동률은 input·issue 순회 순서다. strategy는 데이터를 수정하고 반환값은 없다.
 7. AllGreen 또는 dismiss issue만 남으면 policy는 false를 반환하고 노드는 `break;`한다. 보정했으면 true를 반환하여 다음 검사 회차로 간다. 기본 최대 검사 횟수는 10회이며, 마지막 검사에서도 완료를 확인하면 수용한다. 완료를 확인하지 못하면 해당 스냅샷을 폐기한다.
 8. CoreSelector는 `section_core_map`으로 선택하고 `health_core_map`으로 덮어쓴다. `when`은 AND 조건이고 가장 높은 priority의 일치 규칙을 적용한다. 일치하지 않으면 section 선택을 유지한다. 최고 priority 동률은 설정 오류다. 최초 구역은 UNKNOWN(0)이다.
-9. CoreSet은 `requiredInputs(core_id)`로 Core별 필수 입력의 tuple 인덱스를 선언한다. 라이브러리는 선택 직후 `data.hasInputs(required)`로 모두 존재하는지 검사한다. 누락되면 NoCore로 종료하고 계산·헤더 주입·발행을 생략한다. 추가 입력은 제한하지 않는다. CoreSet은 선택된 지속 Core에 구독 메시지를 각각의 인자로 전달한다. Core는 목표 발행 메시지 타입으로 payload를 완성해 반환한다. Pipeline은 헤더만 주입하고 출력 검사 없이 발행한다.
+9. CoreSet은 `requiredInputs(core_id)`로 Core별 필수 입력의 tuple 인덱스를 선언한다. 라이브러리는 선택 직후 `data.hasInputs(required)`로 모두 존재하는지 검사한다. 누락되면 NoCore로 종료하고 계산·헤더 주입·발행을 생략한다. 추가 입력은 제한하지 않는다. CoreSet은 선택된 지속 Core를 호출한다. 첫 Core에는 구독 메시지를, 후속 Core에는 이전 Core의 반환값을 각각의 인자로 전달한다. 마지막 Core는 목표 발행 메시지 타입으로 payload를 완성해 반환한다. Pipeline은 헤더만 주입하고 출력 검사 없이 발행한다.
 10. 실행 중 예외를 잡아 재시도하거나 계속 실행하지 않는다. on_input은 마지막 core 시도 token과 같은 스냅샷의 재실행을 생략한다. periodic은 동일 입력으로도 계산·발행한다.
 
 ## Core 입출력 계약과 Strategy 패턴
 
-Core 입력은 구독 메시지의 실제 타입 그대로다. `msg1`, `msg2`는 인자 이름의 표기이며 공통 메시지 타입을 새로 정의하지 않는다.
+첫 Core의 입력은 구독 메시지의 실제 타입 그대로다. 후속 Core는 이전 Core가 반환한 중간 변수를 개별 인자로 받는다. `msg1`, `msg2`는 인자 이름의 표기이며 공통 메시지 타입을 새로 정의하지 않는다.
 
 ```cpp
 geometry_msgs::PoseStamped process(const sensor_msgs::NavSatFix& gps_msg,
                const sensor_msgs::Imu& imu_msg);
 ```
 
-입력을 `Value`로 변환하거나 Core에 Data·Slot·Sample 래퍼, Health, section, 수신 관리용 메타데이터를 넘기지 않는다.
+구독 입력을 `Value`로 변환하거나 Core에 Data·Slot·Sample 래퍼, Health, section, 수신 관리용 메타데이터를 넘기지 않는다.
 원래 메시지의 header는 메시지의 일부로 전달된다. policy가 보정해도 메시지 타입은 동일하며 보정한 필드만 바뀐다.
 
-Core의 입출력은 모두 실제 메시지 타입이다. `process()`는 목표 발행 메시지 타입을 반환하고 payload를 완성한다.
+마지막 Core의 `process()`는 목표 발행 메시지 타입을 반환하고 payload를 완성한다.
+중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있다. 개수·타입·순서는 연결된 Core의 계약으로 정하며 두 개로 고정하지 않는다.
+여러 반환 변수는 `std::pair`·`std::tuple` 같은 표준 컨테이너로 묶을 수 있다. CoreSet이 값을 풀어 다음 Core의 개별 인자로 전달한다.
 별도 Output·PoseResult 같은 계산 결과 래퍼나 성공/실패·준비 상태 코드를 만들지 않는다.
 Core는 출력 메시지의 발행 헤더를 설정하지 않는다. Pipeline의 HeaderInjector가 stamp·frame_id 등 헤더만 주입한다.
 HeaderInjector와 IO는 payload를 변경하거나 출력 검사를 하지 않는다. IO는 헤더 주입이 끝난 메시지를 발행한다.
@@ -43,7 +45,16 @@ CoreSet·입력 검사·policy·헤더 주입는 Core 파일 밖에 둔다. 필�
 | Context | PipelineNode | 공통 실행 순서와 helper 소유 |
 | 선택 | CoreSelector | section·health config로 core ID 결정 |
 | 소유·호출 연결 | CoreSet | 지속 Core 소유, 실제 메시지를 개별 인자로 전달 |
-| 계산 Strategy | 각 Core | `process(msg1, msg2, ...) → 목표 발행 메시지 타입` |
+| 계산 Strategy | 각 Core | `process(개별 인자...) → 계산 반환값`; 마지막 Core는 목표 발행 메시지 타입 반환 |
+
+## 두 Core 순차 템플릿
+
+[`templates_two_core/`](templates_two_core/)는 `Core1.process(msg1, msg2, ...) → (data1, ..., dataN) → Core2.process(data1, ..., dataN) → result 발행` 구조다.
+Core1은 구독 메시지를 개별 인자로 받고 하나 이상의 중간 변수를 반환할 수 있다. Core2는 이 반환값을 개별 인자로 받으며, 중간 변수의 개수·타입·순서는 두 Core의 계약으로 정한다.
+현재 예제는 같은 실제 메시지 타입의 두 값을 `std::pair<Message, Message>`로 묶어 반환한다. 다른 반환 개수·타입은 해당 Core의 반환 타입과 CoreSet의 인자 연결에 반영한다.
+CoreSet이 지속 Core를 소유하고, 두 Selector가 선택한 Core ID로 각 단계의 호출을 연결한다. 각 Selector는 같은 section과 최종 구독 입력 health를 사용한다. 어느 단계든 선택되지 않으면 계산·헤더 주입·발행을 생략한다.
+첫 단계의 필수 구독 입력을 Pipeline이 검사한다. 각 Core는 계산을 수행하고 마지막 Core가 최종 result의 payload를 완성한다. 최종 result의 헤더 주입과 발행은 Pipeline이 담당한다. 중간 변수는 검사·헤더 주입·발행하지 않는다.
+ROS 설정은 `templates_two_core/config/template.yaml`에 둔다. 공통 실행·health·policy 설정은 최상위에 두고, `core1`과 `core2` 아래에 각각 `section_core_map`·`health_core_map`을 지정한다. 매핑 값은 각 단계에 등록한 Core 파일 이름이다.
 
 ## 공개 라이브러리와 노드별 코드
 
@@ -96,6 +107,7 @@ health_core_map:
     core: auxiliary
 ```
 
+section_core_map의 빈 문자열(`""`)은 Core 미등록을 뜻하며 해당 섹션의 기본 Core를 선택하지 않는다.
 등록한 input·core 이름만 사용할 수 있다. when에 적지 않은 input/issue는 제한하지 않는다.
 구역 상수는 `src/interfaces/msg/SectionAnnotation.msg`를 따른다. 알고리즘 이름과 매핑은 각 실행 패키지가 정의한다.
 

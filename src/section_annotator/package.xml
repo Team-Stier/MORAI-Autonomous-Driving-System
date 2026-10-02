@@ -8,4 +8,5 @@
   <depend>interfaces</depend>
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
+  <depend>nav_msgs</depend>
 </package>

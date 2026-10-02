@@ -1,5 +1,0 @@
-<launch>
-  <include file="$(find localization)/launch/localization.launch"/>
-  <include file="$(find morai_path_manager)/launch/route/route_path_publisher.launch"/>
-  <include file="$(find morai_path_tracking)/launch/controllers/path_tracking.launch"/>
-</launch>

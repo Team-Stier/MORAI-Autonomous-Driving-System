@@ -8,5 +8,8 @@
   <depend>interfaces</depend>
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
   <depend>tf2_msgs</depend>
+  <depend>nav_msgs</depend>
 </package>

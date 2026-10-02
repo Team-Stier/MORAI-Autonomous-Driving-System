@@ -20,7 +20,7 @@ struct RosHeaderInjector {
 using Node = Components::Node<IO, RosHeaderInjector>;
 struct RosCallbacks {
   Node& node;
-  void onEgo(const geometry_msgs::PoseStamped::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
+  void onEgo(const nav_msgs::Odometry::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
   void onPeriodic(const ros::SteadyTimerEvent&) { node.onPeriodic(); }
 };
 int main(int argc, char** argv) {

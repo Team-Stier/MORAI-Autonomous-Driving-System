@@ -1,4 +1,5 @@
 #include <speed_filter/components.hpp>
+#include <speed_filter/config.hpp>
 #include <node_pipeline/ros.hpp>
 #include <fstream>
 #include <iterator>
@@ -35,7 +36,10 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/control_cmd"), pkg::Input::Command}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}},
     std::map<std::string, pkg::Input>{{"command", pkg::Input::Command}, {"competition", pkg::Input::Competition}},
-    std::map<std::string, pkg::CoreId>{}, selector, policy);
+    std::map<std::string, pkg::CoreId>{{"speed_limit60.hpp", pkg::CoreId::SpeedLimit60},
+                                     {"no_speed_limit.hpp", pkg::CoreId::NoSpeedLimit}}, selector, policy);
+  const auto speed_limit60 = pkg::loadSpeedFilterParameters(params, "speed_limit60", 60.0);
+  const auto no_speed_limit = pkg::loadSpeedFilterParameters(params, "no_speed_limit", 0.0);
   std::array<np::HealthLimits, 2> limits;
   limits.fill(settings.health);
   limits[0].frame = "map";
@@ -53,7 +57,8 @@ int main(int argc, char** argv) {
   if (!map_file_stream) throw std::runtime_error("cannot open " + map_file_path);
   const std::string map_file_data{std::istreambuf_iterator<char>(map_file_stream), std::istreambuf_iterator<char>()};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    pkg::CoreSet{pkg::SpeedLimit60{speed_limit60}, pkg::NoSpeedLimit{no_speed_limit}}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_command = nh.subscribe("/control_cmd", 1, &RosCallbacks::onCommand, &callbacks);
   const auto sub_competition = nh.subscribe("/vehicle/competition_status", 1, &RosCallbacks::onCompetition, &callbacks);

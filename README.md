@@ -8,16 +8,22 @@ MORAI SIM 기반 자율주행 시스템. ROS 1 Noetic을 사용한다.
 
 이 프로젝트는 Strategy 패턴으로 작성하며, 알고리즘 Core와 ROS 실행 Pipeline을 분리해 협업한다.
 
-- 각 파트 담당자는 노드를 직접 개발하지 않고 자신의 Core만 작성한다. 사전 협의 없이 Core 외부 코드를 수정하거나 외부 코드에 접근하지 않는다.
+- 각 파트 담당자는 노드를 직접 개발하지 않고 자신의 Core만 작성한다. 등록 전제 확인을 위한 기존 코드의 읽기는 허용한다.
+- Core 개발·등록 전에 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)를 읽고 등록 전제 확인, 수정 범위, 검증, 사용자 안내·보고 절차를 따른다. Core 파일 외 수정은 가이드의 diff에 정의된 변경 종류와 담당 범위만 허용한다.
+- 허용 범위 밖의 변경은 중단하고, 가이드의 보고·리드 협의·명시적 허가 절차를 따른다.
+- Core 개발 요청이나 원하는 동작의 지정만으로 허용 범위 밖의 변경이 승인된 것으로 해석하지 않는다. 알고리즘을 Core 밖의 Policy·Validator·Selector·callback 등에 옮겨 요구사항을 우회 구현하지 않는다.
 - 리드 개발자는 Pipeline 라이브러리와 템플릿을 따르는 노드를 제공하고, 담당자가 작성한 Core를 ROS 입출력에 연결한다.
-- Core는 정규 `process()`의 메시지 인자와 반환 메시지만으로 Pipeline과 연결되는 알고리즘 컴포넌트다. 계산 라이브러리와 Core가 소유한 내부 계산 상태는 사용할 수 있다. ROS 통신, 다른 노드·Pipeline 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다.
-- Core는 입력 메시지가 자신의 입력 계약을 만족한다고 전제하고 계산한다. 입력 유효성 검사, 누락 감지, 입력 대체, fallback 및 처리 성공·실패 상태 반환을 구현하지 않는다. 입력 검사와 처리 정책은 Pipeline이 담당한다. 알고리즘 자체에 필요한 조건 분기와 수치 계산은 수행한다.
-- Core 하나당 파일 하나를 두고, 실제 입력 메시지를 `process()`의 개별 인자로 받는다. 목표 발행 메시지 타입의 payload를 완성해 반환하며, 출력 헤더 주입과 발행은 Pipeline이 담당한다.
+- Core는 정규 `process()`의 인자와 반환값만으로 Pipeline에 연결되는 알고리즘 컴포넌트다. 계산 라이브러리와 Core가 소유한 내부 계산 상태는 사용할 수 있다. 시각화 목적의 토픽 발행을 제외한 ROS 통신, 다른 노드·Pipeline 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다.
+- 시각화 목적의 토픽 발행만 Core 디커플링 규칙의 예외로 허용한다. 해당 토픽 이름은 `/visualizer/*`로 지정하며, `/visualizer/*` 토픽은 `src/visualizer` 패키지 이외에서 절대 구독하지 않는다.
+- Core는 입력이 자신의 입력 계약을 만족한다고 전제하고 계산한다. 입력 유효성 검사, 누락 감지, 입력 대체, fallback 및 처리 성공·실패 상태 반환을 구현하지 않는다. 입력 검사와 처리 정책은 Pipeline이 담당한다. 알고리즘 자체에 필요한 조건 분기와 수치 계산은 수행한다.
+- Core 하나당 파일 하나를 둔다. 첫 Core는 실제 구독 메시지를 `process()`의 개별 인자로 받고, 후속 Core는 이전 Core의 반환값을 개별 인자로 받는다. 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있으며, 개수·타입·순서는 연결된 Core의 계약으로 정한다. 마지막 Core는 목표 발행 메시지 타입의 payload를 완성해 반환하며, 출력 헤더 주입과 발행은 Pipeline이 담당한다.
 
 구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)와
 그 안의 [템플릿 코드](src/node_pipeline/templates/)를 참고한다.
 
 ### Core 등록
+
+등록 절차와 설정 주입은 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)에 따른다.
 
 각 노드의 등록 파일은 `include/<package_name>/core_set.hpp`,
 Core 작성 위치는 `include/<package_name>/cores/`다.
@@ -26,7 +32,7 @@ include하고 Core ID·객체·필수 입력·`process()` 인자 연결을 등�
 config 로더의 이름→Core ID 등록 키와 YAML의 Core 매핑 값은 확장자를 포함한
 Core 파일 이름(예: `full_ekf.hpp`)으로 통일한다.
 이후 각 패키지의 `config/<package_name>.yaml`에서 Core 매핑을 변경해
-등록한 Core를 바꿔 끼우며 개발한다. CoreSet 등록은 리드 개발자와 협의해 진행한다.
+등록한 Core를 바꿔 끼우며 개발한다. CoreSet 등록은 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)에 따른다.
 
 Core 내부에는 입력 valid 처리를 두지 않는다. `process()` 인자의 개수·타입은
 컴파일 시 고정하며, Pipeline은 등록된 필수 입력이 하나라도 Missing이면
@@ -65,7 +71,7 @@ y = Northing - 4124145.0
   `<tag k="local_x" v="..."/>`, `local_y`, `local_z`에는 지도 원점을 차감한
   `map` 좌표가 저장되어 있다. 이 이름의 `local`은 차량 `base_link`를 뜻하지 않는다.
 - 전역 데이터의 Header는 `frame_id=map`으로 사용한다. `/localization/ego`는
-  `geometry_msgs/PoseStamped`로 차량 기준점의 위치·자세와 추정 기준 시각을 발행한다.
+  `nav_msgs/Odometry`로 차량 기준점의 위치·자세, 3축 선속도·각속도와 추정 기준 시각을 발행한다.
 - 지도·체크포인트의 원본 z는 보존한다. 수직 기준면과 GPS 고도와의 관계는 아직 미확정이다.
 
 #### Quaternion 규약
@@ -122,7 +128,17 @@ Control은 이 프로젝트의 Bridge 계약에 맞춰 조향각을 정규화해
 
 ### 데이터 계약
 
-- TODO: `/localization/ego` 필드와 `/vehicle/competition_status`의 노드별 사용 필드.
+- `/localization/ego`의 `pose.covariance`와
+  `twist.covariance`는 미제공으로 정의한다. 두 배열은 기본값 0으로 발행하며,
+  구독자는 공분산을 사용하지 않는다. 0을 오차가 없다는 의미로 해석하지 않는다.
+- `/localization/ego`는 `nav_msgs/Odometry`를 사용한다. `header.frame_id=map`,
+  `child_frame_id=base_link`, `header.stamp`는 추정 기준 IMU 시각이다.
+  `pose.pose`는 차량 뒷차축 중심의 map 위치·자세이며 `position.z=0`이다.
+  `twist.twist.linear.{x,y,z}`는 EKF로 추정한 base_link 기준 전방·좌측·위쪽
+  속도(m/s), `twist.twist.angular.{x,y,z}`는 차량 상태의 GT 각속도(rad/s)다.
+  자세는 차량 상태의 GT roll·pitch·yaw에 UTM 격자 heading 보정을 적용한다.
+  수직속도는 GPS 고도 변화로 추정하며 절대 고도를 map z로 사용하지 않는다.
+- TODO: `/vehicle/competition_status`의 노드별 사용 필드.
 - TODO: 센서 시각, 유효성, 입력 만료 및 결과 발행 조건.
 - TODO: 구간 미확정 시 초기 동작과 구간 전환 조건.
 
@@ -331,13 +347,13 @@ flowchart TD
 | `/image/camera_7/compressed` | 신호등 영상 | `sensor_msgs/CompressedImage` | `camera_7_optical_frame` | Bridge 영상 수신 ROS 시각 | 영상 프레임 조립 완료마다 |
 | `/velodyne_points` | 원본 점군 | `sensor_msgs/PointCloud2` | `velodyne` | 드라이버 scan stamp 유지; 현재 설정은 마지막 패킷 시각 | 10 Hz (100 ms); scan 수신마다 |
 | `/velodyne_points/leveled` | 차량 기준 점군 | `sensor_msgs/PointCloud2` | `base_link` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
-| `/localization/ego` | 차량 위치·자세 | `geometry_msgs/PoseStamped` | `map`; 차량 뒷차축 중심의 pose | 추정 상태가 나타내는 시각; 발행 시각으로 대체하지 않음 | 50 Hz |
+| `/localization/ego` | 차량 위치·자세·3축 선속도·각속도 | `nav_msgs/Odometry` | pose: `map`, twist: `base_link`; 차량 뒷차축 중심 | 추정 상태가 나타내는 시각; 발행 시각으로 대체하지 않음 | 50 Hz |
 | `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `base_link` | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
 | `/traffic_light` | 신호등 인식 결과 | `interfaces/TrafficLight` | `camera_7_optical_frame` | 판정에 사용한 영상 stamp 유지 | 목표 5 Hz (200 ms); 최신 미처리 영상 사용 |
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf` | 동적 좌표 변환 | `tf2_msgs/TFMessage` | 각 변환의 `header.frame_id`가 부모, `child_frame_id`가 자식 | ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf_static` | 센서 고정 장착 변환 | `tf2_msgs/TFMessage` | `base_link` → 센서 frame (`velodyne`, `imu_link`, `gps_link`, 카메라 optical frame) | 발행 ROS 시각 | 시작 시 1회 (latched) |
-| `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 계획 기준 ego stamp; 각 point pose stamp도 동일 | 20 Hz 주기 |
+| `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 입력 조립 기준 stamp(전체 입력 큐의 최대 stamp); 각 point pose stamp도 동일 | 20 Hz 주기 |
 | `/local_path/velocity_injected` | 속도 프로파일이 주입된 경로 | `interfaces/Path` | `base_link`; 각 point의 pose도 `base_link` | 입력 경로 및 각 point pose stamp 유지 | `/local_path` 콜백마다 |
 | `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | `/local_path/velocity_injected` 콜백마다 |
 | `/morai_udp_bridge/control_cmd` | 최종 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; Bridge가 수신 시각 기록 | `/control_cmd` 콜백마다 |

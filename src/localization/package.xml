@@ -6,5 +6,6 @@
   <buildtool_depend>catkin</buildtool_depend>
   <depend>node_pipeline</depend><depend>roscpp</depend><depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend><depend>interfaces</depend><depend>eigen</depend>
+  <depend>nav_msgs</depend>
   <export/>
 </package>

@@ -1,7 +1,7 @@
 #pragma once
 #include <localization/core_set.hpp>
 #include <node_pipeline/ros.hpp>
-#include <geometry_msgs/PoseStamped.h>
+#include <nav_msgs/Odometry.h>
 namespace localization {
 namespace np = node_pipeline;
 enum class Input { Gps, Imu, Competition, Lidar };
@@ -20,7 +20,7 @@ struct Validator {
   }
   void operator()(const sensor_msgs::NavSatFix& msg, const np::HealthLimits&, std::vector<np::Kind>& issues) const {
     if (msg.header.frame_id != "gps_link") issues.push_back(np::Kind::FrameMismatch);
-    numbers({msg.latitude, msg.longitude}, issues);
+    numbers({msg.latitude, msg.longitude, msg.altitude}, issues);
     if (msg.status.status == sensor_msgs::NavSatStatus::STATUS_NO_FIX ||
         (msg.latitude == 0 && msg.longitude == 0 && msg.altitude == 0))
       issues.push_back(np::Kind::Missing);
@@ -33,7 +33,7 @@ struct Validator {
   }
   void operator()(const interfaces::CompetitionVehicleStatus& msg, const np::HealthLimits&, std::vector<np::Kind>& issues) const {
     if (msg.header.frame_id != "base_link") issues.push_back(np::Kind::FrameMismatch);
-    numbers({msg.roll_rad, msg.pitch_rad, msg.yaw_rad, msg.velocity_x_mps, msg.angular_velocity_z_radps}, issues);
+    numbers({msg.roll_rad, msg.pitch_rad, msg.yaw_rad, msg.velocity_x_mps, msg.angular_velocity_x_radps, msg.angular_velocity_y_radps, msg.angular_velocity_z_radps}, issues);
   }
 };
 using Buffer = np::InputBuffer<Input, Access, sensor_msgs::NavSatFix, sensor_msgs::Imu,
@@ -75,16 +75,15 @@ using Policy = np::InputPolicy<Input, np::RemoveInput, np::RemoveInput>;
 struct Selector {
   np::CoreSelector<Input, CoreId> mapping;
   np::Selection<CoreId> select(std::uint8_t section, const np::Health<Input, 3>& health) const {
-    for (const auto& input : health.inputs) if (!input.green()) return {};
     return mapping.select(section, health);
   }
 };
 struct HeaderInjector {
-  void injectHeader(geometry_msgs::PoseStamped& message, const np::Context<4>& context) const {
+  void injectHeader(nav_msgs::Odometry& message, const np::Context<4>& context) const {
     message.header.stamp.fromNSec(context.stamp_ns);
     message.header.frame_id = "map";
   }
 };
-using IO = np::RosIO<geometry_msgs::PoseStamped>;
+using IO = np::RosIO<nav_msgs::Odometry>;
 using Node = np::PipelineNode<Buffer, Assembler, Checker, Policy, Selector, CoreSet, HeaderInjector, IO>;
 }

@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "format": {
     "container": "CSV",
     "encoding": "UTF-8",
@@ -29,16 +29,22 @@
         "type": "float64",
         "unit": "deg",
         "meaning": "checkpoint heading"
+      },
+      {
+        "name": "lanelet_id",
+        "type": "int64",
+        "meaning": "Required positive Lanelet2 lanelet relation ID in kcity_lanelet2.osm; global routing uses this ID directly in its OSM-defined direction."
       }
     ],
     "column_order": [
       "x",
       "y",
       "z",
-      "yaw"
+      "yaw",
+      "lanelet_id"
     ],
     "row_order": "Route traversal order; zero-based row index is the implicit checkpoint index.",
-    "record_rule": "Each data row contains one checkpoint; rows do not contain a separate ID field."
+    "record_rule": "Each data row contains one checkpoint with exactly five fields. lanelet_id references an existing lanelet in kcity_lanelet2.osm; multiple checkpoints may reference the same lanelet. Rows do not contain a separate checkpoint ID field."
   },
   "coordinate_system": {
     "frame_id": "map",
@@ -54,6 +60,19 @@
       "z": "up"
     },
     "vertical_datum": null
+  },
+  "high_speed_section": {
+    "meaning": "고속주행구간: 경로 진행 순서에서 체크포인트 10부터 13까지의 구간.",
+    "start": {
+      "checkpoint_index": 10,
+      "mgeo_link_id": "A2256W000411",
+      "link_endpoint": "start"
+    },
+    "end": {
+      "checkpoint_index": 13,
+      "mgeo_link_id": "A2256W000153",
+      "link_endpoint": "end"
+    }
   },
   "heading": {
     "zero_direction": "map +x (UTM grid east)",

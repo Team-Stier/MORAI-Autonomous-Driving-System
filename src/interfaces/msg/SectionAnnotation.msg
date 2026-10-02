@@ -1,21 +1,27 @@
 std_msgs/Header header
 
-# 현재 위치에 해당하는 구간을 판정할 수 없으면 UNKNOWN. 예: 위치 미수신 또는 구간 미매칭.
+# Core의 초기 저장 섹션. 첫 체크포인트 반지름에 진입하기 전에는 UNKNOWN을 반환·발행한다.
 uint8 UNKNOWN=0
-# 지도에 표시된 구간 종류다. 같은 종류의 여러 위치는 같은 상수를 사용한다.
-# GPS 음영 구간.
-uint8 GPS_SHADOW=1
-# 주변 차량 인지 구간.
-uint8 SURROUNDING_VEHICLES=2
-# 교차로 구간 진입.
-uint8 INTERSECTION_ENTRY=3
-# 회전 교차로 진입.
-uint8 ROUNDABOUT_ENTRY=4
-# 신호등 구간. 지도에 표시된 두 신호등 위치에 공통 적용한다.
-uint8 TRAFFIC_LIGHT=5
-# 신호등과 동적 장애물이 함께 있는 구간.
-uint8 TRAFFIC_LIGHT_DYNAMIC_OBSTACLE=6
-# 신호등과 정적 장애물이 함께 있는 구간.
-uint8 TRAFFIC_LIGHT_STATIC_OBSTACLE=7
+# checkpoints.csv의 0-based 행 인덱스 + 1이 섹션 값이다.
+# map XY 거리 <= config 반지름이면 Core의 저장 섹션을 해당 값으로 갱신한다.
+# 여러 반지름에 속하면 가장 가까운 체크포인트, 거리 동률이면 작은 인덱스를 선택한다.
+# 어느 반지름에도 속하지 않으면 저장 섹션을 유지한다.
+# Core는 매 process() 호출마다 저장 섹션을 반환하며 Pipeline은 이를 발행한다.
+uint8 SECTION_1=1
+uint8 SECTION_2=2
+uint8 SECTION_3=3
+uint8 SECTION_4=4
+uint8 SECTION_5=5
+uint8 SECTION_6=6
+uint8 SECTION_7=7
+uint8 SECTION_8=8
+uint8 SECTION_9=9
+uint8 SECTION_10=10
+uint8 SECTION_11=11
+uint8 SECTION_12=12
+uint8 SECTION_13=13
+uint8 SECTION_14=14
+uint8 SECTION_15=15
+uint8 SECTION_16=16
 
 uint8 state

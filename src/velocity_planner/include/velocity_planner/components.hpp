@@ -12,7 +12,7 @@ template<class Access> struct Validator {
   void operator()(const tf2_msgs::TFMessage&, const np::HealthLimits&, std::vector<np::Kind>&) const {}
 };
 template<class Access> struct Components {
-  using Buffer = np::InputBuffer<Input, Access, interfaces::Path, geometry_msgs::PoseStamped, interfaces::CompetitionVehicleStatus, interfaces::TrafficLight, tf2_msgs::TFMessage>;
+  using Buffer = np::InputBuffer<Input, Access, interfaces::Path, nav_msgs::Odometry, interfaces::CompetitionVehicleStatus, interfaces::TrafficLight, tf2_msgs::TFMessage>;
   using Assembler = np::SnapshotAssembler<Buffer, Access>;
   using Checker = np::HealthChecker<Input, 5, Validator<Access>>;
   using Policy = np::InputPolicy<Input, np::RemoveInput, np::RemoveInput>;

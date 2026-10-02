@@ -9,4 +9,5 @@
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
   <depend>tf2_msgs</depend>
+  <depend>nav_msgs</depend>
 </package>

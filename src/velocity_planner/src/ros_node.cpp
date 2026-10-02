@@ -24,7 +24,7 @@ using Node = Components::Node<IO, RosHeaderInjector>;
 struct RosCallbacks {
   Node& node;
   void onPath(const interfaces::Path::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Path>{}, np::retainMessage(msg)); }
-  void onEgo(const geometry_msgs::PoseStamped::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
+  void onEgo(const nav_msgs::Odometry::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
   void onCompetition(const interfaces::CompetitionVehicleStatus::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Competition>{}, np::retainMessage(msg)); }
   void onLight(const interfaces::TrafficLight::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Light>{}, np::retainMessage(msg)); }
   void onTf(const tf2_msgs::TFMessage::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Tf>{}, np::retainMessage(msg)); }
@@ -41,7 +41,8 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/local_path"), pkg::Input::Path}, {nh.resolveName("/localization/ego"), pkg::Input::Ego}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}, {nh.resolveName("/traffic_light"), pkg::Input::Light}, {nh.resolveName("/tf"), pkg::Input::Tf}},
     std::map<std::string, pkg::Input>{{"path", pkg::Input::Path}, {"ego", pkg::Input::Ego}, {"competition", pkg::Input::Competition}, {"light", pkg::Input::Light}, {"tf", pkg::Input::Tf}},
-    std::map<std::string, pkg::CoreId>{}, selector, policy);
+    std::map<std::string, pkg::CoreId>{{"plain_velocity60.hpp", pkg::CoreId::PlainVelocity60},
+                                     {"plain_velocity100.hpp", pkg::CoreId::PlainVelocity100}}, selector, policy);
   std::array<np::HealthLimits, 5> limits;
   limits.fill(settings.health);
   limits[0].frame = "map";
@@ -66,7 +67,8 @@ int main(int argc, char** argv) {
   if (!map_file_stream) throw std::runtime_error("cannot open " + map_file_path);
   const std::string map_file_data{std::istreambuf_iterator<char>(map_file_stream), std::istreambuf_iterator<char>()};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    pkg::CoreSet{pkg::PlainVelocity60{}, pkg::PlainVelocity100{}}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_path = nh.subscribe("/local_path", 1, &RosCallbacks::onPath, &callbacks);
   const auto sub_ego = nh.subscribe("/localization/ego", 1, &RosCallbacks::onEgo, &callbacks);

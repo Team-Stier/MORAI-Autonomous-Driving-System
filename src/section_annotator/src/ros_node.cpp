@@ -1,5 +1,6 @@
 #include <section_annotator/components.hpp>
 #include <node_pipeline/ros.hpp>
+#include <section_annotator/config.hpp>
 #include <fstream>
 #include <iterator>
 namespace pkg = section_annotator;
@@ -20,7 +21,7 @@ struct RosHeaderInjector {
 using Node = Components::Node<IO, RosHeaderInjector>;
 struct RosCallbacks {
   Node& node;
-  void onEgo(const geometry_msgs::PoseStamped::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
+  void onEgo(const nav_msgs::Odometry::ConstPtr& msg) { node.onInput(pkg::InputTag<pkg::Input::Ego>{}, np::retainMessage(msg)); }
   void onPeriodic(const ros::SteadyTimerEvent&) { node.onPeriodic(); }
 };
 int main(int argc, char** argv) {
@@ -31,7 +32,8 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/localization/ego"), pkg::Input::Ego}},
     std::map<std::string, pkg::Input>{{"ego", pkg::Input::Ego}},
-    std::map<std::string, pkg::CoreId>{}, selector, policy);
+    std::map<std::string, pkg::CoreId>{{"checkpoint_sections.hpp", pkg::CoreId::CheckpointSections}}, selector, policy);
+  const auto checkpoints = pkg::loadCheckpointParameters(params);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
   limits[0].frame = "map";
@@ -44,7 +46,8 @@ int main(int argc, char** argv) {
   if (!map_file_stream) throw std::runtime_error("cannot open " + map_file_path);
   const std::string map_file_data{std::istreambuf_iterator<char>(map_file_stream), std::istreambuf_iterator<char>()};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    pkg::CoreSet{pkg::CheckpointSections(checkpoints)}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_ego = nh.subscribe("/localization/ego", 1, &RosCallbacks::onEgo, &callbacks);
   ros::SteadyTimer timer;

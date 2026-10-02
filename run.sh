@@ -163,10 +163,6 @@ start_package velocity_planner
 start_package control
 start_package speed_filter
 
-# 임시 데모 경로 생성·추종 노드.
-start_package morai_path_manager
-start_package morai_path_tracking
-
 stop_child_groups() {
     local signal="$1"
     local pid

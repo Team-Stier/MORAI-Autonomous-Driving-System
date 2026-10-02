@@ -90,7 +90,9 @@ RosSettings<Id> loadRosConfig(ros::NodeHandle& node, ros::NodeHandle& params,
       const int section = std::stoi(entry->first, &parsed);
       if (parsed != entry->first.size() || section < 0 || section > 255 || entry->second.getType() != XmlRpc::XmlRpcValue::TypeString)
         throw std::invalid_argument("invalid section mapping entry");
-      selector.section_core_map[static_cast<std::uint8_t>(section)] = named(cores, static_cast<std::string>(entry->second));
+      const auto core_name = static_cast<std::string>(entry->second);
+      if (core_name.empty()) continue;  // 명시적인 Core 미등록 항목이다.
+      selector.section_core_map[static_cast<std::uint8_t>(section)] = named(cores, core_name);
     }
   }
   if (!cores.empty() && !selector.section_core_map.count(0)) throw std::invalid_argument("UNKNOWN mapping required");
