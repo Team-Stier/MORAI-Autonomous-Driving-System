@@ -31,6 +31,10 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/localization/ego"), pkg::Input::Ego}},
     std::map<std::string, pkg::Input>{{"ego", pkg::Input::Ego}},
+    std::map<std::string, pkg::CoreId>{}, selector, policy);
+  ros::NodeHandle stage1_params(params, "stage1");
+  np::loadStageConfig(stage1_params,
+    std::map<std::string, pkg::Input>{{"ego", pkg::Input::Ego}},
     std::map<std::string, pkg::CoreId>{{"ego_tf.hpp", pkg::CoreId::EgoTf}}, selector, policy);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
@@ -39,7 +43,8 @@ int main(int argc, char** argv) {
   limits[0].receive_timeout_ns = np::readDurationNs(params, "inputs/ego/receive_timeout_sec", 0.3);
   IO io{nh.advertise<tf2_msgs::TFMessage>("/tf", 1)};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    {np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
+      Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)}, {}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_ego = nh.subscribe("/localization/ego", 1, &RosCallbacks::onEgo, &callbacks);
   // 정적 장착 변환은 노드 설정이며 계산 Core와 독립이다.

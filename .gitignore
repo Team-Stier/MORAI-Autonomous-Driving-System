@@ -2,6 +2,7 @@ build/
 devel/
 install/
 logs/
+graphify-out/
 .catkin_workspace
 src/CMakeLists.txt
 __pycache__/

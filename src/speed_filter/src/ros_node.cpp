@@ -30,12 +30,15 @@ struct RosCallbacks {
 };
 int main(int argc, char** argv) {
   ros::init(argc, argv, "speed_filter_node");
-  ros::NodeHandle nh, params("~");
+  ros::NodeHandle nh, params("~"), stage_params(params, "stage1");
   auto selector = Components::selector();
   auto policy = Components::policy(np::HealthLimits{});
+  const std::map<std::string, pkg::Input> inputs{
+    {"command", pkg::Input::Command}, {"competition", pkg::Input::Competition}};
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/control_cmd"), pkg::Input::Command}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}},
-    std::map<std::string, pkg::Input>{{"command", pkg::Input::Command}, {"competition", pkg::Input::Competition}},
+    inputs, std::map<std::string, pkg::CoreId>{}, selector, policy);
+  np::loadStageConfig(stage_params, inputs,
     std::map<std::string, pkg::CoreId>{{"speed_limit60.hpp", pkg::CoreId::SpeedLimit60},
                                      {"no_speed_limit.hpp", pkg::CoreId::NoSpeedLimit}}, selector, policy);
   const auto speed_limit60 = pkg::loadSpeedFilterParameters(params, "speed_limit60", 60.0);
@@ -57,7 +60,8 @@ int main(int argc, char** argv) {
   if (!map_file_stream) throw std::runtime_error("cannot open " + map_file_path);
   const std::string map_file_data{std::istreambuf_iterator<char>(map_file_stream), std::istreambuf_iterator<char>()};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    std::vector<Components::Stage>{np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
+      Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)},
     pkg::CoreSet{pkg::SpeedLimit60{speed_limit60}, pkg::NoSpeedLimit{no_speed_limit}}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_command = nh.subscribe("/control_cmd", 1, &RosCallbacks::onCommand, &callbacks);

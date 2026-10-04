@@ -1,6 +1,6 @@
 #pragma once
-#include <node_pipeline/components.hpp>
-#include <tf_publisher/core_set.hpp>
+#include <node_pipeline/pipeline.hpp>
+#include <tf_publisher/core_dispatch.hpp>
 namespace tf_publisher {
 namespace np = node_pipeline;
 enum class Input { Ego };
@@ -18,9 +18,10 @@ template<class Access> struct Components {
   using Policy = np::InputPolicy<Input, np::RemoveInput, np::RemoveInput>;
   using Selector = np::CoreSelector<Input, CoreId>;
   using CoreSet = tf_publisher::CoreSet;
+  using Stage = np::Stage<CoreSet, typename Buffer::ContextType>;
   static Policy policy(const np::HealthLimits& limits) { return {{limits.upper}, {limits.lower}}; }
   static Selector selector() { return {}; }
   template<class IO, class HeaderInjector>
-  using Node = np::PipelineNode<Buffer, Assembler, Checker, Policy, Selector, CoreSet, HeaderInjector, IO>;
+  using Node = np::PipelineNode<Buffer, Assembler, CoreSet, HeaderInjector, IO>;
 };
 }  // namespace tf_publisher

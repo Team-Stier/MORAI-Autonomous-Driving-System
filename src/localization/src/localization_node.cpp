@@ -16,7 +16,7 @@ struct Callbacks {
 };
 int main(int argc, char** argv) {
   ros::init(argc, argv, "localization_node");
-  ros::NodeHandle nh, params("~");
+  ros::NodeHandle nh, params("~"), stage_params(params, "stage1");
   const std::map<std::string, loc::Input> topics{
     {nh.resolveName("/sensors/gps/fix"), loc::Input::Gps}, {nh.resolveName("/sensors/imu/data"), loc::Input::Imu},
     {nh.resolveName("/vehicle/competition_status"), loc::Input::Competition}, {nh.resolveName("/velodyne_points/leveled"), loc::Input::Lidar}};
@@ -28,9 +28,11 @@ int main(int argc, char** argv) {
   // 로더에서 공통 설정을 읽고 실제 처리 strategy는 모두 Remove로 연결한다.
   np::InputPolicy<loc::Input, np::ClampUpper<loc::Access>, np::ClampLower<loc::Access>> configured_policy({1}, {-1});
   const auto settings = np::loadRosConfig(nh, params, topics, inputs,
-    std::map<std::string, loc::CoreId>{{"full_ekf.hpp", loc::CoreId::FullEkf}}, mapping, configured_policy);
+    std::map<std::string, loc::CoreId>{}, mapping, configured_policy);
   loc::Policy policy({}, {});
   policy.priority.fill(100); // 모든 issue에 Remove를 적용한다. 제거한 입력은 다시 처리하지 않는다.
+  np::loadStageConfig(stage_params, inputs,
+    std::map<std::string, loc::CoreId>{{"full_ekf.hpp", loc::CoreId::FullEkf}}, mapping, policy);
   const auto ekf = loc::loadEkfParameters(params);
   std::array<np::HealthLimits, 3> input_limits;
   input_limits.fill(settings.health);
@@ -42,7 +44,8 @@ int main(int argc, char** argv) {
   }
   loc::IO io{nh.advertise<nav_msgs::Odometry>("/localization/ego", 1)};
   loc::Node node(settings.execution, loc::Buffer(settings.queue_capacity), {},
-    loc::Checker(input_limits, io.readClocks().steady_ns), policy, loc::Selector{mapping},
+    std::vector<loc::Stage>{np::makeStage<loc::CoreSet, loc::Buffer::ContextType, loc::Data>(
+      loc::Checker(input_limits, io.readClocks().steady_ns), policy, loc::Selector{mapping}, loc::processCore)},
     loc::CoreSet{loc::FullEkf(ekf)}, {}, io);
   Callbacks callbacks{node};
   const auto gps = nh.subscribe("/sensors/gps/fix", 1, &Callbacks::gps, &callbacks);

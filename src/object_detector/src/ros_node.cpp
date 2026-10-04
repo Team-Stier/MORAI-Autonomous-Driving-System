@@ -32,22 +32,29 @@ int main(int argc, char** argv) {
   const std::map<std::string, pkg::Input> topics{{nh.resolveName("/velodyne_points/leveled"), pkg::Input::Cloud}};
   const std::map<std::string, pkg::Input> inputs{{"cloud", pkg::Input::Cloud}};
   const auto settings = np::loadRosConfig(nh, params, topics, inputs,
-    std::map<std::string, pkg::FirstCoreId>{}, selector.core1, policy);
-  ros::NodeHandle core1_params(params, "core1"), core2_params(params, "core2");
-  auto mapping_policy = policy;
-  // TODO: 각 단계의 Core 파일 이름→ID를 등록한다.
-  np::loadRosConfig(nh, core1_params, topics, inputs,
-    std::map<std::string, pkg::FirstCoreId>{}, selector.core1, mapping_policy);
-  np::loadRosConfig(nh, core2_params, topics, inputs,
-    std::map<std::string, pkg::SecondCoreId>{}, selector.core2, mapping_policy);
+    std::map<std::string, pkg::FirstCoreId>{}, selector.stage1, policy);
+  ros::NodeHandle stage1_params(params, "stage1"), stage2_params(params, "stage2");
+  auto stage2_policy = Components::Stage2Policy{{settings.health.upper}, {settings.health.lower}};
+  np::loadStageConfig(stage1_params, inputs,
+    std::map<std::string, pkg::FirstCoreId>{}, selector.stage1, policy);
+  np::loadStageConfig(stage2_params, std::map<std::string, pkg::Stage2Input>{{"objects", pkg::Stage2Input::Objects}},
+    std::map<std::string, pkg::SecondCoreId>{}, selector.stage2, stage2_policy);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
   limits[0].frame = "base_link";
   limits[0].stale_ns = np::readDurationNs(params, "inputs/cloud/stale_after_sec", 0.3);
   limits[0].receive_timeout_ns = np::readDurationNs(params, "inputs/cloud/receive_timeout_sec", 0.3);
   IO io{nh.advertise<interfaces::Objects>("/objects", 1)};
+  const auto stage2_limits = limits;
+  using Context = Components::Buffer::ContextType;
+  const auto started = io.readClocks().steady_ns;
+  std::vector<np::Stage<pkg::CoreSet, Context>> stages{
+    np::makeStage<pkg::CoreSet, Context, pkg::Data>(Components::Checker(limits, started), policy,
+      selector.stage1, pkg::processStage1),
+    np::makeStage<pkg::CoreSet, Context, pkg::Stage2Data>(Components::Stage2Checker(stage2_limits, started), stage2_policy,
+      selector.stage2, pkg::processStage2)};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    std::move(stages), {}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_cloud = nh.subscribe("/velodyne_points/leveled", 1, &RosCallbacks::onCloud, &callbacks);
   const auto section = nh.subscribe("/section_annotation", 1, &RosCallbacks::onSection, &callbacks);

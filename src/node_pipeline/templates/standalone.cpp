@@ -10,10 +10,11 @@ using Components = ex::Components<ex::DemoMessage, ex::DemoAccess>;
 // 발행 기록과 시계는 IO 복사본 사이에 공유한다.
 struct State { np::Clocks clocks{1000000000, 1000000000}; std::vector<ex::DemoMessage> published; };
 struct IO {
+  using MessageType = ex::DemoMessage;
   std::shared_ptr<State> state;
   np::Clocks readClocks() const { return state->clocks; }
   void publish(const ex::DemoMessage& message) { state->published.push_back(message); }
-  void reportHealth(const np::Health<ex::Input, 2>&, std::size_t) const {}
+  void reportHealth(const np::StageHealth&, std::size_t) const {}
   void report(const np::ProcessReport&) const noexcept {}
 };
 int main() {
@@ -23,8 +24,8 @@ int main() {
   np::HealthLimits limits;
   Components::Node<IO, ex::DemoHeaderInjector> node(
     {np::ExecutionMode::OnInput, ex::Input::Primary, 10}, Components::Buffer(8), {},
-    Components::Checker(limits, state->clocks.steady_ns), Components::policy(limits),
-    Components::selector(), {}, {}, io);
+    {Components::stage(Components::Checker(limits, state->clocks.steady_ns),
+      Components::policy(limits), Components::selector())}, {}, {}, io);
   // 정상 보조 입력을 준비하고 기준 입력의 범위 초과를 보정한다.
   ex::DemoMessage auxiliary{0.5, state->clocks.ros_ns, "map"};
   node.onInput(ex::Auxiliary{}, auxiliary);

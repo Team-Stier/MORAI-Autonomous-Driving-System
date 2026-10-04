@@ -6,8 +6,8 @@ frame: map
 stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
-# UNKNOWN과 섹션 1~16에서 글로벌 경로와 로컬 경로 Core를 순차 실행한다.
-core1:
+# UNKNOWN과 섹션 1~16에서 글로벌 경로·예측 패스스루·로컬 경로 Core를 순차 실행한다.
+stage1:
   section_core_map:
     "0": global_path.hpp
     "1": global_path.hpp
@@ -27,7 +27,27 @@ core1:
     "15": global_path.hpp
     "16": global_path.hpp
   health_core_map: []
-core2:
+stage2:
+  section_core_map:
+    "0": prediction_core.hpp
+    "1": prediction_core.hpp
+    "2": prediction_core.hpp
+    "3": prediction_core.hpp
+    "4": prediction_core.hpp
+    "5": prediction_core.hpp
+    "6": prediction_core.hpp
+    "7": prediction_core.hpp
+    "8": prediction_core.hpp
+    "9": prediction_core.hpp
+    "10": prediction_core.hpp
+    "11": prediction_core.hpp
+    "12": prediction_core.hpp
+    "13": prediction_core.hpp
+    "14": prediction_core.hpp
+    "15": prediction_core.hpp
+    "16": prediction_core.hpp
+  health_core_map: []
+stage3:
   section_core_map:
     "0": local_path.hpp
     "1": local_path.hpp

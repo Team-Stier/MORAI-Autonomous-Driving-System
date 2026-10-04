@@ -33,6 +33,10 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/velodyne_points"), pkg::Input::Cloud}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}, {nh.resolveName("/tf_static"), pkg::Input::TfStatic}},
     std::map<std::string, pkg::Input>{{"cloud", pkg::Input::Cloud}, {"competition", pkg::Input::Competition}, {"tf_static", pkg::Input::TfStatic}},
+    std::map<std::string, pkg::CoreId>{}, selector, policy);
+  ros::NodeHandle stage1_params(params, "stage1");
+  np::loadStageConfig(stage1_params,
+    std::map<std::string, pkg::Input>{{"cloud", pkg::Input::Cloud}, {"competition", pkg::Input::Competition}, {"tf_static", pkg::Input::TfStatic}},
     std::map<std::string, pkg::CoreId>{{"pass_through.hpp", pkg::CoreId::PassThrough}}, selector, policy);
   std::array<np::HealthLimits, 3> limits;
   limits.fill(settings.health);
@@ -50,7 +54,8 @@ int main(int argc, char** argv) {
   limits[2].check_receive_timeout = false;
   IO io{nh.advertise<sensor_msgs::PointCloud2>("/velodyne_points/leveled", 1)};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    {np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
+      Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)},
     pkg::CoreSet{pkg::PassThrough{}}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_cloud = nh.subscribe("/velodyne_points", 1, &RosCallbacks::onCloud, &callbacks);

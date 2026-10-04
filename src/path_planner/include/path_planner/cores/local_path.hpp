@@ -17,7 +17,7 @@ class LocalPath {
         graph_(lanelet::routing::RoutingGraph::build(*parameters_.map, *rules_)) {}
 
   Message process(const nav_msgs::Odometry& ego, const interfaces::SectionAnnotation&,
-                  const lanelet::Optional<lanelet::routing::LaneletPath>& global_path) {
+                  const Route& global_path, const PredictedObjects&) {
     const auto& route = global_path.value();
     const auto& position = ego.pose.pose.position;
     const lanelet::BasicPoint2d ego_xy(position.x, position.y);

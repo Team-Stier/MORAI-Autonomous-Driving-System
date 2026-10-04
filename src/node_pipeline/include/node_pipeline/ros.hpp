@@ -1,6 +1,6 @@
 #pragma once
 // ROS 실행 패키지만 include한다. 공통 계산 헤더는 ROS에 의존하지 않는다.
-#include "components.hpp"
+#include "pipeline.hpp"
 #include <ros/ros.h>
 #include <XmlRpcValue.h>
 #include <chrono>
@@ -36,48 +36,11 @@ template<class Id> struct RosSettings {
   double frequency_hz = 50;
   HealthLimits health;
 };
-// config 해석과 검증을 공통화한다. 노드는 이름→실제 ID 표만 제공한다.
+// Per-stage input names, Core mappings and policy priorities are independent.
 template<class Id, class CoreId, class Policy>
-RosSettings<Id> loadRosConfig(ros::NodeHandle& node, ros::NodeHandle& params,
-                            const std::map<std::string, Id>& topics,
-                            const std::map<std::string, Id>& inputs,
-                            const std::map<std::string, CoreId>& cores,
-                            CoreSelector<Id, CoreId>& selector, Policy& policy) {
-  RosSettings<Id> result;
-  std::string mode;
-  params.param<std::string>("execution_mode", mode, "periodic");
-  if (mode != "periodic" && mode != "on_input") throw std::invalid_argument("invalid execution_mode");
-  result.execution.mode = mode == "periodic" ? ExecutionMode::Periodic : ExecutionMode::OnInput;
-  // timer 모드에서는 trigger_input을 읽거나 검사하지 않는다.
-  if (mode == "on_input") {
-    if (topics.empty()) throw std::invalid_argument("no registered input topics");
-    std::string trigger;
-    // 기본 trigger는 기본 input ID에 등록된 토픽이다. 이름 정렬 순서로 선택하지 않는다.
-    const auto default_topic = std::find_if(topics.begin(), topics.end(), [&](const auto& entry) {
-      return entry.second == result.execution.trigger_input;
-    });
-    if (default_topic == topics.end()) throw std::invalid_argument("default trigger input not registered");
-    params.param<std::string>("trigger_input", trigger, default_topic->first);
-    if (trigger.empty() || trigger.front() != '/') throw std::invalid_argument("trigger_input must be an absolute topic name");
-    result.execution.trigger_input = named(topics, node.resolveName(trigger));
-  }
-  params.param("require_new_snapshot", result.execution.require_new_snapshot, false);
-  // 정수 설정은 음수 상태에서 검사한 후 unsigned로 변환한다.
-  int capacity, checks;
-  params.param("queue_capacity", capacity, 8);
-  params.param("max_health_checks", checks, 10);
-  if (capacity <= 0 || checks <= 0) throw std::invalid_argument("invalid count setting");
-  result.queue_capacity = static_cast<std::size_t>(capacity);
-  result.execution.max_health_checks = static_cast<std::size_t>(checks);
-  params.param("lower", result.health.lower, -1.0);
-  params.param("upper", result.health.upper, 1.0);
-  params.param<std::string>("frame", result.health.frame, "map");
-  result.health.stale_ns = readDurationNs(params, "stale_after_sec", 0.3);
-  result.health.receive_timeout_ns = readDurationNs(params, "receive_timeout_sec", 0.3);
-  result.health.max_skew_ns = readDurationNs(params, "max_sensor_skew_sec", 0.1);
-  result.health.validate();
-  // policy의 기본 strategy 한도도 config 값으로 구성한다.
-  policy = Policy{{result.health.upper}, {result.health.lower}};
+void loadStageConfig(ros::NodeHandle& params, const std::map<std::string, Id>& inputs,
+                     const std::map<std::string, CoreId>& cores,
+                     CoreSelector<Id, CoreId>& selector, Policy& policy) {
   for (std::size_t i = 0; i < issueNames().size(); ++i)
     params.param("input_policy/priority/" + issueNames()[i], policy.priority[i], policy.priority[i]);
   // section→core 표를 검증하며 읽는다.
@@ -122,6 +85,50 @@ RosSettings<Id> loadRosConfig(ros::NodeHandle& node, ros::NodeHandle& params,
       selector.health_core_map.push_back(std::move(rule));
     }
   }
+}
+// config 해석과 검증을 공통화한다. 노드는 이름→실제 ID 표만 제공한다.
+template<class Id, class CoreId, class Policy>
+RosSettings<Id> loadRosConfig(ros::NodeHandle& node, ros::NodeHandle& params,
+                            const std::map<std::string, Id>& topics,
+                            const std::map<std::string, Id>& inputs,
+                            const std::map<std::string, CoreId>& cores,
+                            CoreSelector<Id, CoreId>& selector, Policy& policy) {
+  RosSettings<Id> result;
+  std::string mode;
+  params.param<std::string>("execution_mode", mode, "periodic");
+  if (mode != "periodic" && mode != "on_input") throw std::invalid_argument("invalid execution_mode");
+  result.execution.mode = mode == "periodic" ? ExecutionMode::Periodic : ExecutionMode::OnInput;
+  // timer 모드에서는 trigger_input을 읽거나 검사하지 않는다.
+  if (mode == "on_input") {
+    if (topics.empty()) throw std::invalid_argument("no registered input topics");
+    std::string trigger;
+    // 기본 trigger는 기본 input ID에 등록된 토픽이다. 이름 정렬 순서로 선택하지 않는다.
+    const auto default_topic = std::find_if(topics.begin(), topics.end(), [&](const auto& entry) {
+      return entry.second == result.execution.trigger_input;
+    });
+    if (default_topic == topics.end()) throw std::invalid_argument("default trigger input not registered");
+    params.param<std::string>("trigger_input", trigger, default_topic->first);
+    if (trigger.empty() || trigger.front() != '/') throw std::invalid_argument("trigger_input must be an absolute topic name");
+    result.execution.trigger_input = named(topics, node.resolveName(trigger));
+  }
+  params.param("require_new_snapshot", result.execution.require_new_snapshot, false);
+  // 정수 설정은 음수 상태에서 검사한 후 unsigned로 변환한다.
+  int capacity, checks;
+  params.param("queue_capacity", capacity, 8);
+  params.param("max_health_checks", checks, 10);
+  if (capacity <= 0 || checks <= 0) throw std::invalid_argument("invalid count setting");
+  result.queue_capacity = static_cast<std::size_t>(capacity);
+  result.execution.max_health_checks = static_cast<std::size_t>(checks);
+  params.param("lower", result.health.lower, -1.0);
+  params.param("upper", result.health.upper, 1.0);
+  params.param<std::string>("frame", result.health.frame, "map");
+  result.health.stale_ns = readDurationNs(params, "stale_after_sec", 0.3);
+  result.health.receive_timeout_ns = readDurationNs(params, "receive_timeout_sec", 0.3);
+  result.health.max_skew_ns = readDurationNs(params, "max_sensor_skew_sec", 0.1);
+  result.health.validate();
+  // policy의 기본 strategy 한도도 config 값으로 구성한다.
+  policy = Policy{{result.health.upper}, {result.health.lower}};
+  loadStageConfig(params, inputs, cores, selector, policy);
   params.param("frequency_hz", result.frequency_hz, 50.0);
   if (mode == "periodic" && (!std::isfinite(result.frequency_hz) || result.frequency_hz <= 0 ||
       1.0 / result.frequency_hz < 1e-9 || 1.0 / result.frequency_hz > 2147483647.0)) throw std::invalid_argument("invalid frequency_hz");
@@ -129,6 +136,7 @@ RosSettings<Id> loadRosConfig(ros::NodeHandle& node, ros::NodeHandle& params,
 }
 // 시계·진단·완성된 메시지 발행만 제공한다. 메시지 빌드는 하지 않는다.
 template<class Message> struct RosIO {
+  using MessageType = Message;
   ros::Publisher publisher;
   Clocks readClocks() const {
     return {static_cast<std::int64_t>(ros::Time::now().toNSec()),

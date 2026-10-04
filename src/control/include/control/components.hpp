@@ -1,6 +1,7 @@
 #pragma once
 #include <node_pipeline/components.hpp>
-#include <control/core_set.hpp>
+#include <node_pipeline/pipeline.hpp>
+#include <control/core_dispatch.hpp>
 #include <cmath>
 namespace control {
 namespace np = node_pipeline;
@@ -56,9 +57,10 @@ template<class Access> struct Components {
   using Policy = np::InputPolicy<Input, np::RemoveInput, np::RemoveInput>;
   using Selector = np::CoreSelector<Input, CoreId>;
   using CoreSet = control::CoreSet;
+  using Stage = np::Stage<CoreSet, typename Buffer::ContextType>;
   static Policy policy(const np::HealthLimits& limits) { return {{limits.upper}, {limits.lower}}; }
   static Selector selector() { return {}; }
   template<class IO, class HeaderInjector>
-  using Node = np::PipelineNode<Buffer, Assembler, Checker, Policy, Selector, CoreSet, HeaderInjector, IO>;
+  using Node = np::PipelineNode<Buffer, Assembler, CoreSet, HeaderInjector, IO>;
 };
 }

@@ -6,25 +6,26 @@ frame: base_link
 stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
-section_core_map:
-  "0": path_tracking.hpp
-  "1": path_tracking.hpp
-  "2": path_tracking.hpp
-  "3": path_tracking.hpp
-  "4": path_tracking.hpp
-  "5": path_tracking.hpp
-  "6": path_tracking.hpp
-  "7": path_tracking.hpp
-  "8": path_tracking.hpp
-  "9": path_tracking.hpp
-  "10": path_tracking.hpp
-  "11": path_tracking.hpp
-  "12": path_tracking.hpp
-  "13": path_tracking.hpp
-  "14": path_tracking.hpp
-  "15": path_tracking.hpp
-  "16": path_tracking.hpp
-health_core_map: []
+stage1:
+  section_core_map:
+    "0": path_tracking.hpp
+    "1": path_tracking.hpp
+    "2": path_tracking.hpp
+    "3": path_tracking.hpp
+    "4": path_tracking.hpp
+    "5": path_tracking.hpp
+    "6": path_tracking.hpp
+    "7": path_tracking.hpp
+    "8": path_tracking.hpp
+    "9": path_tracking.hpp
+    "10": path_tracking.hpp
+    "11": path_tracking.hpp
+    "12": path_tracking.hpp
+    "13": path_tracking.hpp
+    "14": path_tracking.hpp
+    "15": path_tracking.hpp
+    "16": path_tracking.hpp
+  health_core_map: []
 trigger_input: /local_path/velocity_injected
 inputs:
   path: {stale_after_sec: 0.150000000, receive_timeout_sec: 0.150000000}

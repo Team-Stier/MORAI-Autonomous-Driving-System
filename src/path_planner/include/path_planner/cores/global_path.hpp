@@ -9,14 +9,12 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <tuple>
 #include <utility>
 
 namespace path_planner {
 class GlobalPath {
  public:
-  using Result = std::tuple<const nav_msgs::Odometry&, const interfaces::SectionAnnotation&,
-                            lanelet::Optional<lanelet::routing::LaneletPath>>;
+  using Result = Route;
   explicit GlobalPath(GlobalPathParameters parameters, ros::Publisher visualizer = {})
       : parameters_(std::move(parameters)),
         rules_(lanelet::traffic_rules::TrafficRulesFactory::create(
@@ -63,7 +61,7 @@ class GlobalPath {
       }
       visualizer_.publish(path);
     }
-    return {ego, section, route_};
+    return route_;
   }
 
  private:

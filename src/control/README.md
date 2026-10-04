@@ -31,6 +31,10 @@ Velocity Planner, 최종 속도 제한과 Bridge 전달은 Speed Filter가 수�
 종방향은 PID로 선택할 수 있다. 파라미터를 바꾸면 노드를 재시작한다.
 Core 등록 파일은 `include/control/core_set.hpp`, 계산 라이브러리는
 `include/control/tracking/`과 `src/controllers/`에 둔다.
+CoreSet은 지속 PathTracking 객체를 소유한다. 현재 단일 Stage는 자기 Checker·Policy·Selector를 소유하며 선택 매핑은 `stage1`에서 읽는다.
+`include/control/core_dispatch.hpp`의 선택 case가 필수 입력 0·1·2를 검사하고, 존재할 때만 `before()`와 `process(path, ego, competition)`를 호출한다. Missing이면 NoCore로 종료한다.
+Stage 사이에서 입력을 계승한 슬롯은 stamp·수신 시각을 유지한다. 새 계산값은 시각 메타데이터가 없어도 정상 입력이며, 없는 시각의 검사만 생략한다.
+PathTracking의 새 CtrlCmd는 시각 메타데이터 없이 전달한다. Pipeline은 마지막 결과에 HeaderInjector를 한 번 적용하고 발행하며, CtrlCmd에는 주입할 Header가 없다.
 계산 간격은 경로 stamp 차이이며 첫 호출은 `nominal_dt_sec`를 사용하고,
 적분 간격은 `minimum_control_dt_sec`~`maximum_control_dt_sec`로 제한한다.
 

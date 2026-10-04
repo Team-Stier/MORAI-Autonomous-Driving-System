@@ -82,6 +82,7 @@ struct Access {
   template<class M> static const std::string& frame(const M& m) { return m.header.frame_id; }
 };
 struct IO {
+  using MessageType = morai_msgs::CtrlCmd;
   int* outputs;
   node_pipeline::Clocks readClocks() const { return {1000000000, 1000000000}; }
   void publish(const morai_msgs::CtrlCmd&) { ++*outputs; }
@@ -101,8 +102,10 @@ TEST(PathTrackingPipeline, AllSectionsSelectCoreAndInvalidInputsAreRemoved) {
   limits[0].frame = "base_link"; limits[1].frame = "map"; limits[2].frame = "base_link";
   auto policy = C::policy(limits[0]); policy.priority.fill(100);
   int outputs = 0;
-  C::Node<IO, Header> node(config, C::Buffer(8), {}, C::Checker(limits, 1000000000),
-    policy, selector, control::CoreSet(parameters()), {}, IO{&outputs});
+  C::Node<IO, Header> node(config, C::Buffer(8), {},
+    std::vector<C::Stage>{np::makeStage<control::CoreSet, C::Buffer::ContextType, control::Data>(
+      C::Checker(limits, 1000000000), policy, selector, control::processCore)},
+    control::CoreSet(parameters()), {}, IO{&outputs});
   auto input = path(6);
   EXPECT_EQ(node.onInput(control::InputTag<control::Input::Path>{}, std::make_shared<const interfaces::Path>(input)).status, np::ProcessStatus::NoCore);
   node.onInput(control::InputTag<control::Input::Ego>{}, std::make_shared<const nav_msgs::Odometry>(ego()));

@@ -24,6 +24,11 @@ GPS·IMU·competition_status 세 입력이 모두 Green일 때만 `full_EKF`를 
 Core 내부에서는 입력 유효성 검사, fallback, 자동 reset, 발행 헤더 주입·발행을 하지 않는다.
 공개 자세·3축 각속도는 competition_status의 GT를 사용하고 3축 선속도는 EKF로 추정한다. 누락 시 입력 대체를 하지 않는다.
 
+CoreSet은 지속 FullEkf 객체를 소유한다. 단일 Stage는 자기 Checker·Policy·Selector를 소유하며 선택 매핑은 `stage1`에서 읽는다.
+`core_dispatch.hpp`의 선택 case가 필수 입력 0·1·2를 검사하고, 존재할 때만 `before()`와 Core의 `process()`를 호출한다. Missing이면 NoCore로 종료한다.
+Stage 사이에서 입력을 계승한 슬롯은 원래 stamp·수신 시각을 유지한다. 새 계산값은 시각 메타데이터가 없어도 정상 입력이며, 없는 시각의 검사만 생략한다.
+FullEkf의 새 출력은 시각 메타데이터 없이 Stage 결과로 전달하며 조립 Context의 IMU 추정 시각은 유지한다. 마지막 결과에만 헤더를 한 번 주입하고 발행한다.
+
 Pipeline Validator가 frame·NaN/Inf·GPS fix·좌표 범위를 검사하고 공통 Checker가 stamp·stale·수신 timeout·세 입력 간 시차를 검사한다.
 발견한 오류는 모두 Remove strategy로 해당 입력을 Missing으로 만든다. 제거한 입력은 반복 보정하지 않는다. 세 입력 중 하나라도 Green이 아니면 Core를 호출하지 않는다.
 출력은 검사하지 않는다. HeaderInjector가 반환된 Odometry의 header에 frame_id=map, IMU 추정 시각만 주입한다. pose·twist payload와 child_frame_id는 수정하지 않는다.
@@ -46,7 +51,8 @@ GPS는 EPSG:32652에서 `(302595.0, 4124145.0)`을 차감한다. GPS 장착 높�
 | --- | --- |
 | `src/localization_node.cpp` | ROS 연결, config·Core 구성 |
 | `include/localization/components.hpp` | 메시지 Access·Validator, 세 입력 Green 선택, HeaderInjector |
-| `include/localization/core_set.hpp` | 필수 입력 선언과 Core 인자 연결 |
+| `include/localization/core_set.hpp` | Core ID와 지속 Core 객체 소유 |
+| `include/localization/core_dispatch.hpp` | case별 필수 입력 검사와 Core 인자 연결 |
 | `include/localization/cores/full_ekf.hpp` | Core 하나의 알고리즘·상태 |
 | `include/localization/projection.hpp` | WGS84→map 계산 |
 | `config/localization.yaml` | 시간 한도, section 매핑, 임시 EKF 계수 |
@@ -62,10 +68,10 @@ sequenceDiagram
     participant N as PipelineNode
     participant B as InputBuffer
     participant A as Assembler
-    participant H as Checker
-    participant P as InputPolicy
-    participant S as Selector
-    participant C as CoreSet
+    participant ST as Stage
+    participant D as processCore
+    participant SD as StageData
+    participant T as BeforeCore
     participant K as FullEkf
     participant MB as HeaderInjector
     participant I as RosIO
@@ -79,15 +85,16 @@ sequenceDiagram
     loop 50 Hz timer
         CB->>N: onPeriodic()
         N->>A: assemble(buffer, trigger)
-        A-->>N: snapshot
+        A-->>N: assembled
+        N->>SD: update(assembled.data)
         N->>I: readClocks()
         I-->>N: health_clocks
         loop checks가 max_health_checks 미만
-            N->>H: healthCheck(data, context, health_clocks)
-            H-->>N: health - GPS·IMU·competition_status만 검사
+            N->>ST: healthCheck(data, context, health_clocks)
+            ST-->>N: health
             N->>I: reportHealth(health, checks)
-            N->>P: apply(data, health)
-            P-->>N: modified
+            N->>ST: apply(data, health)
+            ST-->>N: modified
             opt modified=false
                 Note over N: settled=true, break
             end
@@ -96,26 +103,36 @@ sequenceDiagram
             N->>N: finish(Rejected, checks, health check limit)
             N->>I: report(report)
         else settled=true
-            N->>S: select(health.section, health)
-            S-->>N: selection - 세 입력 모두 Green일 때 full_EKF
+            N->>ST: select(health.section, health)
+            ST-->>N: selection
             alt selection.selected=false
-                N->>N: finish(NoCore, checks, reason)
+                N->>N: finish(NoCore, checks, no compatible core)
                 N->>I: report(report)
             else selection.selected=true
-                N->>C: requiredInputs(selection.id)
-                C-->>N: required - GPS·IMU·competition_status
-                N->>N: data.hasInputs(required)
-                alt 필수 입력 Missing
+                N->>ST: process(cores, selection.id, data, result, before)
+                ST->>D: processCore(cores, id, data, result, before)
+                D->>SD: hasInputs({0, 1, 2})
+                SD-->>D: present
+                alt present=false
+                    D-->>ST: false
+                    ST-->>N: false
                     N->>N: finish(NoCore, checks, required core input missing)
                     N->>I: report(report)
-                else 필수 입력 존재
-                    N->>A: markAttempted(snapshot.token)
-                    N->>C: process(selection.id, data)
-                    C->>K: process(gps_msg, imu_msg, competition_status_msg)
-                    K-->>C: message
-                    C-->>N: message
+                else present=true
+                    D->>T: before()
+                    opt attempted=false
+                        T->>A: markAttempted(snapshot.token)
+                        Note over T: attempted=true
+                    end
+                    D->>K: process(data.message<NavSatFix>(0), data.message<Imu>(1), data.message<CompetitionVehicleStatus>(2))
+                    K-->>D: message
+                    D->>D: wrapResult(message)
+                    D-->>ST: true
+                    ST-->>N: true
+                    N->>N: replaceInputs(snapshot, result)
+                    N->>SD: message<Odometry>(0)
+                    SD-->>N: message
                     N->>MB: injectHeader(message, context)
-                    MB-->>N: void - header만 map·IMU 추정 시각으로 설정
                     N->>I: publish(message)
                     I->>O: publisher.publish(message)
                     N->>N: finish(Published, checks, empty reason)

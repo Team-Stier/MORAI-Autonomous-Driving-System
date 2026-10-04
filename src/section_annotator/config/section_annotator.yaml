@@ -6,25 +6,26 @@ frame: map
 stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
-section_core_map:
-  "0": checkpoint_sections.hpp
-  "1": checkpoint_sections.hpp
-  "2": checkpoint_sections.hpp
-  "3": checkpoint_sections.hpp
-  "4": checkpoint_sections.hpp
-  "5": checkpoint_sections.hpp
-  "6": checkpoint_sections.hpp
-  "7": checkpoint_sections.hpp
-  "8": checkpoint_sections.hpp
-  "9": checkpoint_sections.hpp
-  "10": checkpoint_sections.hpp
-  "11": checkpoint_sections.hpp
-  "12": checkpoint_sections.hpp
-  "13": checkpoint_sections.hpp
-  "14": checkpoint_sections.hpp
-  "15": checkpoint_sections.hpp
-  "16": checkpoint_sections.hpp
-health_core_map: []
+stage1:
+  section_core_map:
+    "0": checkpoint_sections.hpp
+    "1": checkpoint_sections.hpp
+    "2": checkpoint_sections.hpp
+    "3": checkpoint_sections.hpp
+    "4": checkpoint_sections.hpp
+    "5": checkpoint_sections.hpp
+    "6": checkpoint_sections.hpp
+    "7": checkpoint_sections.hpp
+    "8": checkpoint_sections.hpp
+    "9": checkpoint_sections.hpp
+    "10": checkpoint_sections.hpp
+    "11": checkpoint_sections.hpp
+    "12": checkpoint_sections.hpp
+    "13": checkpoint_sections.hpp
+    "14": checkpoint_sections.hpp
+    "15": checkpoint_sections.hpp
+    "16": checkpoint_sections.hpp
+  health_core_map: []
 trigger_input: /localization/ego
 checkpoint_sections:
   radius_m: 10.0

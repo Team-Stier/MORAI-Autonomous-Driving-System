@@ -33,6 +33,10 @@ int main(int argc, char** argv) {
     std::map<std::string, pkg::Input>{{nh.resolveName("/image/camera_7/compressed"), pkg::Input::Image}},
     std::map<std::string, pkg::Input>{{"image", pkg::Input::Image}},
     std::map<std::string, pkg::CoreId>{}, selector, policy);
+  ros::NodeHandle stage1_params(params, "stage1");
+  np::loadStageConfig(stage1_params,
+    std::map<std::string, pkg::Input>{{"image", pkg::Input::Image}},
+    std::map<std::string, pkg::CoreId>{}, selector, policy);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
   limits[0].frame = "camera_7_optical_frame";
@@ -40,7 +44,8 @@ int main(int argc, char** argv) {
   limits[0].receive_timeout_ns = np::readDurationNs(params, "inputs/image/receive_timeout_sec", 0.3);
   IO io{nh.advertise<interfaces::TrafficLight>("/traffic_light", 1)};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    {np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
+      Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)}, {}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_image = nh.subscribe("/image/camera_7/compressed", 1, &RosCallbacks::onImage, &callbacks);
   const auto section = nh.subscribe("/section_annotation", 1, &RosCallbacks::onSection, &callbacks);
