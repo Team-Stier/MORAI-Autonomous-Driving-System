@@ -1,4 +1,5 @@
 #include <object_detector/components.hpp>
+#include <object_detector/config.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = object_detector;
 namespace np = node_pipeline;
@@ -35,11 +36,11 @@ int main(int argc, char** argv) {
     std::map<std::string, pkg::FirstCoreId>{}, selector.core1, policy);
   ros::NodeHandle core1_params(params, "core1"), core2_params(params, "core2");
   auto mapping_policy = policy;
-  // TODO: 각 단계의 Core 파일 이름→ID를 등록한다.
   np::loadRosConfig(nh, core1_params, topics, inputs,
-    std::map<std::string, pkg::FirstCoreId>{}, selector.core1, mapping_policy);
+    std::map<std::string, pkg::FirstCoreId>{{"dbscan.hpp", pkg::FirstCoreId::Dbscan}}, selector.core1, mapping_policy);
   np::loadRosConfig(nh, core2_params, topics, inputs,
-    std::map<std::string, pkg::SecondCoreId>{}, selector.core2, mapping_policy);
+    std::map<std::string, pkg::SecondCoreId>{{"objects_pass_through.hpp", pkg::SecondCoreId::ObjectsPassThrough}}, selector.core2, mapping_policy);
+  const auto dbscan_parameters = pkg::loadDbscanParameters(params);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
   limits[0].frame = "base_link";
@@ -47,7 +48,8 @@ int main(int argc, char** argv) {
   limits[0].receive_timeout_ns = np::readDurationNs(params, "inputs/cloud/receive_timeout_sec", 0.3);
   IO io{nh.advertise<interfaces::Objects>("/objects", 1)};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    pkg::CoreSet{pkg::Dbscan(dbscan_parameters), pkg::ObjectsPassThrough{}}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_cloud = nh.subscribe("/velodyne_points/leveled", 1, &RosCallbacks::onCloud, &callbacks);
   const auto section = nh.subscribe("/section_annotation", 1, &RosCallbacks::onSection, &callbacks);
