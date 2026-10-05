@@ -115,6 +115,19 @@ namespace의 `ros::NodeHandle`을 받아 모든 필수 설정을 읽고 검증�
 시간 예측 구간의 공간 길이와 다를 수 있다. 경로 길이·입력 주기·지연과 무관하게
 같은 추종 성능을 보장하지 않는다.
 
+### 주행 테스트 항목: 조향 지연 이력과 최종 출력
+
+[AutowareLateral::calculate](../../src/controllers/morai_mpc/autoware_lateral.cpp)는
+최적화·선택적 필터를 거친 `u_filtered`를 내부 조향 지연 버퍼에 저장한다.
+[MoraiMpc::process](../../include/control/cores/morai_mpc.hpp)는 그 반환값에 경로 stamp
+간격 기준의 조향 변화율 제한을 적용한 `angle`을 출력하며, 조향 응답 예측기에는
+`angle * gain`을 저장한다.
+
+실제 계산 간격이 횡방향 모델 주기 `1/30 s`보다 짧고 최종 변화율 제한이 걸리면,
+Autoware 내부 지연 버퍼의 조향과 최종 출력 조향이 달라질 수 있다.
+현재 계산 방식은 유지한다. 주행 테스트에서 20·30·50 Hz 및 주기 변동 조건의
+stamp 간격, `u_filtered`, 최종 `angle`, 횡오차와 조향 진동을 비교해 영향을 확인한다.
+
 ## 짧은 경로 처리와 방향각 수정
 
 거리 재샘플링 전에 같은 XY 좌표가 연속되는 점은 중복 제거한다. 경로가 재샘플링
