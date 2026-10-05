@@ -64,9 +64,6 @@ inline Parameters loadParameters(const ros::NodeHandle& node) {
   p.longitudinal.coordinate_initial_step = config_detail::required<double>(node, "longitudinal/coordinate_initial_step");
   p.longitudinal.coordinate_minimum_step = config_detail::required<double>(node, "longitudinal/coordinate_minimum_step");
   p.longitudinal.command_step_decay = config_detail::required<double>(node, "longitudinal/command_step_decay");
-  p.longitudinal.maximum_speed_mps = config_detail::required<double>(node, "longitudinal/maximum_speed_mps");
-  p.longitudinal.hard_brake_activation_speed_mps = config_detail::required<double>(node, "longitudinal/hard_brake_activation_speed_mps");
-  p.longitudinal.minimum_hard_brake_command = config_detail::required<double>(node, "longitudinal/minimum_hard_brake_command");
   p.longitudinal.maximum_accel_command = config_detail::required<double>(node, "longitudinal/maximum_accel_command");
   p.longitudinal.maximum_brake_command = config_detail::required<double>(node, "longitudinal/maximum_brake_command");
   p.longitudinal.command_rate_limit_per_sec = config_detail::required<double>(node, "longitudinal/command_rate_limit_per_sec");

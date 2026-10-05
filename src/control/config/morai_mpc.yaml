@@ -53,9 +53,6 @@ morai_mpc:
     coordinate_initial_step: 0.20
     coordinate_minimum_step: 0.01
     command_step_decay: 0.5
-    maximum_speed_mps: 16.666666666666668
-    hard_brake_activation_speed_mps: 16.666666666666668
-    minimum_hard_brake_command: 0.25
     maximum_accel_command: 0.70
     maximum_brake_command: 0.60
     command_rate_limit_per_sec: 2.0

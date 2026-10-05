@@ -36,9 +36,6 @@ LongitudinalMpc::LongitudinalMpc(const LongitudinalMpcConfig& config)
       !finitePositive(config_.coordinate_minimum_step) ||
       !finitePositive(config_.command_step_decay) ||
       config_.command_step_decay >= 1.0 ||
-      !finitePositive(config_.maximum_speed_mps) ||
-      !finitePositive(config_.hard_brake_activation_speed_mps) ||
-      config_.hard_brake_activation_speed_mps > config_.maximum_speed_mps ||
       !finitePositive(config_.maximum_accel_command) ||
       config_.maximum_accel_command > 1.0 ||
       !finitePositive(config_.maximum_brake_command) ||
@@ -53,9 +50,6 @@ LongitudinalMpc::LongitudinalMpc(const LongitudinalMpcConfig& config)
       !finitePositive(config_.maximum_deceleration_mps2) ||
       !finitePositive(config_.maximum_jerk_mps3) ||
       !finitePositive(config_.acceleration_estimate_filter_time_constant_sec) ||
-      !std::isfinite(config_.minimum_hard_brake_command) ||
-      config_.minimum_hard_brake_command < 0.0 ||
-      config_.minimum_hard_brake_command > config_.maximum_brake_command ||
       !finitePositive(config_.speed_weight) ||
       !std::isfinite(config_.acceleration_weight) ||
       config_.acceleration_weight < 0.0 ||
@@ -124,10 +118,6 @@ LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
                    config_.command_weight * command * command +
                    config_.command_rate_weight * command_change *
                        command_change;
-    if (speed > config_.maximum_speed_mps) {
-      const double violation = speed - config_.maximum_speed_mps;
-      result.cost += 1.0e8 * violation * violation + 1.0e6;
-    }
     acceleration = next_acceleration;
     previous_command = command;
   }
@@ -267,7 +257,6 @@ LongitudinalMpcResult LongitudinalMpc::update(double target_speed_mps,
   // Competition longitudinal velocity is signed. MPC controls speed magnitude;
   // reverse/gear authority remains with MORAI and the gear interlock.
   measured_speed_mps = std::abs(measured_speed_mps);
-  target_speed_mps = std::min(target_speed_mps, config_.maximum_speed_mps);
   if (has_previous_speed_) {
     const double raw_acceleration =
         (measured_speed_mps - previous_speed_mps_) / dt_sec;
@@ -296,32 +285,18 @@ LongitudinalMpcResult LongitudinalMpc::update(double target_speed_mps,
   }
 
   double command = commands.front();
-  const double measured_guard_speed = measured_speed_mps;
-  const double predicted_guard_speed =
-      measured_speed_mps + std::max(0.0, estimated_acceleration_mps2_) * 0.35;
-  if (measured_guard_speed >= config_.hard_brake_activation_speed_mps ||
-      predicted_guard_speed >= config_.maximum_speed_mps ||
-      result.predicted_maximum_speed_mps > config_.maximum_speed_mps) {
-    command = std::min(command, -config_.minimum_hard_brake_command);
-    result.hard_speed_guard_active = true;
-  }
   const double actual_maximum_step = config_.command_rate_limit_per_sec * dt_sec;
-  if (!result.hard_speed_guard_active) {
-    command = clamp(command, previous_signed_command_ - actual_maximum_step,
-                    previous_signed_command_ + actual_maximum_step);
-  }
+  command = clamp(command, previous_signed_command_ - actual_maximum_step,
+                  previous_signed_command_ + actual_maximum_step);
   command = clamp(command, -config_.maximum_brake_command,
                   config_.maximum_accel_command);
   previous_signed_command_ = command;
   result.signed_command = command;
   result.accel = std::max(0.0, command);
   result.brake = std::max(0.0, -command);
-  result.state = result.hard_speed_guard_active
-                     ? LongitudinalState::kHardSpeedBrake
-                     : (command > 1.0e-6
-                            ? LongitudinalState::kAccel
-                            : (command < -1.0e-6 ? LongitudinalState::kBrake
-                                                : LongitudinalState::kCoast));
+  result.state = command > 1.0e-6 ? LongitudinalState::kAccel
+                 : (command < -1.0e-6 ? LongitudinalState::kBrake
+                                     : LongitudinalState::kCoast);
   warm_start_.assign(commands.size(), commands.back());
   for (std::size_t index = 0; index + 1 < commands.size(); ++index) {
     warm_start_[index] = commands[index + 1];

@@ -49,8 +49,7 @@ void validateParameters(const Parameters& parameters) {
       p.vehicle_model_wheelbase + p.morai_front_overhang_m > 8.0 ||
       s.delay_sec > 0.5 || s.time_constant_sec < 0.01 || s.time_constant_sec > 1.0 ||
       s.gain < 0.5 || s.gain > 1.5 || parameters.longitudinal.horizon_steps < 2 ||
-      parameters.longitudinal.solver != "osqp" ||
-      parameters.longitudinal.maximum_speed_mps > 60.0 / 3.6) {
+      parameters.longitudinal.solver != "osqp") {
     throw std::invalid_argument("morai_mpc parameter outside supported range");
   }
   autoware::moraiPredictionSteps(p.mpc_prediction_horizon, p.morai_max_prediction_horizon,

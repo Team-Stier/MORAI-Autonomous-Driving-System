@@ -20,9 +20,6 @@ struct LongitudinalMpcConfig {
   double coordinate_initial_step{0.20};
   double coordinate_minimum_step{0.01};
   double command_step_decay{0.5};
-  double maximum_speed_mps{60.0 / 3.6};
-  double hard_brake_activation_speed_mps{60.0 / 3.6};
-  double minimum_hard_brake_command{0.25};
   double maximum_accel_command{0.70};
   double maximum_brake_command{0.60};
   double command_rate_limit_per_sec{2.0};
@@ -46,7 +43,6 @@ struct LongitudinalMpcConfig {
 
 struct LongitudinalMpcResult {
   bool valid{false};
-  bool hard_speed_guard_active{false};
   double accel{0.0};
   double brake{0.0};
   double signed_command{0.0};

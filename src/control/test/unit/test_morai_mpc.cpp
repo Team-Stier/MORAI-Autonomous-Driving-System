@@ -93,12 +93,74 @@ TEST(MoraiMpc, RetainsCommandAndOptimizerStateAcrossCalls) {
   EXPECT_TRUE(std::isfinite(second.steering));
 }
 
-TEST(MoraiMpc, KeepsOriginalLongitudinalHardSpeedGuard) {
-  control::MoraiMpc core;
-  const auto output = core.process(path(60.0 / 3.6), ego(17.0), status(17.0));
-  EXPECT_DOUBLE_EQ(output.accel, 0.0);
-  EXPECT_GE(output.brake, 0.25);
-  EXPECT_LE(output.brake, 0.60);
+TEST(MoraiMpc, TracksRequestedSpeedAcrossFormerSpeedLimit) {
+  for (double speed : {60.0 / 3.6, 20.0, 25.0}) {
+    SCOPED_TRACE(speed);
+    control::MoraiMpc holding, accelerating;
+    const auto hold = holding.process(path(speed), ego(speed), status(speed));
+    EXPECT_NEAR(hold.accel, 0.0, 1e-8);
+    EXPECT_NEAR(hold.brake, 0.0, 1e-8);
+    auto input = path(speed + 2.0);
+    morai_msgs::CtrlCmd accelerate;
+    double previous_command = 0.0;
+    // Preserve the original SQP warm start: its first command need not accelerate.
+    for (int step = 0; step < 5; ++step) {
+      input.header.stamp = ros::Time(1, step * 33333333);
+      accelerate = accelerating.process(input, ego(speed), status(speed));
+      const double command = accelerate.accel - accelerate.brake;
+      EXPECT_LE(std::abs(command - previous_command), 2.0 / 30.0 + 1e-8);
+      previous_command = command;
+    }
+    EXPECT_GT(accelerate.accel, 0.0);
+    EXPECT_LE(accelerate.accel, 0.70);
+    EXPECT_DOUBLE_EQ(accelerate.brake, 0.0);
+  }
+}
+
+TEST(MoraiLongitudinalMpc, TrackingCostDoesNotDependOnAbsoluteSpeedWithoutDrag) {
+  // Equal speed errors and acceleration histories have equal cost in the
+  // default drag-free model. A fixed speed cap or overspeed cost breaks this.
+  control::morai_mpc::LongitudinalMpc low({}), high({});
+  for (int step = 0; step < 12; ++step) {
+    SCOPED_TRACE(step);
+    const double measured = 5.0 + 0.03 * step;
+    const auto a = low.update(8.0, measured, 1.0 / 30.0);
+    const auto b = high.update(23.0, measured + 15.0, 1.0 / 30.0);
+    ASSERT_TRUE(a.valid) << a.error;
+    ASSERT_TRUE(b.valid) << b.error;
+    EXPECT_NEAR(b.cost, a.cost, 1e-5 * (1.0 + std::abs(a.cost)));
+    EXPECT_NEAR(b.signed_command, a.signed_command, 1e-6);
+    EXPECT_NEAR(b.estimated_acceleration_mps2, a.estimated_acceleration_mps2, 1e-10);
+  }
+}
+
+TEST(MoraiLongitudinalMpc, BrakesForLowerTargetWithinPedalAndRateBounds) {
+  control::morai_mpc::LongitudinalMpc controller({});
+  double previous_command = 0.0;
+  for (int step = 0; step < 24; ++step) {
+    SCOPED_TRACE(step);
+    const double dt = step % 2 == 0 ? 0.02 : 0.10;
+    const auto result = controller.update(step < 12 ? 25.0 : 0.0, 20.0, dt);
+    ASSERT_TRUE(result.valid) << result.error;
+    EXPECT_GE(result.accel, 0.0);
+    EXPECT_LE(result.accel, 0.70);
+    EXPECT_GE(result.brake, 0.0);
+    EXPECT_LE(result.brake, 0.60);
+    EXPECT_FALSE(result.accel > 0.0 && result.brake > 0.0);
+    EXPECT_LE(std::abs(result.signed_command - previous_command), 2.0 * dt + 1e-8);
+    previous_command = result.signed_command;
+    if (step == 11) EXPECT_GT(result.accel, 0.0);
+    if (step == 23) EXPECT_GT(result.brake, 0.0);
+  }
+}
+
+TEST(MoraiLongitudinalMpc, ZeroTargetAtStandstillHasNoPedalDemand) {
+  control::morai_mpc::LongitudinalMpc controller({});
+  const auto result = controller.update(0.0, 0.0, 1.0 / 30.0);
+  ASSERT_TRUE(result.valid) << result.error;
+  EXPECT_DOUBLE_EQ(result.accel, 0.0);
+  EXPECT_DOUBLE_EQ(result.brake, 0.0);
+  EXPECT_NEAR(result.cost, 0.0, 1e-10);
 }
 
 TEST(MoraiMpc, HandlesForwardOnly45MetrePathAtCruiseAndStandstill) {
