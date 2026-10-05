@@ -10,8 +10,10 @@
 - `checkpoint_sections/radius_m`은 모든 체크포인트의 map XY 판정 반지름(m)이며 기본값은 10.0이다. 경계를 포함한다.
 - Core는 반지름 내부로 판정되면 저장 섹션을 갱신한다. 여러 반지름에 속하면 가장 가까운 체크포인트, 거리 동률이면 작은 인덱스를 선택한다.
 - 어느 반지름에도 속하지 않으면 Core의 저장 섹션을 유지한다. 매 `process(ego)` 호출마다 저장 섹션을 반환하고 Pipeline이 발행한다. 첫 반지름 진입 전에는 UNKNOWN을 반환한다.
-- `CoreSet`은 ego를 필수 입력으로 선언하고 지속 Core의 `process(ego)`에 연결한다.
-- 입력 검사·Missing 처리·선택·헤더 주입은 Core 밖에서 수행한다. 출력은 검사하지 않는다.
+- `CoreSet`은 지속 Core 객체를 소유한다. `core_dispatch.hpp`의 case가 ego(0)를 필수 입력으로 선언·확인한 뒤 `process(ego)`를 호출한다.
+- Pipeline은 단계 목록을 순서대로 실행하며, 단계마다 독립된 HealthChecker·Policy·Selector가 입력 검사·보정·선택을 수행한다. `config/section_annotator.yaml`의 `stage1`에서 선택 매핑과 정책 우선순위를 읽는다.
+- 원본에서 전달·보정한 변수는 입력의 stamp·receipt metadata를 계승한다. 새 SectionAnnotation 반환값은 시각 metadata 없이 전달하며, 시각 정보가 없으면 시간 검사를 생략한다.
+- 필수 payload가 Missing이면 Core를 호출하지 않는다. 마지막 결과에만 HeaderInjector가 ego stamp와 `map`을 주입하고 한 번 발행한다. 출력은 검사하지 않는다.
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
 

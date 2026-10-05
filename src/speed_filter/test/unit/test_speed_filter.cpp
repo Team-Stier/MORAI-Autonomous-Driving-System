@@ -98,9 +98,14 @@ TEST(SpeedFilter, QueueOneConnectsLatestStatusToBothRegisteredCores) {
   Components::Buffer buffer(1);
   Components::Assembler assembler;
   sf::CoreSet cores{sf::SpeedLimit60{}, sf::NoSpeedLimit{}};
-  sf::Data missing;
+  np::StageData missing;
+  missing.update(sf::Data{});
+  np::CoreResult result;
+  int attempts = 0;
+  const auto before = [&] { ++attempts; };
   for (const auto id : {sf::CoreId::SpeedLimit60, sf::CoreId::NoSpeedLimit})
-    EXPECT_FALSE(missing.hasInputs(cores.requiredInputs(id)));
+    EXPECT_FALSE(sf::processCore(cores, id, missing, result, before));
+  EXPECT_EQ(0, attempts);
 
   interfaces::CompetitionVehicleStatus status;
   status.header.stamp.fromSec(10);
@@ -118,13 +123,20 @@ TEST(SpeedFilter, QueueOneConnectsLatestStatusToBothRegisteredCores) {
   EXPECT_EQ(0, snapshot.data.get<0>().sample.stamp_ns);
   EXPECT_EQ(latest.id, snapshot.data.get<1>().sample.id);
   EXPECT_EQ(1, snapshot.context.evictions[1]);
-  for (const auto id : {sf::CoreId::SpeedLimit60, sf::CoreId::NoSpeedLimit})
-    ASSERT_TRUE(snapshot.data.hasInputs(cores.requiredInputs(id)));
-  expectCommand(command, cores.process(sf::CoreId::NoSpeedLimit, snapshot.data));
+  np::StageData data;
+  data.update(snapshot.data);
+  ASSERT_TRUE(sf::processCore(cores, sf::CoreId::NoSpeedLimit, data, result, before));
+  const auto unlimited = result(data);
+  expectCommand(command, unlimited.message<morai_msgs::CtrlCmd>(0));
+  EXPECT_EQ(input.id, unlimited.inputs[0].id);
+  EXPECT_EQ(input.receipt_steady_ns, unlimited.inputs[0].receipt_steady_ns);
   auto expected = command;
   expected.accel = 0;
   expected.brake = 1;
-  expectCommand(expected, cores.process(sf::CoreId::SpeedLimit60, snapshot.data));
+  ASSERT_TRUE(sf::processCore(cores, sf::CoreId::SpeedLimit60, data, result, before));
+  const auto limited = result(data);
+  expectCommand(expected, limited.message<morai_msgs::CtrlCmd>(0));
+  EXPECT_EQ(2, attempts);
 }
 
 int main(int argc, char** argv) {

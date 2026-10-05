@@ -1,6 +1,6 @@
 #pragma once
 // 메시지 타입을 보존하는 큐·조립·검사·정책·선택 공통 구현이다.
-#include "pipeline.hpp"
+#include "types.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -37,6 +37,7 @@ template<class Message> struct Sample {
   std::uint64_t id = 0;
   std::int64_t stamp_ns = 0;
   std::int64_t receipt_steady_ns = 0;
+  bool has_stamp = true, has_receipt = true;
 };
 // 누락은 nullptr로 표현한다. core 호출 연결은 메시지만 꺼내 전달한다.
 template<class Message> struct Slot {
@@ -193,22 +194,24 @@ template<class Id, std::size_t N, class Validator> class HealthChecker {
   }
   template<class DataType, class ContextType>
   HealthType healthCheck(const DataType& data, const ContextType& context, const Clocks& clocks) const {
-    HealthType health; health.evictions = context.evictions;
-    std::array<bool, N> present{}; std::array<std::int64_t, N> stamps{};
+    HealthType health;
+    std::copy_n(context.evictions.begin(), std::min(N, context.evictions.size()), health.evictions.begin());
+    std::array<bool, N> present{}, stamped{}; std::array<std::int64_t, N> stamps{};
     each(data.inputs, [&](auto tag, const auto& slot) {
       auto& result = health.inputs[tag]; result.input = static_cast<Id>(decltype(tag)::value);
       present[tag] = slot.present(); stamps[tag] = slot.sample.stamp_ns;
+      stamped[tag] = slot.sample.has_stamp;
       if (!slot.present()) result.issues.push_back(Kind::Missing);
       else {
         validator_(*slot.sample.message, input_limits_[tag], result.issues);
-        if (input_limits_[tag].check_stamp && slot.sample.stamp_ns <= 0) result.issues.push_back(Kind::InvalidStamp);
-        if (input_limits_[tag].check_stamp && slot.sample.stamp_ns > clocks.ros_ns) result.issues.push_back(Kind::FutureStamp);
-        if (input_limits_[tag].check_stamp && slot.sample.stamp_ns > 0 && exceeds(clocks.ros_ns, slot.sample.stamp_ns, input_limits_[tag].stale_ns)) result.issues.push_back(Kind::Stale);
+        if (input_limits_[tag].check_stamp && slot.sample.has_stamp && slot.sample.stamp_ns <= 0) result.issues.push_back(Kind::InvalidStamp);
+        if (input_limits_[tag].check_stamp && slot.sample.has_stamp && slot.sample.stamp_ns > clocks.ros_ns) result.issues.push_back(Kind::FutureStamp);
+        if (input_limits_[tag].check_stamp && slot.sample.has_stamp && slot.sample.stamp_ns > 0 && exceeds(clocks.ros_ns, slot.sample.stamp_ns, input_limits_[tag].stale_ns)) result.issues.push_back(Kind::Stale);
       }
-      if (input_limits_[tag].check_receive_timeout && exceeds(clocks.steady_ns, slot.present() ? slot.sample.receipt_steady_ns : started_, input_limits_[tag].receive_timeout_ns)) result.issues.push_back(Kind::ReceiveTimeout);
+      if (input_limits_[tag].check_receive_timeout && slot.sample.has_receipt && exceeds(clocks.steady_ns, slot.present() ? slot.sample.receipt_steady_ns : started_, input_limits_[tag].receive_timeout_ns)) result.issues.push_back(Kind::ReceiveTimeout);
     });
     for (std::size_t i = 0; i < N; ++i) for (std::size_t j = i + 1; j < N; ++j) {
-      if (!input_limits_[i].check_skew || !input_limits_[j].check_skew || !present[i] || !present[j] || std::fabs(static_cast<long double>(stamps[i]) - stamps[j]) <= limits_.max_skew_ns) continue;
+      if (!input_limits_[i].check_skew || !input_limits_[j].check_skew || !present[i] || !present[j] || !stamped[i] || !stamped[j] || std::fabs(static_cast<long double>(stamps[i]) - stamps[j]) <= limits_.max_skew_ns) continue;
       for (auto input : {i, j}) {
         auto& issues = health.inputs[input].issues;
         if (std::find(issues.begin(), issues.end(), Kind::Skew) == issues.end()) issues.push_back(Kind::Skew);

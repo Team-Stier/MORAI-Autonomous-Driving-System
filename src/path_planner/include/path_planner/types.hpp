@@ -1,6 +1,7 @@
 #pragma once
 #include <node_pipeline/components.hpp>
 #include <lanelet2_core/primitives/Primitive.h>
+#include <lanelet2_routing/RoutingGraph.h>
 #include <nav_msgs/Odometry.h>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <interfaces/Objects.h>
@@ -13,6 +14,8 @@ namespace lanelet { class LaneletMap; }
 namespace path_planner {
 using Data = node_pipeline::Data<nav_msgs::Odometry, interfaces::CompetitionVehicleStatus, interfaces::Objects, tf2_msgs::TFMessage, interfaces::SectionAnnotation>;
 using Message = interfaces::Path;
+using Route = lanelet::Optional<lanelet::routing::LaneletPath>;
+using PredictedObjects = std::array<interfaces::Objects, 10>;
 struct Checkpoint {
   double x_m = 0;
   double y_m = 0;

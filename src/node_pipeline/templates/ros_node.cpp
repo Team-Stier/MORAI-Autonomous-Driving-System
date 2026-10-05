@@ -46,11 +46,15 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, ex::Input>{{primary_topic, ex::Input::Primary}, {auxiliary_topic, ex::Input::Auxiliary}},
     std::map<std::string, ex::Input>{{"primary", ex::Input::Primary}, {"auxiliary", ex::Input::Auxiliary}},
-    std::map<std::string, ex::CoreId>{{"primary", ex::CoreId::Primary}, {"auxiliary", ex::CoreId::Auxiliary}}, selector, policy);
+    std::map<std::string, ex::CoreId>{}, selector, policy);
+  ros::NodeHandle stage1_params(params, "stage1");
+  np::loadStageConfig(stage1_params,
+    std::map<std::string, ex::Input>{{"primary", ex::Input::Primary}, {"auxiliary", ex::Input::Auxiliary}},
+    std::map<std::string, ex::CoreId>{{"scalar_core.hpp", ex::CoreId::Primary}, {"auxiliary_core.hpp", ex::CoreId::Auxiliary}}, selector, policy);
   IO io{nh.advertise<Message>("/node_pipeline_template/output", 1)};
   // 실행 노드는 helper 객체를 구성한다. 큐·조립·검사·라우팅을 다시 구현하지 않는다.
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(settings.health, io.readClocks().steady_ns), policy, selector, {}, {}, io);
+    {Components::stage(Components::Checker(settings.health, io.readClocks().steady_ns), policy, selector)}, {}, {}, io);
   RosCallbacks callbacks{node};
   const auto primary = nh.subscribe(primary_topic, 1, &RosCallbacks::onPrimary, &callbacks);
   const auto auxiliary = nh.subscribe(auxiliary_topic, 1, &RosCallbacks::onAuxiliary, &callbacks);

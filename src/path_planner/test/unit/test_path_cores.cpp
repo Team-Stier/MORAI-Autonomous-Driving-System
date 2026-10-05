@@ -1,11 +1,14 @@
 #include <path_planner/config.hpp>
-#include <path_planner/core_set.hpp>
+#include <path_planner/components.hpp>
+#include <path_planner/core_dispatch.hpp>
+#include <path_planner/cores/prediction_pass_through.hpp>
 #include <gtest/gtest.h>
 #include <fstream>
 #include <iterator>
 #include <type_traits>
 
 namespace pp = path_planner;
+namespace np = node_pipeline;
 namespace {
 std::string readFile(const std::string& path) {
   std::ifstream stream(path);
@@ -65,8 +68,44 @@ pp::GlobalPathParameters shortMap() {
 }
 }  // namespace
 
-TEST(PathCores, PassesOriginalMessagesAndExtendsShortRoute) {
-  static_assert(std::is_same<std::tuple_element<2, pp::GlobalPath::Result>::type,
+TEST(PredictionPassThrough, CopiesAllTenSamplesWithoutChangingObservation) {
+  interfaces::Objects objects;
+  objects.header.stamp.fromSec(10.0);
+  objects.header.frame_id = "base_link";
+  interfaces::Object object;
+  object.id = 42;
+  object.label = "vehicle";
+  object.position.x = 3.0;
+  object.bbox_pose.position = object.position;
+  object.bbox_pose.orientation.w = 1.0;
+  object.velocity.x = 2.0;
+  object.velocity_available = true;
+  for (std::uint32_t i = 0; i < 12; ++i) {
+    object.id = 42 + i;
+    objects.objects.push_back(object);
+  }
+  pp::PredictionPassThrough core;
+  auto samples = core.process(objects, lanelet::Optional<lanelet::routing::LaneletPath>{});
+  ASSERT_EQ(samples.size(), 10u);
+  for (const auto& sample : samples) {
+    ASSERT_EQ(sample.objects.size(), 12u);
+    EXPECT_EQ(sample, objects);
+  }
+  samples[0].objects[0].position.x = 100.0;
+  EXPECT_DOUBLE_EQ(objects.objects[0].position.x, 3.0);
+  EXPECT_DOUBLE_EQ(samples[1].objects[0].position.x, 3.0);
+}
+
+TEST(PredictionPassThrough, PreservesEmptyObjectLists) {
+  interfaces::Objects objects;
+  objects.header.frame_id = "base_link";
+  pp::PredictionPassThrough core;
+  const auto samples = core.process(objects, lanelet::Optional<lanelet::routing::LaneletPath>{});
+  for (const auto& sample : samples) EXPECT_EQ(sample, objects);
+}
+
+TEST(PathCores, ReturnsOnlyRouteAndExtendsShortRoute) {
+  static_assert(std::is_same<pp::GlobalPath::Result,
       lanelet::Optional<lanelet::routing::LaneletPath>>::value, "native optional path contract");
   const auto parameters = shortMap();
   pp::GlobalPath global(parameters);
@@ -80,12 +119,10 @@ TEST(PathCores, PassesOriginalMessagesAndExtendsShortRoute) {
   section.header = ego.header;
   for (int state : {0, 1, 1, 16, 0}) {
     section.state = state;
-    const auto data = global.process(ego, section);
-    EXPECT_EQ(&std::get<0>(data), &ego);
-    EXPECT_EQ(&std::get<1>(data), &section);
-    ASSERT_TRUE(static_cast<bool>(std::get<2>(data)));
-    ASSERT_EQ(std::get<2>(data)->size(), 1u);
-    const auto path = local.process(std::get<0>(data), std::get<1>(data), std::get<2>(data));
+    const auto route = global.process(ego, section);
+    ASSERT_TRUE(static_cast<bool>(route));
+    ASSERT_EQ(route->size(), 1u);
+    const auto path = local.process(ego, section, route, pp::PredictedObjects{});
     ASSERT_GE(path.points.size(), 2u);
     expectPayload(path);
     EXPECT_NEAR(path.points.front().pose.pose.position.x, 2.0, 1e-9);
@@ -105,7 +142,7 @@ TEST(PathCores, UsesPinnedLaneletInsteadOfRematchingCheckpointCoordinates) {
   ego.pose.pose.position.x = 2;
   ego.pose.pose.orientation.w = 1;
   interfaces::SectionAnnotation section;
-  const auto route = std::get<2>(global.process(ego, section));
+  const auto route = global.process(ego, section);
   ASSERT_TRUE(static_cast<bool>(route));
   ASSERT_EQ(route->size(), 2u);
   EXPECT_EQ(route->back().id(), 301);
@@ -124,22 +161,46 @@ TEST(PathCores, RegisteredStagesHandleMapCheckpointsAndRepeatedSections) {
   const auto parameters = pp::readGlobalPathParameters(
       readFile(std::string(PATH_PLANNER_MAP_DIR) + "/kcity_lanelet2.osm"),
       readFile(std::string(PATH_PLANNER_MAP_DIR) + "/checkpoints.csv"));
-  pp::CoreSet cores{pp::GlobalPath(parameters), pp::LocalPath({parameters.map, 20.0})};
-  const pp::CoreIds ids{pp::FirstCoreId::GlobalPath, pp::SecondCoreId::LocalPath};
+  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})};
   const std::array<std::size_t, 2> required{{0, 4}};
-  EXPECT_EQ(cores.requiredInputs(ids), required);
   pp::Data snapshot;
   EXPECT_FALSE(snapshot.hasInputs(required));
   auto ego = std::make_shared<nav_msgs::Odometry>();
   auto section = std::make_shared<interfaces::SectionAnnotation>();
+  auto objects = std::make_shared<interfaces::Objects>();
+  objects->header.stamp.fromSec(1.0);
+  objects->header.frame_id = "base_link";
   snapshot.get<0>().sample.message = ego;
   snapshot.get<4>().sample.message = section;
+  snapshot.get<2>().sample.message = objects;
   ASSERT_TRUE(snapshot.hasInputs(required));
   ego->pose.pose.position.x = parameters.checkpoints.front().x_m;
   ego->pose.pose.position.y = parameters.checkpoints.front().y_m;
   ego->pose.pose.orientation.z = std::sin(parameters.checkpoints.front().yaw_rad / 2);
   ego->pose.pose.orientation.w = std::cos(parameters.checkpoints.front().yaw_rad / 2);
-  const auto route = std::get<2>(cores.global_path.process(*ego, *section));
+  const auto run = [&] {
+    np::StageData data; data.update(snapshot);
+    np::CoreResult first, prediction, last;
+    EXPECT_TRUE(pp::retainInputs(pp::processStage1)(cores, pp::FirstCoreId::GlobalPath, data, first, []{}));
+    auto next = first(data);
+    EXPECT_EQ(next.inputs.size(), 6u);
+    for (std::size_t i = 0; i < data.inputs.size(); ++i) {
+      EXPECT_EQ(next.inputs[i].message, data.inputs[i].message);
+      EXPECT_EQ(next.inputs[i].stamp_ns, data.inputs[i].stamp_ns);
+      EXPECT_EQ(next.inputs[i].receipt_steady_ns, data.inputs[i].receipt_steady_ns);
+    }
+    EXPECT_TRUE(next.inputs[0].has_stamp);
+    EXPECT_FALSE(next.inputs[5].has_stamp);
+    EXPECT_TRUE(pp::retainInputs(pp::processStage2)(cores, pp::SecondCoreId::PredictionPassThrough, next, prediction, []{}));
+    auto predicted = prediction(next);
+    EXPECT_EQ(predicted.inputs.size(), 7u);
+    EXPECT_FALSE(predicted.inputs[6].has_stamp);
+    EXPECT_FALSE(predicted.inputs[6].has_receipt);
+    for (const auto& sample : predicted.message<pp::PredictedObjects>(6)) EXPECT_EQ(sample, *objects);
+    EXPECT_TRUE(pp::processStage3(cores, pp::ThirdCoreId::LocalPath, predicted, last, []{}));
+    return last(predicted).message<interfaces::Path>(0);
+  };
+  const auto route = cores.global_path.process(*ego, *section);
   ASSERT_TRUE(static_cast<bool>(route));
   lanelet::Ids route_ids;
   for (const auto& lane : *route) route_ids.push_back(lane.id());
@@ -154,14 +215,108 @@ TEST(PathCores, RegisteredStagesHandleMapCheckpointsAndRepeatedSections) {
     ego->pose.pose.orientation.z = std::sin(checkpoint.yaw_rad / 2);
     ego->pose.pose.orientation.w = std::cos(checkpoint.yaw_rad / 2);
     section->state = i;
-    expectPayload(cores.process(ids, snapshot));
+    expectPayload(run());
     section->state = i + 1;
-    const auto path = cores.process(ids, snapshot);
+    const auto path = run();
     expectPayload(path);
-    EXPECT_EQ(cores.process(ids, snapshot), path);
+    EXPECT_EQ(run(), path);
     section->state = 0;
-    EXPECT_EQ(cores.process(ids, snapshot), path);
+    EXPECT_EQ(run(), path);
   }
+}
+
+TEST(PathStages, MissingObjectsOrPredictionStopsBeforeCoreCall) {
+  const auto parameters = shortMap();
+  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})};
+  pp::Stage3Data typed;
+  typed.get<0>().sample.message = std::make_shared<nav_msgs::Odometry>();
+  typed.get<4>().sample.message = std::make_shared<interfaces::SectionAnnotation>();
+  typed.get<5>().sample.message = std::make_shared<pp::Route>();
+  np::StageData data;
+  data.update(typed);
+  np::CoreResult result;
+  bool called = false;
+  const np::BeforeCore before = [&] { called = true; };
+  EXPECT_FALSE(pp::processStage2(cores, pp::SecondCoreId::PredictionPassThrough, data, result, before));
+  EXPECT_FALSE(called);
+  EXPECT_FALSE(pp::processStage3(cores, pp::ThirdCoreId::LocalPath, data, result, before));
+  EXPECT_FALSE(called);
+}
+
+namespace {
+struct TestAccess {
+  template<class Message> static std::int64_t stamp(const Message& m) { return m.header.stamp.toNSec(); }
+  template<class Message> static const std::string& frame(const Message& m) { return m.header.frame_id; }
+  static std::int64_t stamp(const tf2_msgs::TFMessage& m) { return m.transforms.empty() ? 0 : m.transforms.front().header.stamp.toNSec(); }
+  static std::string frame(const tf2_msgs::TFMessage& m) { return m.transforms.empty() ? "" : m.transforms.front().header.frame_id; }
+};
+using TestComponents = pp::Components<TestAccess>;
+struct TestIO {
+  using MessageType = interfaces::Path;
+  std::shared_ptr<std::vector<interfaces::Path>> output;
+  np::Clocks readClocks() const { return {1000000000, 1000000000}; }
+  void publish(const interfaces::Path& message) { output->push_back(message); }
+  void reportHealth(const np::StageHealth&, std::size_t) const {}
+  void report(const np::ProcessReport&) const noexcept {}
+};
+struct TestHeaderInjector {
+  std::shared_ptr<std::size_t> calls;
+  void injectHeader(interfaces::Path& message, const np::Context<5>& context) const {
+    ++*calls;
+    message.header.stamp.fromNSec(context.stamp_ns);
+    message.header.frame_id = "map";
+    for (auto& point : message.points) point.pose.header = message.header;
+  }
+};
+}  // namespace
+
+TEST(PathStages, ThreeStagePipelinePublishesOnceAndStopsWhenObjectsAreMissing) {
+  const auto parameters = shortMap();
+  auto selector = TestComponents::selector();
+  selector.stage1.section_core_map[0] = pp::FirstCoreId::GlobalPath;
+  selector.stage2.section_core_map[0] = pp::SecondCoreId::PredictionPassThrough;
+  selector.stage3.section_core_map[0] = pp::ThirdCoreId::LocalPath;
+  np::HealthLimits common;
+  std::array<np::HealthLimits, 5> raw_limits;
+  raw_limits.fill(common);
+  raw_limits[1].frame = raw_limits[2].frame = "base_link";
+  std::array<np::HealthLimits, 6> prediction_limits{{raw_limits[0], raw_limits[1], raw_limits[2], raw_limits[3], raw_limits[4], common}};
+  std::array<np::HealthLimits, 7> local_limits{{raw_limits[0], raw_limits[1], raw_limits[2], raw_limits[3], raw_limits[4], common, common}};
+  local_limits[6].frame = "base_link";
+  auto output = std::make_shared<std::vector<interfaces::Path>>();
+  auto headers = std::make_shared<std::size_t>(0);
+  using Context = TestComponents::Buffer::ContextType;
+  TestComponents::Node<TestIO, TestHeaderInjector> node({}, TestComponents::Buffer(8), {},
+    {np::makeStage<pp::CoreSet, Context, pp::Data>(TestComponents::Checker(raw_limits, 1000000000),
+       TestComponents::policy(common), selector.stage1, pp::retainInputs(pp::processStage1)),
+     np::makeStage<pp::CoreSet, Context, pp::Stage2Data>(TestComponents::Stage2Checker(prediction_limits, 1000000000),
+       TestComponents::Stage2Policy{{common.upper}, {common.lower}}, selector.stage2, pp::retainInputs(pp::processStage2)),
+     np::makeStage<pp::CoreSet, Context, pp::Stage3Data>(TestComponents::Stage3Checker(local_limits, 1000000000),
+       TestComponents::Stage3Policy{{common.upper}, {common.lower}}, selector.stage3, pp::processStage3)},
+    pp::CoreSet{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})},
+    TestHeaderInjector{headers}, TestIO{output});
+  nav_msgs::Odometry ego;
+  ego.header.stamp.fromSec(1.0);
+  ego.header.frame_id = "map";
+  ego.pose.pose.position.x = 2.0;
+  ego.pose.pose.orientation.w = 1.0;
+  interfaces::SectionAnnotation section;
+  section.header = ego.header;
+  node.onInput(pp::InputTag<pp::Input::Ego>{}, ego);
+  node.onInput(pp::InputTag<pp::Input::Section>{}, section);
+  EXPECT_EQ(node.onPeriodic().status, np::ProcessStatus::NoCore);
+  EXPECT_TRUE(output->empty());
+  EXPECT_EQ(*headers, 0u);
+  interfaces::Objects objects;
+  objects.header.stamp = ego.header.stamp;
+  objects.header.frame_id = "base_link";
+  node.onInput(pp::InputTag<pp::Input::Objects>{}, objects);
+  EXPECT_EQ(node.onPeriodic().status, np::ProcessStatus::Published);
+  ASSERT_EQ(output->size(), 1u);
+  EXPECT_EQ(*headers, 1u);
+  EXPECT_EQ(output->front().header.stamp, ego.header.stamp);
+  EXPECT_EQ(output->front().header.frame_id, "map");
+  EXPECT_NEAR(lengthM(output->front()), 20.0, 1e-6);
 }
 
 int main(int argc, char** argv) {

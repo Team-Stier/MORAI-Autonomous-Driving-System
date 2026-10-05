@@ -41,6 +41,10 @@ int main(int argc, char** argv) {
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/local_path"), pkg::Input::Path}, {nh.resolveName("/localization/ego"), pkg::Input::Ego}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}, {nh.resolveName("/traffic_light"), pkg::Input::Light}, {nh.resolveName("/tf"), pkg::Input::Tf}},
     std::map<std::string, pkg::Input>{{"path", pkg::Input::Path}, {"ego", pkg::Input::Ego}, {"competition", pkg::Input::Competition}, {"light", pkg::Input::Light}, {"tf", pkg::Input::Tf}},
+    std::map<std::string, pkg::CoreId>{}, selector, policy);
+  ros::NodeHandle stage1_params(params, "stage1");
+  np::loadStageConfig(stage1_params,
+    std::map<std::string, pkg::Input>{{"path", pkg::Input::Path}, {"ego", pkg::Input::Ego}, {"competition", pkg::Input::Competition}, {"light", pkg::Input::Light}, {"tf", pkg::Input::Tf}},
     std::map<std::string, pkg::CoreId>{{"plain_velocity60.hpp", pkg::CoreId::PlainVelocity60},
                                      {"plain_velocity100.hpp", pkg::CoreId::PlainVelocity100}}, selector, policy);
   std::array<np::HealthLimits, 5> limits;
@@ -67,7 +71,8 @@ int main(int argc, char** argv) {
   if (!map_file_stream) throw std::runtime_error("cannot open " + map_file_path);
   const std::string map_file_data{std::istreambuf_iterator<char>(map_file_stream), std::istreambuf_iterator<char>()};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns), policy, selector,
+    {np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
+      Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)},
     pkg::CoreSet{pkg::PlainVelocity60{}, pkg::PlainVelocity100{}}, {}, io);
   RosCallbacks callbacks{node};
   const auto sub_path = nh.subscribe("/local_path", 1, &RosCallbacks::onPath, &callbacks);

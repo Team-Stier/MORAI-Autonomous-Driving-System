@@ -7,7 +7,7 @@ stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
 # 빈 문자열은 해당 단계의 Core 미등록을 뜻한다. 등록 후 파일 이름으로 변경한다.
-core1:
+stage1:
   section_core_map:
     "0": dbscan.hpp
     "1": dbscan.hpp
@@ -27,7 +27,7 @@ core1:
     "15": dbscan.hpp
     "16": dbscan.hpp
   health_core_map: []
-core2:
+stage2:
   section_core_map:
     "0": objects_pass_through.hpp
     "1": objects_pass_through.hpp

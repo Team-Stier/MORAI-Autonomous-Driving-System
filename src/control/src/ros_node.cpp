@@ -12,6 +12,7 @@ using Message = pkg::Message;
 using Components = pkg::Components<RosAccess>;
 struct Activity { std::int64_t last_healthy_output_ns = 0; };
 struct IO : np::RosIO<Message> {
+  using MessageType = Message;
   std::shared_ptr<Activity> activity;
   double safe_brake_command;
   IO(ros::Publisher publisher, std::shared_ptr<Activity> state, double brake)
@@ -73,14 +74,17 @@ struct RosCallbacks {
 };
 int main(int argc, char** argv) {
   ros::init(argc, argv, "control_node");
-  ros::NodeHandle nh, params("~"), tracking_params(params, "tracking");
+  ros::NodeHandle nh, params("~"), tracking_params(params, "tracking"), stage_params(params, "stage1");
   auto selector = Components::selector();
   auto policy = Components::policy(np::HealthLimits{});
+  const std::map<std::string, pkg::Input> inputs{
+    {"path", pkg::Input::Path}, {"ego", pkg::Input::Ego}, {"competition", pkg::Input::Competition}};
   const auto settings = np::loadRosConfig(nh, params,
     std::map<std::string, pkg::Input>{{nh.resolveName("/local_path/velocity_injected"), pkg::Input::Path}, {nh.resolveName("/localization/ego"), pkg::Input::Ego}, {nh.resolveName("/vehicle/competition_status"), pkg::Input::Competition}},
-    std::map<std::string, pkg::Input>{{"path", pkg::Input::Path}, {"ego", pkg::Input::Ego}, {"competition", pkg::Input::Competition}},
-    std::map<std::string, pkg::CoreId>{{"path_tracking.hpp", pkg::CoreId::PathTracking}}, selector, policy);
+    inputs, std::map<std::string, pkg::CoreId>{}, selector, policy);
   policy.priority.fill(100);
+  np::loadStageConfig(stage_params, inputs,
+    std::map<std::string, pkg::CoreId>{{"path_tracking.hpp", pkg::CoreId::PathTracking}}, selector, policy);
   const auto parameters = pkg::tracking::loadParameters(tracking_params);
   double safe_brake;
   params.param("safe_brake_command", safe_brake, 0.5);
@@ -100,8 +104,9 @@ int main(int argc, char** argv) {
   IO io(nh.advertise<Message>("/control_cmd", 1), std::make_shared<Activity>(), safe_brake);
   io.activity->last_healthy_output_ns = io.readClocks().steady_ns;
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
-    Components::Checker(limits, io.readClocks().steady_ns, {parameters.longitudinal_mpc.maximum_speed_mps}),
-    policy, selector, Components::CoreSet(parameters), {}, io);
+    std::vector<Components::Stage>{np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
+      Components::Checker(limits, io.readClocks().steady_ns, {parameters.longitudinal_mpc.maximum_speed_mps}),
+      policy, selector, pkg::processCore)}, Components::CoreSet(parameters), {}, io);
   const auto timeout = std::min({limits[0].receive_timeout_ns, limits[1].receive_timeout_ns, limits[2].receive_timeout_ns});
   RosCallbacks callbacks{node, io, timeout, settings.execution.mode == np::ExecutionMode::Periodic};
   const auto sub_path = nh.subscribe("/local_path/velocity_injected", 1, &RosCallbacks::onPath, &callbacks);

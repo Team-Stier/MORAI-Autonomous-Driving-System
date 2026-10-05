@@ -1,5 +1,6 @@
 #pragma once
-#include <localization/core_set.hpp>
+#include <localization/core_dispatch.hpp>
+#include <node_pipeline/pipeline.hpp>
 #include <node_pipeline/ros.hpp>
 #include <nav_msgs/Odometry.h>
 namespace localization {
@@ -85,5 +86,6 @@ struct HeaderInjector {
   }
 };
 using IO = np::RosIO<nav_msgs::Odometry>;
-using Node = np::PipelineNode<Buffer, Assembler, Checker, Policy, Selector, CoreSet, HeaderInjector, IO>;
+using Stage = np::Stage<CoreSet, Buffer::ContextType>;
+using Node = np::PipelineNode<Buffer, Assembler, CoreSet, HeaderInjector, IO>;
 }

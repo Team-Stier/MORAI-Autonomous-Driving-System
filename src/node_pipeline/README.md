@@ -1,7 +1,7 @@
 # node_pipeline
 
 공통 C++14 라이브러리를 제공하는 서비스 패키지 겸 코딩 가이드 템플릿 저장소다.
-`templates/`와 `templates_two_core/` 소스는 가이드 전용이며 절대 실행·빌드 대상이 아니다. 각 실행 패키지가 `TODO:` 부분을 구체화해 자신의 소스를 작성한다.
+`templates/` 소스는 가이드 전용이며 절대 실행·빌드 대상이 아니다. 각 실행 패키지가 `TODO:` 부분을 구체화해 자신의 소스를 작성한다.
 계산 알고리즘과 실제 입출력 메시지 연결은 실행 패키지가 소유한다.
 
 ## 처리 계약
@@ -9,12 +9,12 @@
 1. 입력 callback은 구독 메시지를 원래 타입 그대로 큐에 저장한다. sample ID와 실제 수신 steady 시각을 별도로 기록한다. ROS 구독 큐는 1이고 조립 큐 용량은 config로 지정한다.
 2. `periodic` 또는 지정한 토픽의 `on_input` callback이 `process()`를 실행한다. 나머지 callback은 적재만 한다. callback은 직렬 실행한다.
 3. Assembler는 누락·오래됨·invalid 여부와 무관하게 항상 스냅샷을 반환한다. 원본 stamp를 새로 만들지 않는다. 예제 조립기는 최신 기준 stamp에 가장 가까운 샘플을 고르며, 동률이면 수신 ID가 큰 것을 고른다. on_input의 기준 메시지는 방금 수신한 sample ID로 고정한다.
-4. 하나의 스냅샷과 루프 진입 전에 한 번 읽은 시각으로 health 검사와 policy 처리를 반복한다. 큐 전체는 Assembler만 읽는다. policy는 선택 메시지의 보정 복사본만 수정하고 stamp·수신 시각을 보존한다.
-5. Health는 input별 모든 오류를 보관한다. timestamp 나이는 ROS 시각, 수신 경과는 steady 시각으로 검사한다. 누락된 입력의 수신 대기는 노드 시작 시각 기준이다. 시차는 존재하는 각 input 쌍에 대해 검사한다.
+4. `readClocks()`로 `health_clocks`를 한 번 읽은 뒤 스테이지 루프에 진입한다. 모든 스테이지와 그 안의 health/policy 재검사는 같은 시각을 사용한다. 각 스테이지는 현재 스냅샷으로 검사·보정을 수행한다. 큐 전체는 최초 Assembler만 읽으며, policy는 입력의 보정 복사본만 수정하고 stamp·수신 시각을 보존한다.
+5. Health는 input별 모든 오류를 보관한다. timestamp 나이는 ROS 시각, 수신 경과는 steady 시각으로 검사한다. 최초 구독 입력이 누락되면 수신 대기는 노드 시작 시각 기준이다. 기존 입력을 수정하거나 그대로 전달한 값은 원본 슬롯의 시간 메타데이터를 상속한다. 새로 계산한 값은 시간 메타데이터를 비워 두며 정상 상태로 취급한다. 시간 정보가 없는 값에는 해당 stamp·수신 timeout 검사를 적용하지 않고, skew는 양쪽 stamp가 있는 입력 쌍만 검사한다. 시간 정보의 부재와 입력값 Missing은 구분하며 값의 유효성 검사는 계속 수행한다.
 6. InputPolicy는 최고 우선순위 오류 하나를 선택하고 switch로 strategy 객체를 호출한다. 음수 priority는 dismiss다. 이미 Missing인 입력은 다시 보정하지 않는다. 동률은 input·issue 순회 순서다. strategy는 데이터를 수정하고 반환값은 없다.
-7. AllGreen 또는 dismiss issue만 남으면 policy는 false를 반환하고 노드는 `break;`한다. 보정했으면 true를 반환하여 다음 검사 회차로 간다. 기본 최대 검사 횟수는 10회이며, 마지막 검사에서도 완료를 확인하면 수용한다. 완료를 확인하지 못하면 해당 스냅샷을 폐기한다.
-8. CoreSelector는 `section_core_map`으로 선택하고 `health_core_map`으로 덮어쓴다. `when`은 AND 조건이고 가장 높은 priority의 일치 규칙을 적용한다. 일치하지 않으면 section 선택을 유지한다. 최고 priority 동률은 설정 오류다. 최초 구역은 UNKNOWN(0)이다.
-9. CoreSet은 `requiredInputs(core_id)`로 Core별 필수 입력의 tuple 인덱스를 선언한다. 라이브러리는 선택 직후 `data.hasInputs(required)`로 모두 존재하는지 검사한다. 누락되면 NoCore로 종료하고 계산·헤더 주입·발행을 생략한다. 추가 입력은 제한하지 않는다. CoreSet은 선택된 지속 Core를 호출한다. 첫 Core에는 구독 메시지를, 후속 Core에는 이전 Core의 반환값을 각각의 인자로 전달한다. 마지막 Core는 목표 발행 메시지 타입으로 payload를 완성해 반환한다. Pipeline은 헤더만 주입하고 출력 검사 없이 발행한다.
+7. 스테이지마다 `checks=0`·`settled=false`로 시작한다. AllGreen 또는 dismiss issue만 남으면 policy는 false를 반환하고 health/policy 반복을 `break;`한다. 보정했으면 true를 반환하여 다음 검사 회차로 간다. 기본 최대 검사 횟수는 스테이지당 10회이며, 마지막 검사에서도 완료를 확인하면 수용한다. 완료를 확인하지 못하면 `finish(Rejected, checks, "health check limit")`로 이번 노드 처리를 종료한다.
+8. 각 스테이지의 CoreSelector는 해당 스테이지의 `section_core_map`으로 선택하고 현재 스냅샷의 health에 대한 `health_core_map`으로 덮어쓴다. `when`은 AND 조건이고 가장 높은 priority의 일치 규칙을 적용한다. 일치하지 않으면 section 선택을 유지한다. 최고 priority 동률은 설정 오류다. 최초 구역은 UNKNOWN(0)이다.
+9. CoreSet은 Core 객체를 생성·소유하는 캐리어다. Pipeline은 n개 스테이지를 순서대로 실행한다. 각 스테이지는 health/policy·Core 선택 후 Core ID별 `switch/case`로 실제 호출을 연결한다. 각 `case`는 `process()` 직전에 해당 Core의 필수 입력을 검사한다. 하나라도 Missing이면 `finish(NoCore, checks, "required core input missing")`를 반환하여 이번 노드 처리를 종료한다. 추가 입력은 제한하지 않는다. Core 반환값으로 `snapshot.data.inputs`만 교체하고 나머지 스냅샷 정보는 이전 회차에서 이어받는다. 마지막 스테이지도 반환값을 스냅샷으로 감싼 뒤 루프를 종료한다. 루프 밖에서 최종 메시지를 꺼내 헤더를 한 번 주입하고 출력 검사 없이 한 번 발행한다.
 10. 실행 중 예외를 잡아 재시도하거나 계속 실행하지 않는다. on_input은 마지막 core 시도 token과 같은 스냅샷의 재실행을 생략한다. periodic은 동일 입력으로도 계산·발행한다.
 
 ## Core 입출력 계약과 Strategy 패턴
@@ -31,7 +31,7 @@ geometry_msgs::PoseStamped process(const sensor_msgs::NavSatFix& gps_msg,
 
 마지막 Core의 `process()`는 목표 발행 메시지 타입을 반환하고 payload를 완성한다.
 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있다. 개수·타입·순서는 연결된 Core의 계약으로 정하며 두 개로 고정하지 않는다.
-여러 반환 변수는 `std::pair`·`std::tuple` 같은 표준 컨테이너로 묶을 수 있다. CoreSet이 값을 풀어 다음 Core의 개별 인자로 전달한다.
+여러 반환 변수는 `std::pair`·`std::tuple`로 묶는다. Pipeline은 반환 변수를 다음 스냅샷의 `data.inputs` 슬롯으로 감싸고, 다음 스테이지의 선택된 `case`에서 필요한 값을 꺼내 해당 Core의 개별 인자로 전달한다. 단일 반환값은 한 슬롯으로 감싼다.
 별도 Output·PoseResult 같은 계산 결과 래퍼나 성공/실패·준비 상태 코드를 만들지 않는다.
 Core는 출력 메시지의 발행 헤더를 설정하지 않는다. Pipeline의 HeaderInjector가 stamp·frame_id 등 헤더만 주입한다.
 HeaderInjector와 IO는 payload를 변경하거나 출력 검사를 하지 않는다. IO는 헤더 주입이 끝난 메시지를 발행한다.
@@ -42,47 +42,58 @@ CoreSet·입력 검사·policy·헤더 주입는 Core 파일 밖에 둔다. 필�
 
 | Strategy 패턴 역할 | 객체 | 책임 |
 | --- | --- | --- |
-| Context | PipelineNode | 공통 실행 순서와 helper 소유 |
-| 선택 | CoreSelector | section·health config로 core ID 결정 |
-| 소유·호출 연결 | CoreSet | 지속 Core 소유, 실제 메시지를 개별 인자로 전달 |
+| Context | PipelineNode | 스테이지 반복·입력 검사·선택·Core 호출·스냅샷 전달·최종 발행, helper 소유 |
+| 선택 | 스테이지별 CoreSelector | 해당 스테이지의 section·현재 입력 health config로 Core ID 결정 |
+| 객체 소유 | CoreSet | 지속 Core 객체 생성·소유; 실행 순회 없음 |
+| 단계 호출 | Core ID별 switch/case | 해당 Core의 필수 입력 검사 직후 실제 개별 인자로 호출; 다음 스테이지 실행은 Pipeline이 담당 |
 | 계산 Strategy | 각 Core | `process(개별 인자...) → 계산 반환값`; 마지막 Core는 목표 발행 메시지 타입 반환 |
 
-## 두 Core 순차 템플릿
+## 멀티 스테이지 템플릿
 
-[`templates_two_core/`](templates_two_core/)는 `Core1.process(msg1, msg2, ...) → (data1, ..., dataN) → Core2.process(data1, ..., dataN) → result 발행` 구조다.
-Core1은 구독 메시지를 개별 인자로 받고 하나 이상의 중간 변수를 반환할 수 있다. Core2는 이 반환값을 개별 인자로 받으며, 중간 변수의 개수·타입·순서는 두 Core의 계약으로 정한다.
-현재 예제는 같은 실제 메시지 타입의 두 값을 `std::pair<Message, Message>`로 묶어 반환한다. 다른 반환 개수·타입은 해당 Core의 반환 타입과 CoreSet의 인자 연결에 반영한다.
-CoreSet이 지속 Core를 소유하고, 두 Selector가 선택한 Core ID로 각 단계의 호출을 연결한다. 각 Selector는 같은 section과 최종 구독 입력 health를 사용한다. 어느 단계든 선택되지 않으면 계산·헤더 주입·발행을 생략한다.
-첫 단계의 필수 구독 입력을 Pipeline이 검사한다. 각 Core는 계산을 수행하고 마지막 Core가 최종 result의 payload를 완성한다. 최종 result의 헤더 주입과 발행은 Pipeline이 담당한다. 중간 변수는 검사·헤더 주입·발행하지 않는다.
-ROS 설정은 `templates_two_core/config/template.yaml`에 둔다. 공통 실행·health·policy 설정은 최상위에 두고, `core1`과 `core2` 아래에 각각 `section_core_map`·`health_core_map`을 지정한다. 매핑 값은 각 단계에 등록한 Core 파일 이름이다.
+노드는 n개 스테이지를 가지며 스테이지 하나당 루프를 한 번 실행한다. 단일·두 Core 템플릿을 나누지 않고 같은 스테이지 루프를 사용한다. 한 스테이지에서 실행되는 Core는 그 스테이지의 config 매핑으로 선택한 하나다. 스테이지 수와 스테이지에 등록한 후보 Core 수는 별개다.
+
+최초 스냅샷만 구독 큐에서 조립한다. `health_clocks`를 한 번 읽은 후 각 스테이지에서 현재 스냅샷의 health/policy·Core 선택·필수 입력 검사·Core 호출을 수행한다. 중간 반환값도 다음 스테이지의 입력으로 검사·보정할 수 있다. 어느 스테이지에서든 진행할 수 없으면 `finish()`를 반환해 후속 스테이지와 발행을 생략한다. 시도 token은 첫 Core의 실제 호출 직전에 한 번 기록한다.
+
+각 회차 끝에서 Pipeline이 Core 반환값을 슬롯으로 감싸 `snapshot.data.inputs`만 교체한다. `context`·`token`·`is_new` 등 나머지 정보는 이전 회차에서 이어받는다. Core에 새 timestamp·수신 시각을 요구하거나 계산 완료 시각으로 원본 시각을 갱신하지 않는다. 중간값에 헤더를 주입하거나 발행하지 않는다. 마지막 반환값도 같은 방식으로 감싼 뒤 루프 밖에서 최종 메시지를 꺼내 헤더 주입·발행을 한 번 수행한다.
+
+입력을 수정하거나 패스스루한 반환 슬롯은 대응하는 입력 슬롯의 `stamp_ns`·`receipt_steady_ns`를 상속한다. 새로 생성한 반환 슬롯은 이 정보를 비워 두며 다음 스테이지의 health 검사에서도 그 부재 자체는 오류가 아니다. 반환 슬롯과 원본 입력 슬롯의 대응은 해당 스테이지의 연결 계약으로 정한다. 슬롯의 값이 존재하는지는 시간 메타데이터 유무와 별개다.
+
+각 `case`의 Core 인자 개수·타입과 반환 변수 개수·타입은 다를 수 있다. 선택된 앞뒤 Core의 입력·반환 계약은 호환되어야 한다. 구독 큐의 `Data<Ts...>`는 실제 타입의 슬롯 튜플이다. Pipeline의 `StageData`는 각 payload의 실제 타입과 소유권을 보존하며, 스테이지 adapter는 선언된 `Data<Ts...>` 입력 계약과 대조한 뒤 typed checker·policy에 전달한다. 타입·개수 불일치는 설정 오류이며 예외로 종료한다. Core에는 슬롯에서 꺼낸 실제 타입만 전달한다.
+
+검사·policy·입력 이름·선택 매핑은 해당 스테이지의 입력 계약에 맞춘다. `section_core_map`·`health_core_map`의 매핑 값은 그 스테이지에 등록한 Core 파일 이름이다. 스테이지 반복과 스냅샷 전달은 Pipeline이 담당하며 CoreSet에 실행 코드를 넣지 않는다. 단계 추가·삭제와 입력·반환 계약 변경은 Core 등록 허용 범위에 포함하지 않는다.
 
 ## 공개 라이브러리와 노드별 코드
 
 | 파일 | 제공 범위 |
 | --- | --- |
-| `include/node_pipeline/pipeline.hpp` | PipelineNode, 실행 설정·trigger·health·선택·처리 결과 공통 타입 |
+| `include/node_pipeline/types.hpp` | 실행 설정·trigger·health·선택·처리 결과 공통 타입 |
+| `include/node_pipeline/pipeline.hpp` | PipelineNode의 스테이지 루프·최종 발행 |
+| `include/node_pipeline/stages.hpp` | StageData, Stage, makeStage, wrapResult, replaceInputs·반환 슬롯과 시간 정보 전달 |
 | `include/node_pipeline/components.hpp` | 입력별 HealthLimits, 필수 입력 검사, InputBuffer〈Id, Access, Ts...〉, SnapshotAssembler, HealthChecker, 공통 수치 검사, ClampUpper/ClampLower/RemoveInput, InputPolicy, CoreSelector |
 | `include/node_pipeline/ros.hpp` | ROS config 로더·검증, 이름→ID 해석, RosIO〈발행 메시지 타입〉 |
 | `templates/types.hpp` | 가이드용 메시지와 입력·발행 메시지 타입 |
-| `templates/scalar_core.hpp` | ScalarCore 클래스 하나와 계산 상태 |
-| `templates/core_set.hpp` | 템플릿 Core 소유·메시지 인자 연결 |
+| `templates/scalar_core.hpp`·`templates/auxiliary_core.hpp` | 후보 Core 각각의 계산과 지속 상태 |
+| `templates/core_set.hpp` | Core ID와 지속 Core 객체 멤버 |
+| `templates/core_dispatch.hpp` | Core ID별 switch/case·호출 직전 필수 입력 검사·개별 인자 연결·반환 슬롯의 원본 대응 |
 | `templates/template_components.hpp` | 메시지 필드 Access·Validator, 라이브러리 타입 별칭·객체 조합 |
 | `templates/ros_node.cpp` | TODO: 실제 타입·토픽을 구체화하는 config 호출, ROS HeaderInjector·callback 연결 |
 | `templates/standalone.cpp` | ROS 없는 공개 API 사용 가이드 |
 | `config/template.yaml` | 가이드 템플릿 설정 |
 
-실행 노드는 다음 `TODO:` 부분을 구체화한다.
+실행 노드는 다음 `TODO:` 부분을 구체화한다. Pipeline 생성자에 스테이지 객체 목록을 넘기며 스테이지마다 `makeStage()`로 입력 계약·checker·policy·selector·호출 함수를 연결한다. 스테이지 수가 늘어나도 같은 템플릿을 사용한다.
 
 | 위치 | 구체화할 부분 |
 | --- | --- |
 | `templates/types.hpp` | 실제 구독·발행 메시지 타입 |
 | `templates/template_components.hpp` | 입력 ID·타입 pack·Access·Validator·policy·selector |
-| `templates/core_set.hpp` | Core 소유·필수 입력 인덱스·개별 process 인자 |
+| `templates/core_set.hpp` | 기존 Core ID 항목·객체 멤버 |
+| `templates/core_dispatch.hpp` | 해당 Core의 필수 입력·기존 선택 분기·실제 개별 인자 연결 |
 | `templates/scalar_core.hpp` | Core별 알고리즘과 지속 상태 |
 | `templates/ros_node.cpp` | 토픽·callback 연결·발행 header 주입 기준 |
 | `config/template.yaml` | 실행 방식·한도·policy 우선순위·Core 매핑 |
 
 공통 라이브러리 소스는 구체화 대상이 아니다.
+Core 개발자의 등록 권한은 [Core 등록 가이드](CORE_REGISTRATION.md)의 diff에 정의한 변경 종류에 한정한다. 캐리어 CoreSet에 실행 코드를 추가하지 않는다. 단계별 호출 함수에는 허용 diff의 case·필수 입력 존재 검사·인자 연결·반환 슬롯 대응만 추가한다. 스테이지 순회·health 검사·보정·fallback은 작성하지 않는다. 허용 diff만으로 연결할 수 없으면 해당 변경을 멈추고, 파일·내용·사유·범위 안 대안을 보고하여 리드 협의와 명시적 허가를 요청한다.
 큐·조립·공통 health·strategy·매핑 탐색·config 파싱은 라이브러리 구현을 사용한다.
 `InputBuffer<Id, Access, GpsMsg, ImuMsg, CloudMsg>`처럼 서로 다른 메시지 타입도 지정할 수 있다.
 입력 ID는 tuple 순서와 대응하며 `std::integral_constant<Id, 입력ID>`로 구독 callback에 연결한다.
@@ -94,17 +105,18 @@ ROS 공유 포인터는 `retainMessage()`로 원본과 소유권을 유지한다
 `trigger_input`은 on_input일 때만 읽으며 등록된 upstream의 절대 토픽 이름이다.
 periodic 모드에서는 frequency_hz로 timer를 생성한다.
 시간 한도·큐 용량·검사 한도·policy priority·section 매핑·health 조건과 선택 priority는 config로 지정한다.
-보정 priority와 core 선택 priority는 별도다.
+보정 priority와 core 선택 priority는 별도다. 각 스테이지는 자신의 입력 이름·health 한도·policy·Core 매핑을 사용한다. 아래 매핑은 한 스테이지의 설정이다.
 
 ```yaml
-section_core_map:
-  "0": primary
-health_core_map:
-  - when:
-      - {input: primary, issue: Stale}
-      - {input: primary, issue: ReceiveTimeout}
-    priority: 110
-    core: auxiliary
+stage1:
+  section_core_map:
+    "0": scalar_core.hpp
+  health_core_map:
+    - when:
+        - {input: primary, issue: Stale}
+        - {input: primary, issue: ReceiveTimeout}
+      priority: 110
+      core: auxiliary_core.hpp
 ```
 
 section_core_map의 빈 문자열(`""`)은 Core 미등록을 뜻하며 해당 섹션의 기본 Core를 선택하지 않는다.
@@ -113,33 +125,43 @@ section_core_map의 빈 문자열(`""`)은 Core 미등록을 뜻하며 해당 �
 
 ## 템플릿 실행 시퀀스
 
-라이브러리 내부 순회와 필드 검사는 공개 메서드 호출 안에 포함한다. 아래는 ROS 가이드 템플릿의 메서드 연결이다.
+멀티 스테이지 실행 시퀀스다. `stage`는 현재 회차의 스테이지 adapter이며 typed checker·policy·selector를 소유한다. `CoreId::Primary`·`CoreId::Auxiliary`는 해당 스테이지의 후보 Core 예시다. 두 `case`는 서로 다른 입력 슬롯 연결을 보여 준다. `replaceInputs()`는 Pipeline의 스냅샷 전달 함수다.
 
 ```mermaid
 sequenceDiagram
     participant M as main
-    participant U as primary·auxiliary 토픽
+    participant U as 입력 토픽
     participant SE as /section_annotation
     participant T as ros::SteadyTimer
     participant CB as callbacks: RosCallbacks
     participant N as node: PipelineNode
     participant B as InputBuffer
     participant A as SnapshotAssembler
-    participant H as HealthChecker
-    participant P as InputPolicy
-    participant S as CoreSelector
-    participant C as CoreSet
-    participant K as ScalarCore
+    participant H as checker: HealthChecker
+    participant P as policy: InputPolicy
+    participant S as selector: CoreSelector
+    participant C as cores: CoreSet
+    participant D as dispatch: processCore
+    participant K as core: cores.primary / cores.auxiliary
     participant MB as RosHeaderInjector
     participant IO as RosIO
     participant O as 출력 토픽
 
-    M->>M: node_pipeline::loadRosConfig(nh, params, topics, inputs, cores, selector, policy)
+    M->>M: loadRosConfig(nh, params, topics, inputs, empty cores, selector, policy)
+    M->>M: loadStageConfig(stage_params, inputs, cores, selector, policy)
+    M->>M: makeStage(checker, policy, selector, dispatch)
     alt config 형식·타입·이름·한도 오류
         M-->>M: throw std::invalid_argument
     else 정상 설정
         M-->>M: settings
-        M->>N: PipelineNode(execution, buffer, assembler, checker, policy, selector, cores, builder, io)
+        M->>C: CoreSet{core objects}
+        C-->>M: cores
+        M->>N: PipelineNode(execution, buffer, assembler, stages, cores, header_injector, io)
+        alt stages 비어 있음 또는 helper 누락 또는 max_health_checks=0 또는 실행 모드 오류 또는 OnInput trigger 미등록
+            N-->>M: throw std::invalid_argument
+        else 유효 실행 설정
+            N-->>M: node
+        end
     end
     loop ROS callback 직렬 실행
         alt section 수신
@@ -147,7 +169,7 @@ sequenceDiagram
             CB->>N: onSection(Section)
             N->>B: storeRawSection(section)
         else input 수신
-            U->>CB: onPrimary(message) 또는 onAuxiliary(message)
+            U->>CB: onInput(message)
             CB->>CB: retainMessage(message)
             CB->>N: onInput(input_tag, message)
             N->>IO: readClocks()
@@ -164,467 +186,149 @@ sequenceDiagram
         end
         opt process 호출됨
             N->>A: assemble(buffer, trigger)
-            A-->>N: snapshot
-            alt OnInput이고 snapshot.is_new=false
-                N->>N: finish(Skipped, checks, reason)
+            A-->>N: assembled
+            N->>N: snapshot.data.update(assembled.data)
+            alt OnInput 또는 require_new_snapshot이며 snapshot.is_new=false
+                N->>N: finish(Skipped, 0, bundle already attempted)
                 N->>IO: report(report)
             else 새 스냅샷 또는 Periodic
                 N->>IO: readClocks()
                 IO-->>N: health_clocks
-                loop checks가 max_health_checks 미만
-                    N->>H: healthCheck(data, context, health_clocks)
-                    H-->>N: health
-                    N->>IO: reportHealth(health, checks)
-                    N->>P: apply(data, health)
-                    P-->>N: modified
-                    opt modified=false
-                        Note over N: settled=true, break
+                loop stage_index=0부터 n-1까지
+                    Note over N: checks=0, settled=false
+                    loop checks가 max_health_checks 미만이고 settled=false
+                        Note over N: checks += 1
+                        N->>N: stage.healthCheck(snapshot.data, snapshot.context, health_clocks)
+                        alt 스테이지 입력 개수·타입 불일치
+                            N-->>N: throw std::invalid_argument
+                        else 입력 계약 일치
+                            N->>H: healthCheck(typed data, snapshot.context, health_clocks)
+                        end
+                        loop 현재 입력 슬롯
+                            alt 입력값 Missing
+                                Note over H: issues += Missing
+                                opt 최초 스테이지의 구독 입력이며 check_receive_timeout=true
+                                    Note over H: 노드 시작 시각 기준 ReceiveTimeout 검사
+                                end
+                            else 입력값 존재
+                                H->>H: validator_(slot.message(), input_limits_[tag], issues)
+                                opt check_stamp=true이고 stamp_ns 있음
+                                    Note over H: InvalidStamp·FutureStamp·Stale 검사
+                                end
+                                opt check_receive_timeout=true이고 receipt_steady_ns 있음
+                                    Note over H: ReceiveTimeout 검사
+                                end
+                                opt 양쪽 check_skew=true이고 stamp_ns가 있는 입력 쌍
+                                    Note over H: Skew 검사
+                                end
+                            end
+                        end
+                        H-->>N: health
+                        N->>IO: reportHealth(health, checks)
+                        N->>P: apply(typed data, typed health)
+                        P-->>N: modified
+                        opt modified=false
+                            Note over N: settled=true, break health/policy loop
+                        end
                     end
-                end
-                alt settled=false
-                    N->>N: finish(Rejected, checks, health check limit)
-                    N->>IO: report(report)
-                else settled=true
-                    N->>S: select(health.section, health)
-                    S-->>N: selection
-                    alt selection.selected=false
-                        N->>N: finish(NoCore, checks, reason)
+                    break settled=false
+                        N->>N: finish(Rejected, checks, health check limit)
                         N->>IO: report(report)
-                    else selection.selected=true
-                        N->>C: requiredInputs(selection.id)
-                        C-->>N: required
-                        N->>N: data.hasInputs(required)
-                        alt 필수 입력 중 Missing 있음
+                    end
+                    N->>S: select(health.section, typed health)
+                    S-->>N: selection
+                    break selection.selected=false
+                        N->>N: finish(NoCore, checks, no compatible core)
+                        N->>IO: report(report)
+                    end
+                    N->>D: stage.process(cores, selection.id, snapshot.data, result, before)
+                    alt case CoreId::Primary
+                        D->>D: data.hasInputs(required_primary)
+                        D-->>D: present
+                        break present=false
+                            D-->>N: false
                             N->>N: finish(NoCore, checks, required core input missing)
                             N->>IO: report(report)
-                        else 필수 입력 모두 존재
-                        N->>A: markAttempted(snapshot.token)
-                        N->>C: process(selection.id, data)
-                        alt id=Primary
-                            C->>K: primary.process(data.get〈0〉().message())
-                        else id=Auxiliary
-                            C->>K: auxiliary.process(data.get〈1〉().message())
                         end
-                        K-->>C: message
-                        C-->>N: message
-                        N->>MB: injectHeader(message, context)
-                        MB-->>N: void
-                        N->>IO: publish(message)
-                        IO->>O: publisher.publish(message)
-                        N->>N: finish(Published, checks, empty reason)
-                        N->>IO: report(report)
-                        end
-                    end
-                end
-            end
-        end
-    end
-```
-
-## 라이브러리 원형 — 예제 상세 시퀀스
-
-라이브러리화 이전 예제의 상세 시퀀스를 보존한다. 아래는 당시 구현이며, 현재 공개 API와 실행 계약은 앞의 템플릿 시퀀스를 따른다.
-
-```mermaid
-sequenceDiagram
-    participant M as main(): ros_node.cpp
-    participant R as nh/private_nh: ros::NodeHandle
-    participant L as limits: HealthLimits
-    participant U as /node_pipeline_example/primary 또는 auxiliary
-    participant SE as /section_annotation
-    participant T as timer: ros::SteadyTimer
-    participant CB as callbacks: RosCallbacks
-    participant N as node: PipelineNode
-    participant MB as message_builder: RosMessageBuilder
-    participant I as io: RosIO
-    participant B as buffer: InputBuffer
-    participant A as assembler: SnapshotAssembler
-    participant H as checker: HealthChecker
-    participant P as policy: InputPolicy
-    participant UP as clamp_upper_: ClampUpper
-    participant LO as clamp_lower_: ClampLower
-    participant RM as remove_input_: RemoveInput
-    participant S as selector: CoreSelector
-    participant C as cores: CoreSet
-    participant K as primary/auxiliary: ScalarCore
-    participant O as /node_pipeline_example/output
-
-    M->>R: param()/getParam()
-    R-->>M: 실행 모드, 한도, priority, section_core_map, health_core_map
-    loop duration 설정마다
-        M->>M: readDurationNs(private_nh, key, default_sec)
-        alt 비유한·0 이하·int64 ns 범위 초과 또는 1ns 미만
-            M-->>M: invalid_argument
-        else 유효
-            M-->>M: duration_ns
-        end
-    end
-    M->>R: resolveName(primary_topic) / resolveName(auxiliary_topic)
-    R-->>M: primary_topic, auxiliary_topic
-    alt mode가 periodic/on_input 밖
-        M-->>M: invalid_argument
-    end
-    opt mode=on_input
-        M->>R: param(trigger_input, default=primary_topic)
-        R-->>M: trigger_topic
-        alt trigger_topic이 비어 있거나 절대 이름이 아님
-            M-->>M: invalid_argument
-        else 절대 토픽 이름
-            M->>R: resolveName(trigger_topic)
-            R-->>M: trigger_topic
-            alt trigger_topic=primary_topic
-                Note over M: trigger_input=Input::Primary
-            else trigger_topic=auxiliary_topic
-                Note over M: trigger_input=Input::Auxiliary
-            else 등록된 upstream 토픽이 아님
-                M-->>M: invalid_argument
-            end
-        end
-    end
-    Note over M: Periodic에서는 trigger_input 설정을 읽거나 검사하지 않음
-    opt queue_capacity 또는 max_health_checks가 0 이하
-        M-->>M: invalid_argument
-    end
-    M->>L: validate()
-    alt 비유한 bound·lower greater than upper·빈 frame·시간 한도 0 이하
-        L-->>M: invalid_argument
-    else 정상
-        L-->>M: void
-    end
-    opt section_core_map 설정 있음
-        alt mapping.getType()이 TypeStruct가 아님
-            break std::invalid_argument
-                M->>M: throw std::invalid_argument("invalid section_core_map")
-                M->>M: ROS_FATAL_STREAM(error.what())
-                Note over M: main return 1
-            end
-        else TypeStruct
-            Note over M: selector.section_core_map.clear()
-            loop mapping의 각 entry
-                M->>M: std::stoi(entry->first, &parsed)
-                alt 숫자로 해석할 수 없음
-                    break std::invalid_argument
-                        M-->>M: throw std::invalid_argument
-                        M->>M: ROS_FATAL_STREAM(error.what())
-                        Note over M: main return 1
-                    end
-                else int 표현 범위 초과
-                    break std::out_of_range
-                        M-->>M: throw std::out_of_range
-                        M->>M: ROS_FATAL_STREAM(error.what())
-                        Note over M: main return 1
-                    end
-                else 정수 변환 성공
-                    M-->>M: section
-                    Note over M: parsed=해석한 문자 수
-                    alt parsed가 key 길이와 다름 또는 section이 0..255 밖 또는 value가 TypeString이 아님
-                        break std::invalid_argument
-                            M->>M: throw std::invalid_argument("invalid section mapping entry")
-                            M->>M: ROS_FATAL_STREAM(error.what())
-                            Note over M: main return 1
-                        end
-                    else entry 형식 유효
-                        Note over M: core=entry 문자열 값
-                        alt core가 primary와 auxiliary 모두 아님
-                            break std::invalid_argument
-                                M->>M: throw std::invalid_argument("unknown core")
-                                M->>M: ROS_FATAL_STREAM(error.what())
-                                Note over M: main return 1
-                            end
-                        else 등록된 core
-                            Note over M: selector.section_core_map[section]=CoreId
-                        end
-                    end
-                end
-            end
-        end
-    end
-    alt UNKNOWN 매핑 없음 또는 Periodic 주기가 비유한·0 이하·ROS Duration 표현 범위 밖
-        M-->>M: invalid_argument
-    else 유효 설정
-        M->>R: getParam(health_core_map, health_mapping)
-    R-->>M: bool
-    opt health_core_map 설정 있음
-        loop 각 규칙과 when 조건
-            alt 필수 필드·타입·이름 오류 또는 when 비어 있음
-                M-->>M: throw std::invalid_argument
-            else 유효
-                Note over M: selector.health_core_map에 검증된 rule 추가
-            end
-        end
-    end
-    M->>R: advertise(output_topic, 1)
-        R-->>M: RosIO.publisher
-        M->>N: PipelineNode(config, buffer, assembler, checker, policy, selector, cores, message_builder, io)
-        alt max_health_checks=0·invalid mode·OnInput trigger가 등록 input 아님
-            N-->>M: invalid_argument
-        else 정상 생성
-            N-->>M: node
-            Note over N: helper는 value member, core 상태 유지<br/>InputBuffer(capacity=0)도 생성 실패
-            Note over M,CB: callbacks=RosCallbacks{node}
-            M->>R: subscribe(primary_topic/auxiliary_topic/section, 1, callbacks)
-            opt Periodic
-                M->>R: createSteadyTimer(period, onPeriodic, callbacks)
-                R-->>M: timer
-            end
-            M->>R: ros::spin()
-            Note over CB,T: 동일 callback queue에서 직렬 처리
-        end
-    end
-    opt 위 초기화/연결에서 std::exception
-        M->>M: ROS_FATAL_STREAM(error.what())
-        Note over M,T: 지역 ROS handle 소멸, main return 1<br/>정상 spin 종료는 return 0
-    end
-
-    loop 초기화 성공 후 ros::spin()의 직렬 callback 처리
-        alt section callback
-            SE->>CB: onSection(msg)
-            CB->>N: onSection(Section(true, state, stamp, frame))
-            N->>B: storeRawSection(section)
-            Note over B,N: 최신 raw section 1개 보관 후 callback 종료<br/>section 자체는 process trigger가 아님
-        else primary 또는 auxiliary callback
-            U->>CB: onPrimary(msg) / onAuxiliary(msg)
-            CB->>CB: decodeInput(*msg)
-            CB->>N: onInput(input, value)
-            N->>I: readClocks()
-            I-->>N: Clocks(ros_ns, steady_ns)
-            N->>B: pushInput(input, value, clocks)
-            alt 등록되지 않은 input
-                B-->>N: invalid_argument
-                N->>N: finish(Exception, 0, reason)
-                N->>I: report(report)
-                Note over N: 현재 callback 종료·process 호출 없음
-            else 등록된 input
-                Note over B: 원본·stamp·receipt_steady_ns·sample_id 저장<br/>값 검사 없음
-                opt queue.size greater than capacity
-                    Note over B: pop_front(): 가장 먼저 수신한 sample 1개 폐기<br/>해당 input의 evictions 증가 (예제 규칙)
-                end
-                B-->>N: Sample(id, stamp_ns)
-                alt OnInput이고 input=trigger_input
-                    Note over N: 이 callback 안에서 아래 공통 process를 호출<br/>trigger는 방금 수신한 input/id/stamp
-                else Periodic 또는 보조 input
-                    N-->>CB: Queued
-                    Note over N: 큐 적재 후 callback 종료·process 호출 없음
-                end
-            end
-        else periodic callback
-            T->>CB: onPeriodic(event)
-            CB->>N: onPeriodic()
-            alt mode가 Periodic이 아님
-                N->>N: finish(Skipped, 0, periodic trigger disabled)
-                N->>I: report(report)
-                Note over N: 현재 callback 종료·process 호출 없음
-            else Periodic
-                Note over N: 아래 공통 process를 호출<br/>trigger는 기본 생성한 Periodic Trigger
-            end
-        end
-        opt 현재 callback이 process를 호출하는 경로
-            N->>N: process(trigger)
-            N->>A: assemble(buffer, trigger)
-            A->>B: readView()
-            B-->>A: raw queues, evictions, raw section 복사
-            alt OnInput
-                loop 지정 input queue의 각 sample
-                    opt sample.id=trigger.sample_id
-                        Note over A: reference=해당 sample
-                    end
-                end
-            else Periodic
-                loop 모든 queue의 모든 sample
-                    opt reference 없음 또는 더 큰 stamp 또는 같은 stamp에서 더 큰 id
-                        Note over A: reference=해당 sample
-                    end
-                end
-            end
-            loop 각 input queue
-                alt OnInput의 지정 input
-                    Note over A: reference 그대로 배치 (없으면 Missing)
-                else 다른 input 또는 Periodic
-                    loop queue의 각 sample
-                        opt stamp 거리가 작음 또는 같은 거리에서 더 큰 id
-                            Note over A: 가장 가까운 sample 배치<br/>빈 queue는 Missing·나이/값으로 제외하지 않음
-                        end
-                    end
-                end
-                Note over A: token에 선택 id 저장 (Missing=0)
-            end
-            Note over A: context.stamp_ns/frame은 reference sample에서 보존
-            A-->>N: Snapshot(data, context, token, is_new)
-            alt OnInput이고 snapshot.is_new=false
-                N->>N: finish(Skipped, 0, bundle already attempted)
-                N->>I: report(report)
-                Note over N: 중복 bundle은 process return
-            else 새 callback bundle 또는 Periodic
-                Note over N,H: snapshot을 1회 조립한 뒤<br/>checks=0, 작업용 data를 계속 사용
-                N->>I: readClocks()
-                I-->>N: health_clocks
-                loop checks가 max_health_checks 미만이고 settled=false
-                    Note over N: checks += 1
-                    N->>H: healthCheck(data, context, health_clocks)
-                    Note over H: 매 회차 새 Health: inputs=[]<br/>section=UNKNOWN, 이전 해결 오류를 current에 누적하지 않음
-                    loop 각 input
-                        alt 현재 working slot 없음
-                            Note over H: current issues += Missing
-                        else slot 있음
-                            H->>H: checkValues(slot.sample, health_clocks)
-                            opt stamp가 0 이하
-                                Note over H: issues += InvalidStamp
-                            end
-                            opt stamp가 ros_now보다 미래
-                                Note over H: issues += FutureStamp
-                            end
-                            opt frame이 limits.frame과 다름
-                                Note over H: issues += FrameMismatch
-                            end
-                            alt value=NaN
-                                Note over H: issues += NaN
-                            else value=Inf
-                                Note over H: issues += Inf
-                            else value greater than upper
-                                Note over H: issues += OutRangePositive
-                            else value less than lower
-                                Note over H: issues += OutRangeNegative
-                            end
-                            H-->>H: current issue vector
-                            opt stamp greater than 0이고 ros age가 stale_ns 초과
-                                H->>H: exceeds(ros_ns, stamp_ns, stale_ns)
-                                Note over H: current issues += Stale
-                            end
-                        end
-                        alt 현재 input 없음
-                            Note over H: timeout 기준=started_steady_ns
-                        else 현재 input 있음
-                            Note over H: timeout 기준=slot.sample.receipt_steady_ns
-                        end
-                        H->>H: exceeds(steady_ns, 기준, receive_timeout_ns)
-                        opt true
-                            Note over H: current issues += ReceiveTimeout
-                        end
-                    end
-                    loop i=0부터 inputs.size() 미만
-                        loop j=i+1부터 inputs.size() 미만
-                            opt 두 input이 존재하고 절대 stamp 차이가 max_skew_ns 초과
-                                loop input=i, j
-                                    H->>H: std::find(issues.begin(), issues.end(), Kind::Skew)
-                                    H-->>H: iterator
-                                    opt iterator=issues.end()
-                                        Note over H: issues에 Skew 추가
-                                    end
-                                end
-                            end
-                        end
-                    end
-                    alt raw section 없음
-                        Note over H: section=UNKNOWN
-                    else section frame이 map 아님·stamp 0 이하·미래 stamp
-                        Note over H: invalid_section=true, section=UNKNOWN (예제 규칙)
-                    else section header 유효
-                        Note over H: section=raw.state<br/>해당 enum의 config 매핑 여부는 Selector가 판정
-                    end
-                    H-->>N: Health(current issues, section, evictions)
-                    N->>I: reportHealth(health, checks)
-                    Note over I: current issues·invalid section·누적 eviction을 동기 진단
-                    N->>P: apply(data, health)
-                    P->>P: node_pipeline::highestPriorityIssue(health, priority, issue)
-                    loop 모든 input의 모든 issue
-                        opt priority(input, kind)가 현재 best_rank보다 큼
-                            Note over P: issue=이 오류, best_rank=rank<br/>rank 음수는 dismiss, 동률이면 이전 선택 유지
-                        end
-                    end
-                    P-->>P: 처리할 issue 있음 / 없음
-                    alt 처리할 issue 없음 (AllGreen 또는 dismiss issue만 남음)
-                        P-->>N: false
-                        Note over N: settled=true<br/>break
-                    else issue.kind=OutRangePositive
-                        P->>UP: operator()(data, issue)
-                        Note over UP: data.inputs[index(issue.input)].sample.message.value=upper
-                        UP-->>P: void
-                        P-->>N: true
-                    else issue.kind=OutRangeNegative
-                        P->>LO: operator()(data, issue)
-                        Note over LO: data.inputs[index(issue.input)].sample.message.value=lower
-                        LO-->>P: void
-                        P-->>N: true
-                    else InvalidStamp/FutureStamp/FrameMismatch/NaN/Inf
-                        P->>RM: operator()(data, issue)
-                        Note over RM: data.inputs[index(issue.input)].present=false
-                        RM-->>P: void
-                        P-->>N: true
-                    else 그 외 issue에 nonnegative rank를 설정함
-                        P->>RM: operator()(data, issue)
-                        Note over RM: data.inputs[index(issue.input)].present=false
-                        RM-->>P: void
-                        P-->>N: true
-                    end
-                end
-                alt settled=false
-                    N->>N: finish(Rejected, checks, health check limit)
-                    N->>I: report(report)
-                else settled=true
-                        N->>S: select(health.section, health)
-                        S->>S: section_core_map.find(section)
-                        S-->>S: base
-                        opt base != section_core_map.end()
-                            Note over S: selection=Selection(true, base.core)
-                        end
-                        loop health_core_map의 각 rule
-                            break rule.when이 비어 있음
-                                S-->>N: throw std::invalid_argument(empty health when)
-                            end
-                            S->>S: std::all_of(rule.when.begin(), rule.when.end(), predicate)
-                            loop when의 condition (첫 불일치에서 종료)
-                                S->>S: health.inputs.at(index(condition.input))
-                                S->>S: std::find(issues.begin(), issues.end(), condition.kind)
-                                S-->>S: iterator
-                            end
-                            S-->>S: matches
-                            opt matches=true
-                                alt best 없음 또는 rule.priority > best.priority
-                                    Note over S: best=rule, tied=false
-                                else rule.priority=best.priority
-                                    Note over S: tied=true
-                                end
-                            end
-                        end
-                        break tied=true
-                            S-->>N: throw std::invalid_argument(ambiguous health_core_map priority)
-                        end
-                        opt best 있음
-                            Note over S: selection=Selection(true, best.core)
-                        end
-                        S-->>N: selection
-                        alt selected=false
-                            N->>N: finish(NoCore, checks, no compatible core)
-                            N->>I: report(report)
-                        else selected=true
+                        D->>N: before()
+                        opt attempted=false
                             N->>A: markAttempted(snapshot.token)
-                            N->>C: process(selection.id, data)
-                            alt id=Primary
-                                C->>K: primary.process(data.inputs[index(Input::Primary)].sample.message)
-                            else id=Auxiliary
-                                C->>K: auxiliary.process(data.inputs[index(Input::Auxiliary)].sample.message)
-                            end
-                            activate K
-                            Note over K: 선택된 input의 계산값만 복사하고 updates_ 증가<br/>health를 받지 않음·계산 상태는 다음 frame에도 유지
-                            K-->>C: output
-                            deactivate K
-                            C-->>N: output
-                                    N->>MB: build(output, context)
-                                    Note over MB: context.stamp_ns/frame으로 header 구성<br/>output.value를 vector.x에 설정
-                                    MB-->>N: message
-                                    N->>I: publish(message)
-                                    I->>O: publisher.publish(message)
-                                    I-->>N: void
-                                    N->>N: finish(Published, checks, empty reason)
-                                    N->>I: report(report)
                         end
+                        D->>C: cores.primary
+                        C-->>D: core
+                        D->>K: core.process(data.message〈Message〉(0))
+                        K-->>D: value
+                        D->>D: wrapResult(value, origins)
+                        D-->>D: result
+                    else case CoreId::Auxiliary
+                        D->>D: data.hasInputs(required_auxiliary)
+                        D-->>D: present
+                        break present=false
+                            D-->>N: false
+                            N->>N: finish(NoCore, checks, required core input missing)
+                            N->>IO: report(report)
+                        end
+                        D->>N: before()
+                        opt attempted=false
+                            N->>A: markAttempted(snapshot.token)
+                        end
+                        D->>C: cores.auxiliary
+                        C-->>D: core
+                        D->>K: core.process(data.message〈Message〉(1))
+                        K-->>D: value
+                        D->>D: wrapResult(value, origins)
+                        D-->>D: result
+                    else 미등록 Core ID
+                        D-->>N: throw std::invalid_argument
+                    end
+                    D-->>N: true
+                    N->>N: replaceInputs(snapshot, result)
+                    alt 반환 슬롯 원본 대응 개수·인덱스 오류
+                        N-->>N: throw std::invalid_argument / std::out_of_range
+                    else 원본 대응 유효
+                        Note over N: snapshot.data.inputs 교체
+                    end
                 end
+                N->>N: snapshot.data.message〈IO::MessageType〉(0)
+                alt 최종 입력 슬롯 Missing 또는 발행 타입 불일치
+                    N-->>N: throw std::invalid_argument
+                else 발행 타입 일치
+                    N-->>N: message
+                end
+                N->>MB: injectHeader(message, snapshot.context)
+                N->>IO: publish(message)
+                IO->>O: publisher.publish(message)
+                N->>N: finish(Published, checks, empty reason)
+                N->>IO: report(report)
             end
         end
     end
 ```
 
-## 라이브러리 사용
+| 객체·메서드 | 소유·책임과 구현 위치 |
+| --- | --- |
+| `RosCallbacks` | 구독 메시지를 `retainMessage()` 후 `onInput()`에 전달하고 section은 `onSection()`으로 저장한다. 기존 연결 위치는 `templates/ros_node.cpp`다. |
+| `PipelineNode` | 최초 조립·중복 확인·시각 조회 후 n개 스테이지를 순회한다. 각 회차는 현재 스냅샷으로 검사·보정·선택·필수 입력 확인·Core 호출·스냅샷 전달을 수행한다. 중복·검사 한도·미선택·Missing은 `finish()`와 `IO::report()`로 이번 처리를 종료한다. 스테이지 반복의 구현 위치는 `include/node_pipeline/pipeline.hpp`다. |
+| `InputBuffer`·`SnapshotAssembler` | 원본 메시지와 수신 시각을 보존하고 최초 스냅샷·token을 조립한다. `markAttempted()`는 첫 Core의 실제 호출 직전에 한 번 수행한다. `include/node_pipeline/components.hpp` |
+| 스테이지별 `HealthChecker`·`InputPolicy`·`CoreSelector` | 각 스테이지의 입력 계약·설정을 사용한다. 모든 재검사의 시각은 `health_clocks`이며, 선택은 해당 스테이지의 현재 입력 health에 적용한다. 공통 컴포넌트 위치는 `include/node_pipeline/components.hpp`다. |
+| `CoreSet` | `cores`는 CoreSet 객체다. Pipeline의 dispatch는 `cores.primary`·`cores.auxiliary` 멤버를 참조해 `core`를 얻고 해당 Core의 `process()`를 직접 호출한다. CoreSet은 지속 Core 객체를 생성·소유하며 스테이지 순회·검사·선택·계산을 수행하지 않는다. |
+| Core ID별 `case` | Primary의 `required_primary={0}`, Auxiliary의 `required_auxiliary={1}`을 해당 회차의 슬롯에서 검사하고 실제 개별 인자로 호출한다. `stage.process()` adapter는 해당 단계의 `processCore()`에 연결된다. 등록된 ID마다 명시적인 `case`를 둔다. |
+| `replaceInputs(snapshot, result)` | `include/node_pipeline/stages.hpp`에 구현되어 있다. 단일 반환은 한 슬롯, pair·tuple 반환은 개별 슬롯으로 감싸 `data.inputs`만 교체하고 `context`·`token`·`is_new` 등 나머지 정보를 보존한다. 수정·패스스루 반환은 대응 입력 슬롯의 시간 정보를 상속하고 새 계산값은 시간 정보를 비워 둔다. 마지막 반환값에도 같은 처리를 적용한다. Core의 계산값·개별 인자 계약을 변경하지 않는다. |
+| 각 Core | 슬롯에서 꺼낸 실제 메시지·중간 변수로 계산하며 내부 상태를 유지한다. 입력 검사·헤더 주입·스냅샷 생성·다음 단계 실행은 수행하지 않는다. |
+| `RosHeaderInjector`·`RosIO` | 전체 루프가 끝난 뒤 최종 메시지를 꺼내 원본 context로 헤더만 주입하고 한 번 발행한다. 중간값에 헤더를 주입하거나 발행하지 않는다. `include/node_pipeline/ros.hpp`와 실행 노드의 HeaderInjector |
 
-실행 패키지는 `node_pipeline`에 의존하고 공개 헤더를 include한다. `ros.hpp` 사용 시 roscpp 의존성을 추가한다.
-가이드 템플릿을 실행 파일 target이나 bringup에 등록하지 않는다. 실행 패키지에서 작성한 소스만 빌드한다.
+n개 스테이지를 갖는 노드는 위의 **health/policy → config로 Core 선택 → case별 필수 입력 검사 → Core.process() → 반환값으로 스냅샷 입력 교체** 부분을 n번 반복한다. 최초 조립·중복 확인·`readClocks()`·첫 호출의 시도 token 기록과 루프 밖의 최종 헤더 주입·발행은 한 번만 수행한다.
+
+## 스테이지 연결 API
+
+```cpp
+using Context = Buffer::ContextType;
+std::vector<node_pipeline::Stage<CoreSet, Context>> stages{
+  node_pipeline::makeStage<CoreSet, Context, Stage1Data>(checker1, policy1, selector1, processStage1),
+  node_pipeline::makeStage<CoreSet, Context, Stage2Data>(checker2, policy2, selector2, processStage2),
+  node_pipeline::makeStage<CoreSet, Context, Stage3Data>(checker3, policy3, selector3, processStage3)};
+```
+
+`Stage1Data`는 실제 구독 입력, 후속 Data는 해당 스테이지의 입력 변수 타입·순서다. case는 `data.hasInputs({필수 인덱스...})` 뒤 `before()`를 호출하고, `data.message<실제 타입>(인덱스)`를 Core의 개별 인자로 전달한다. 반환값은 `wrapResult(value, origins)`로 연결한다. `origins`는 반환 변수 순서대로 대응 입력 인덱스 또는 새 값의 `-1`을 적으며 모두 새 값이면 생략한다. 존재하는 `lanelet::Optional` 값이 비어 있는 경우도 payload 슬롯 자체의 Missing과 구분한다.
+
+스테이지 수·입력 계약·검사·정책·Selector와 토픽 연결은 리드가 제공한다. Core 등록은 그 구조 안에서 [허용 diff](CORE_REGISTRATION.md)만 적용한다.

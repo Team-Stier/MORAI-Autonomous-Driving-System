@@ -1,4 +1,4 @@
-#include <velocity_planner/core_set.hpp>
+#include <velocity_planner/core_dispatch.hpp>
 #include <gtest/gtest.h>
 #include <cmath>
 
@@ -33,13 +33,21 @@ TEST(PlainVelocity, InjectsBothSpeedsAndTransformsAllPoses) {
   velocity_planner::CoreSet cores{velocity_planner::PlainVelocity60{}, velocity_planner::PlainVelocity100{}};
   velocity_planner::Data data;
   data.get<0>().sample.message = std::make_shared<const interfaces::Path>(path);
+  node_pipeline::StageData stage_data;
+  stage_data.update(data);
+  node_pipeline::CoreResult result;
+  int calls = 0;
+  const auto before = [&] { ++calls; };
   for (const auto id : {velocity_planner::CoreId::PlainVelocity60, velocity_planner::CoreId::PlainVelocity100}) {
-    EXPECT_FALSE(data.hasInputs(cores.requiredInputs(id)));
+    EXPECT_FALSE(velocity_planner::processCore(cores, id, stage_data, result, before));
   }
+  EXPECT_EQ(0, calls);
   data.get<4>().sample.message = std::make_shared<const tf2_msgs::TFMessage>(tf);
+  stage_data.update(data);
   for (const auto id : {velocity_planner::CoreId::PlainVelocity60, velocity_planner::CoreId::PlainVelocity100}) {
-    ASSERT_TRUE(data.hasInputs(cores.requiredInputs(id)));
-    const auto output = cores.process(id, data);
+    ASSERT_TRUE(velocity_planner::processCore(cores, id, stage_data, result, before));
+    const auto stage_output = result(stage_data);
+    const auto& output = stage_output.message<interfaces::Path>(0);
     const double speed_mps = (id == velocity_planner::CoreId::PlainVelocity60 ? 60.0 : 100.0) / 3.6;
     EXPECT_TRUE(output.header.stamp.isZero());
     EXPECT_TRUE(output.header.frame_id.empty());
@@ -58,6 +66,7 @@ TEST(PlainVelocity, InjectsBothSpeedsAndTransformsAllPoses) {
       EXPECT_EQ(path.points[i].pose.header, point.pose.header);
     }
   }
+  EXPECT_EQ(2, calls);
   EXPECT_EQ(-1, path.points.front().velocity);
   EXPECT_EQ(10, path.points.front().pose.pose.position.x);
 }

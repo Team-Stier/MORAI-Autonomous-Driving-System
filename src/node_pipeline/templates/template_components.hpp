@@ -1,8 +1,8 @@
 // 가이드 전용: 실행·빌드 대상이 아니다. TODO: 실제 노드 계약으로 구체화한다.
 #pragma once
 // 템플릿는 공통 구현을 재작성하지 않고 공개 라이브러리를 조합한다.
-#include <node_pipeline/components.hpp>
-#include "core_set.hpp"
+#include <node_pipeline/pipeline.hpp>
+#include "core_dispatch.hpp"
 namespace pipeline_template {
 namespace np = node_pipeline;
 // enum 순서는 입력 tuple의 순서와 같다.
@@ -34,6 +34,12 @@ template<class Message, class Access, class OutputMessage = Message> struct Comp
   using Policy = np::InputPolicy<Input, np::ClampUpper<Access>, np::ClampLower<Access>>;
   using Selector = np::CoreSelector<Input, CoreId>;
   using CoreSet = pipeline_template::CoreSet<Message, Access, OutputMessage>;
+  using Data = np::Data<Message, Message>;
+  using Stage = np::Stage<CoreSet, typename Buffer::ContextType>;
+  static Stage stage(Checker checker, Policy policy, Selector selector) {
+    return np::makeStage<CoreSet, typename Buffer::ContextType, Data>(std::move(checker), std::move(policy),
+      std::move(selector), processCore<Message, Access, OutputMessage>);
+  }
   // strategy 객체와 한도만 연결한다.
   static Policy policy(const np::HealthLimits& limits) { return {{limits.upper}, {limits.lower}}; }
   // 템플릿 기본 선택 표다. ROS config는 이 표를 덮어쓴다.
@@ -44,7 +50,7 @@ template<class Message, class Access, class OutputMessage = Message> struct Comp
                              {{{Input::Auxiliary, Kind::Missing}}, 90, CoreId::Primary}};
     return result;
   }
-  template<class IO, class Builder> using Node = np::PipelineNode<Buffer, Assembler, Checker, Policy, Selector, CoreSet, Builder, IO>;
+  template<class IO, class Builder> using Node = np::PipelineNode<Buffer, Assembler, CoreSet, Builder, IO>;
 };
 // ROS 없는 가이드에서도 payload를 바꾸지 않고 메타데이터만 주입한다.
 struct DemoHeaderInjector {

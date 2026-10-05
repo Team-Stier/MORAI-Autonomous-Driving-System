@@ -11,25 +11,26 @@ inputs:
   gps: {stale_after_sec: 0.1, receive_timeout_sec: 0.1}
   imu: {stale_after_sec: 0.06, receive_timeout_sec: 0.06}
   competition_status: {stale_after_sec: 0.06, receive_timeout_sec: 0.06}
-section_core_map:
-  "0": full_ekf.hpp
-  "1": full_ekf.hpp
-  "2": full_ekf.hpp
-  "3": full_ekf.hpp
-  "4": full_ekf.hpp
-  "5": full_ekf.hpp
-  "6": full_ekf.hpp
-  "7": full_ekf.hpp
-  "8": full_ekf.hpp
-  "9": full_ekf.hpp
-  "10": full_ekf.hpp
-  "11": full_ekf.hpp
-  "12": full_ekf.hpp
-  "13": full_ekf.hpp
-  "14": full_ekf.hpp
-  "15": full_ekf.hpp
-  "16": full_ekf.hpp
-health_core_map: []
+stage1:
+  section_core_map:
+    "0": full_ekf.hpp
+    "1": full_ekf.hpp
+    "2": full_ekf.hpp
+    "3": full_ekf.hpp
+    "4": full_ekf.hpp
+    "5": full_ekf.hpp
+    "6": full_ekf.hpp
+    "7": full_ekf.hpp
+    "8": full_ekf.hpp
+    "9": full_ekf.hpp
+    "10": full_ekf.hpp
+    "11": full_ekf.hpp
+    "12": full_ekf.hpp
+    "13": full_ekf.hpp
+    "14": full_ekf.hpp
+    "15": full_ekf.hpp
+    "16": full_ekf.hpp
+  health_core_map: []
 # 모든 issue의 strategy는 Remove로 고정한다. 세 입력이 모두 Green일 때만 Core를 호출한다.
 ekf:
   acceleration_noise: 0.03
