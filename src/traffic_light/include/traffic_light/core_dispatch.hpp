@@ -3,9 +3,16 @@
 #include <node_pipeline/stages.hpp>
 #include <stdexcept>
 namespace traffic_light {
-// TODO: 등록 Core의 필수 입력 인덱스와 process 인자를 case에 연결한다.
-inline bool processCore(CoreSet&, CoreId, const node_pipeline::StageData&,
-                        node_pipeline::CoreResult&, const node_pipeline::BeforeCore&) {
-  throw std::logic_error("no registered core");
+inline bool processCore(CoreSet& cores, CoreId id, const node_pipeline::StageData& data,
+                        node_pipeline::CoreResult& result, const node_pipeline::BeforeCore& before) {
+  switch (id) {
+    case CoreId::YoloTrafficLight:
+      if (!data.hasInputs({0})) return false;
+      before();
+      result = node_pipeline::wrapResult(
+          cores.yolo_traffic_light.process(data.message<sensor_msgs::CompressedImage>(0)));
+      return true;
+  }
+  throw std::invalid_argument("unknown traffic light core");
 }
 }  // namespace traffic_light

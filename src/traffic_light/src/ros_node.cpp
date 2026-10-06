@@ -1,4 +1,5 @@
 #include <traffic_light/components.hpp>
+#include <traffic_light/config.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = traffic_light;
 namespace np = node_pipeline;
@@ -26,7 +27,7 @@ struct RosCallbacks {
 };
 int main(int argc, char** argv) {
   ros::init(argc, argv, "traffic_light_node");
-  ros::NodeHandle nh, params("~");
+  ros::NodeHandle nh, params("~"), yolo_params(params, "yolo_traffic_light");
   auto selector = Components::selector();
   auto policy = Components::policy(np::HealthLimits{});
   const auto settings = np::loadRosConfig(nh, params,
@@ -36,7 +37,8 @@ int main(int argc, char** argv) {
   ros::NodeHandle stage1_params(params, "stage1");
   np::loadStageConfig(stage1_params,
     std::map<std::string, pkg::Input>{{"image", pkg::Input::Image}},
-    std::map<std::string, pkg::CoreId>{}, selector, policy);
+    std::map<std::string, pkg::CoreId>{{"yolo_traffic_light_core.hpp", pkg::CoreId::YoloTrafficLight}}, selector, policy);
+  const auto yolo = pkg::loadTrafficLightParameters(yolo_params);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
   limits[0].frame = "camera_7_optical_frame";
@@ -45,7 +47,8 @@ int main(int argc, char** argv) {
   IO io{nh.advertise<interfaces::TrafficLight>("/traffic_light", 1)};
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
     {np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
-      Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)}, {}, {}, io);
+      Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)},
+    pkg::CoreSet(yolo), {}, io);
   RosCallbacks callbacks{node};
   const auto sub_image = nh.subscribe("/image/camera_7/compressed", 1, &RosCallbacks::onImage, &callbacks);
   const auto section = nh.subscribe("/section_annotation", 1, &RosCallbacks::onSection, &callbacks);

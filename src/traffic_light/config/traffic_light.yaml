@@ -10,23 +10,34 @@ max_sensor_skew_sec: 0.1
 # 빈 문자열은 Core 미등록을 뜻한다. 등록 후 해당 파일 이름으로 변경한다.
 stage1:
   section_core_map:
-    "0": ""
-    "1": ""
-    "2": ""
-    "3": ""
-    "4": ""
-    "5": ""
-    "6": ""
-    "7": ""
-    "8": ""
-    "9": ""
-    "10": ""
-    "11": ""
-    "12": ""
-    "13": ""
-    "14": ""
-    "15": ""
-    "16": ""
+    "0": yolo_traffic_light_core.hpp
+    "1": yolo_traffic_light_core.hpp
+    "2": yolo_traffic_light_core.hpp
+    "3": yolo_traffic_light_core.hpp
+    "4": yolo_traffic_light_core.hpp
+    "5": yolo_traffic_light_core.hpp
+    "6": yolo_traffic_light_core.hpp
+    "7": yolo_traffic_light_core.hpp
+    "8": yolo_traffic_light_core.hpp
+    "9": yolo_traffic_light_core.hpp
+    "10": yolo_traffic_light_core.hpp
+    "11": yolo_traffic_light_core.hpp
+    "12": yolo_traffic_light_core.hpp
+    "13": yolo_traffic_light_core.hpp
+    "14": yolo_traffic_light_core.hpp
+    "15": yolo_traffic_light_core.hpp
+    "16": yolo_traffic_light_core.hpp
   health_core_map: []
 inputs:
   image: {stale_after_sec: 0.100000002, receive_timeout_sec: 0.100000002}
+yolo_traffic_light:
+  model_path: /home/stier/traffic_light_training/export/traffic_light_yolo11m.onnx
+  manifest_path: /home/stier/traffic_light_training/export/traffic_light_yolo11m.json
+  input_width: 1280
+  input_height: 1280
+  confidence: {go: 0.40, left_turn: 0.40, prepare_stop: 0.35, stop: 0.40}
+  nms_iou: 0.45
+  ambiguity_margin: 0.05
+  history_size: 5
+  minimum_votes: 3
+  allow_cpu_fallback: false
