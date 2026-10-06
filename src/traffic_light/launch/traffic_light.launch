@@ -1,5 +1,9 @@
 <launch>
   <node pkg="traffic_light" type="traffic_light_node" name="traffic_light_node" output="screen">
     <rosparam command="load" file="$(find traffic_light)/config/traffic_light.yaml"/>
+    <param name="yolo_traffic_light/model_path"
+           value="$(find traffic_light)/models/traffic_light_yolo11m.onnx"/>
+    <param name="yolo_traffic_light/manifest_path"
+           value="$(find traffic_light)/models/traffic_light_yolo11m.json"/>
   </node>
 </launch>
