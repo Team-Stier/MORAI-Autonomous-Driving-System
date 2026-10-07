@@ -176,6 +176,17 @@ class Dbscan {
  public:
   explicit Dbscan(DbscanParameters parameters) : parameters_(parameters) {}
 
+  // #FRAME_CONTRACT
+  // 이 Core는 입력 PointCloud2의 좌표를 다른 frame으로 변환하지 않는다.
+  // production 입력은 roll/pitch가 제거된 base_link_level이므로 ROI 범위,
+  // VoxelGrid의 cell, DBSCAN 거리·cluster point와 OBB center·orientation은
+  // 모두 그 수평 frame 기준이다. mounting TF와 자세 보정은 upstream에서
+  // 이미 적용되었으므로 여기서 다시 적용하지 않는다.
+  // OBB yaw는 base_link_level의 +x/+y 평면 기준이며 bbox_size는 OBB 자체
+  // local 축의 전체 길이이다. payload만 반환하고 Pipeline이 같은 계산 frame과
+  // 입력 stamp를 최종 /objects 헤더에 주입한다. header 이름만 base_link로
+  // 변경하거나 결과를 최신 자세로 역회전하면 좌표와 frame 계약이 어긋난다.
+  // 다른 frame이 필요한 downstream이 자신의 경계에서 시각에 맞게 변환한다.
   interfaces::Objects process(const sensor_msgs::PointCloud2& cloud) {
     Cloud xyz;
     pcl::fromROSMsg(cloud, xyz);

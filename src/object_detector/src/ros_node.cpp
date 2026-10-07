@@ -1,5 +1,6 @@
 #include <object_detector/components.hpp>
 #include <object_detector/config.hpp>
+#include <object_detector/frame_contract.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = object_detector;
 namespace np = node_pipeline;
@@ -10,12 +11,7 @@ struct RosAccess {
 using Message = pkg::Message;
 using Components = pkg::Components<RosAccess>;
 using IO = np::RosIO<Message>;
-struct RosHeaderInjector {
-  void injectHeader(interfaces::Objects& message, const np::Context<1>& context) const {
-    message.header.stamp.fromNSec(context.stamp_ns);
-    message.header.frame_id = "base_link";
-  }
-};
+using RosHeaderInjector = pkg::HeaderInjector;
 using Node = Components::Node<IO, RosHeaderInjector>;
 struct RosCallbacks {
   Node& node;
@@ -43,7 +39,16 @@ int main(int argc, char** argv) {
   const auto dbscan_parameters = pkg::loadDbscanParameters(params);
   std::array<np::HealthLimits, 1> limits;
   limits.fill(settings.health);
-  limits[0].frame = "base_link";
+  // #BASE_LINK_LEVEL
+  // /velodyne_points/leveled는 lidar_leveler가 장착 TF와 roll/pitch 보정을 한 번
+  // 적용한 base_link_level 점군이다. 원점과 yaw는 차체 base_link와 같지만
+  // roll/pitch가 제거되므로 두 frame의 좌표값을 서로 같은 것으로 볼 수 없다.
+  // ROI x/y/z 범위, VoxelGrid, DBSCAN 거리와 OBB 중심·방향은 이 수평 frame에서
+  // 계산한다. 여기서 mounting offset이나 차량 자세를 다시 적용하면 이중 보정이 된다.
+  // 잘못 base_link로 표시된 cloud는 FrameMismatch로 거부한다. 헤더만 수정하여
+  // 통과시키지 말고 실제 입력을 계약에 맞게 제공해야 한다. 출력도 같은 frame이며
+  // 다른 frame이 필요한 소비 모듈이 자신의 입력 경계에서 timestamp에 맞게 변환한다.
+  limits[0].frame = pkg::kPerceptionFrame;
   limits[0].stale_ns = np::readDurationNs(params, "inputs/cloud/stale_after_sec", 0.3);
   limits[0].receive_timeout_ns = np::readDurationNs(params, "inputs/cloud/receive_timeout_sec", 0.3);
   IO io{nh.advertise<interfaces::Objects>("/objects", 1)};

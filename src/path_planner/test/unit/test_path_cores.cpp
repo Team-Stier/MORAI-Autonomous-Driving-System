@@ -279,10 +279,11 @@ TEST(PathStages, ThreeStagePipelinePublishesOnceAndStopsWhenObjectsAreMissing) {
   np::HealthLimits common;
   std::array<np::HealthLimits, 5> raw_limits;
   raw_limits.fill(common);
-  raw_limits[1].frame = raw_limits[2].frame = "base_link";
+  raw_limits[1].frame = "base_link";
+  raw_limits[2].frame = pp::kObjectsFrame;
   std::array<np::HealthLimits, 6> prediction_limits{{raw_limits[0], raw_limits[1], raw_limits[2], raw_limits[3], raw_limits[4], common}};
   std::array<np::HealthLimits, 7> local_limits{{raw_limits[0], raw_limits[1], raw_limits[2], raw_limits[3], raw_limits[4], common, common}};
-  local_limits[6].frame = "base_link";
+  local_limits[6].frame = pp::kObjectsFrame;
   auto output = std::make_shared<std::vector<interfaces::Path>>();
   auto headers = std::make_shared<std::size_t>(0);
   using Context = TestComponents::Buffer::ContextType;
@@ -309,7 +310,7 @@ TEST(PathStages, ThreeStagePipelinePublishesOnceAndStopsWhenObjectsAreMissing) {
   EXPECT_EQ(*headers, 0u);
   interfaces::Objects objects;
   objects.header.stamp = ego.header.stamp;
-  objects.header.frame_id = "base_link";
+  objects.header.frame_id = "base_link_level";
   node.onInput(pp::InputTag<pp::Input::Objects>{}, objects);
   EXPECT_EQ(node.onPeriodic().status, np::ProcessStatus::Published);
   ASSERT_EQ(output->size(), 1u);
@@ -317,6 +318,52 @@ TEST(PathStages, ThreeStagePipelinePublishesOnceAndStopsWhenObjectsAreMissing) {
   EXPECT_EQ(output->front().header.stamp, ego.header.stamp);
   EXPECT_EQ(output->front().header.frame_id, "map");
   EXPECT_NEAR(lengthM(output->front()), 20.0, 1e-6);
+}
+
+
+TEST(PredictionFrameContract, KeepsLevelFrameInEverySampleAndAcceptsIt) {
+  interfaces::Objects objects;
+  objects.header.frame_id = "base_link_level";
+  objects.header.stamp.fromNSec(123456789);
+  interfaces::Object object;
+  object.position.x = 3.0;
+  object.position.y = -1.0;
+  object.position.z = 0.7;
+  object.bbox_pose.position = object.position;
+  object.bbox_pose.orientation.z = std::sin(0.2);
+  object.bbox_pose.orientation.w = std::cos(0.2);
+  object.bbox_size.x = 4.0;
+  objects.objects.push_back(object);
+  const auto predictions = pp::PredictionPassThrough{}.process(objects, pp::Route{});
+  for (const auto& sample : predictions) EXPECT_EQ(objects, sample);
+  np::HealthLimits limits;
+  limits.frame = pp::kObjectsFrame;
+  pp::Validator<TestAccess> validator;
+  std::vector<np::Kind> issues;
+  validator(objects, limits, issues);
+  EXPECT_TRUE(issues.empty());
+  issues.clear();
+  validator(predictions, limits, issues);
+  EXPECT_TRUE(issues.empty());
+}
+
+TEST(PredictionFrameContract, RejectsBodyFrameInObservationAndPrediction) {
+  interfaces::Objects objects;
+  objects.header.frame_id = "base_link";
+  np::HealthLimits limits;
+  limits.frame = pp::kObjectsFrame;
+  pp::Validator<TestAccess> validator;
+  std::vector<np::Kind> issues;
+  validator(objects, limits, issues);
+  ASSERT_EQ(1u, issues.size());
+  EXPECT_EQ(np::Kind::FrameMismatch, issues.front());
+  objects.header.frame_id = "base_link_level";
+  auto predictions = pp::PredictionPassThrough{}.process(objects, pp::Route{});
+  predictions[5].header.frame_id = "base_link";
+  issues.clear();
+  validator(predictions, limits, issues);
+  ASSERT_EQ(1u, issues.size());
+  EXPECT_EQ(np::Kind::FrameMismatch, issues.front());
 }
 
 int main(int argc, char** argv) {

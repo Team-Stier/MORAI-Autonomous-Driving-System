@@ -2,7 +2,12 @@ execution_mode: on_input
 frequency_hz: 10.0
 queue_capacity: 8
 max_health_checks: 10
-frame: base_link
+# #FRAME_CONTRACT
+# ROI·VoxelGrid·DBSCAN·OBB는 입력 base_link_level 좌표에서 계산하고 /objects도
+# 같은 frame으로 발행한다. 장착 TF나 차량 roll/pitch를 다시 적용하지 않는다.
+# 차체 고정 base_link로 이름만 바꾸면 좌표값과 계약이 달라지므로 소비 모듈의
+# 입력 경계에서 메시지 시각에 맞는 실제 변환을 수행해야 한다.
+frame: base_link_level
 stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1

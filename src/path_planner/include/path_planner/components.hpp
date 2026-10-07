@@ -32,6 +32,11 @@ template<class Access> struct Validator {
     if (!limits.frame.empty() && Access::frame(m) != limits.frame) issues.push_back(np::Kind::FrameMismatch);
   }
   void operator()(const Route&, const np::HealthLimits&, std::vector<np::Kind>&) const {}
+  // #DOWNSTREAM_CONTRACT
+  // 예측 배열의 각 원소는 자체 Objects.header.frame_id를 가지므로 모든 원소를
+  // production expected frame인 base_link_level과 대조한다. 하나라도 차체
+  // base_link로 잘못 표시되면 FrameMismatch다. 이 검사는 좌표를 변환하지 않으며
+  // 필요한 frame 변환은 소비 알고리즘의 입력 경계에서 관측 stamp에 맞게 수행한다.
   void operator()(const PredictedObjects& predictions, const np::HealthLimits& limits, std::vector<np::Kind>& issues) const {
     if (!limits.frame.empty() && std::any_of(predictions.begin(), predictions.end(),
         [&](const interfaces::Objects& objects) { return Access::frame(objects) != limits.frame; }))

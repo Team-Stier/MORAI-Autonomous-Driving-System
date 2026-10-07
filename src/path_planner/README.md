@@ -41,9 +41,25 @@ Prediction Core의 반환과 LocalPath Core의 입력은 **Objects 메시지를 
 
 - `[0]`은 예측에 사용한 `/objects` 시각에서 0.5초 뒤, `[9]`는 5.0초 뒤의 객체 상태다. 목표 시각은 `objects.header.stamp + 0.5 × (i + 1)`초다.
 - 모든 원소의 header는 예측에 사용한 원본 `/objects`와 같다. `stamp`에 미래 시각이나 계산 완료 시각을 넣지 않는다.
-- 배열 인덱스는 예측 목표 시각을 나타내고 header는 예측에 사용한 관측의 기준 시각·좌표계를 나타낸다. 객체 상태는 원본 `/objects`의 `base_link` 좌표 기준으로 표현한다.
+- 배열 인덱스는 예측 목표 시각을 나타내고 header는 예측에 사용한 관측의 기준 시각·좌표계를 나타낸다. 객체 상태는 원본 `/objects`의 `base_link_level` 좌표 기준으로 표현한다.
 - 외부 배열의 길이는 항상 10이다. 객체가 없으면 각 원소의 `objects` 목록은 비어 있다.
 - 현재 등록된 PredictionPassThrough는 원본 Objects를 10개 원소에 그대로 복사한다. 위치·속도·가속도 등을 외삽하지 않는다. LocalPath는 예측 배열을 추가 인자로 받고 기존 중심선 경로 계산을 수행한다.
 
 노드는 지도와 체크포인트 파일을 읽고 설정 로더에서 해석해 Core 생성자에 주입한다. GlobalPath는 남은 체크포인트를 순서대로 경유하는 경로를 탐색하며 `/visualizer/global_path`에 중심선을 발행한다.
 LocalPath의 경로 길이는 `stage3/local_path/local_path_length_m`으로 설정하며 기본값은 20 m다.
+
+## 좌표계 계약
+
+### #DOWNSTREAM_CONTRACT — perception 객체를 그대로 전달
+
+입력 `/objects`와 PredictedObjects의 모든 원소는 `base_link_level`을 기대한다. 이 frame은 기존 차체 고정 `base_link`와 원점·yaw를 공유하지만 차량 roll/pitch가 제거된 수평 perception 좌표계이다. lidar_leveler가 mounting TF를 한 번 적용하고 점군을 수평화하며, ROI·VoxelGrid·DBSCAN·OBB와 `/objects`는 그 좌표를 유지한다.
+
+현재 PredictionPassThrough는 원본 객체와 header를 10개 원소로 그대로 복사하므로 좌표 변환을 추가하지 않는다. LocalPath는 예측 배열의 위치를 실제 장애물 회피 계산에 사용하지 않고 기존 map 중심선 경로를 계산한다. CompetitionVehicleStatus의 `base_link`, ego와 `/local_path`의 `map` 계약은 유지한다.
+
+### #FRAME_CONTRACT — 서로 다른 frame의 좌표를 혼합하지 않기
+
+객체 중심·bbox pose·유효한 속도·가속도는 `Objects.header.frame_id`를 따른다. bbox_size는 박스 자체 local 축의 전체 길이이다. base_link_level is a perception-frame contract. It is not an alias for base_link. Do not change frame_id from base_link_level to base_link without transforming the actual coordinates.
+
+### #NO_LEVEL_TO_BASE — 입력 경계에서 명시적으로 변환
+
+perception 내부에서는 OBB 계산 후 객체를 base_link로 역회전하지 않는다. 정확히 역회전하려면 해당 점군 수평화에 사용한 동일 timestamp의 roll/pitch 변환을 보존·연결해야 하고, 최신 차량 상태를 다시 사용하면 시간 불일치로 중심과 orientation 오차가 생길 수 있기 때문이다. 향후 tracking·prediction·회피·충돌 검사에서 base_link나 map이 필요하면 해당 알고리즘의 입력 경계에서 메시지 timestamp에 맞는 명시적인 TF 변환을 수행한다. 객체가 수평 frame이라는 사실을 무시하고 기존 차체 좌표로 가정하면 안 된다.

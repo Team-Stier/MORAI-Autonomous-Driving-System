@@ -7,8 +7,13 @@ class PredictionCore {
  public:
   using Result = PredictedObjects;
 
-  // Uniform planar turn in the observation's base_link frame.
-  // Input velocity and acceleration are available; tangential acceleration is ignored.
+  // #DOWNSTREAM_CONTRACT
+  // 이 미등록 계산 Core도 위치·속도·가속도를 원본 Objects.header.frame_id의
+  // 축 성분으로 사용하고 그 frame 안에서 평면 회전 운동을 예측한다.
+  // production 관측은 수평 base_link_level이며 차체 고정 base_link로 가정하거나
+  // 좌표 변환 없이 header 이름을 바꾸면 안 된다. 다른 frame이 필요하면 호출 모듈의
+  // 입력 경계에서 관측 stamp에 맞는 명시적인 변환을 먼저 수행해야 한다.
+  // 기존 계산은 유효한 속도·가속도를 전제하고 접선 가속도를 무시하며 그대로 유지한다.
   Result process(const interfaces::Objects& objects, const Route&) const {
     Result predictions;
     predictions.fill(objects);

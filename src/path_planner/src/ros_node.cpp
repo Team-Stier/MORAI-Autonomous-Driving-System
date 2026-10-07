@@ -66,7 +66,18 @@ int main(int argc, char** argv) {
   limits[1].frame = "base_link";
   limits[1].stale_ns = np::readDurationNs(params, "inputs/competition/stale_after_sec", 0.3);
   limits[1].receive_timeout_ns = np::readDurationNs(params, "inputs/competition/receive_timeout_sec", 0.3);
-  limits[2].frame = "base_link";
+  // #DOWNSTREAM_CONTRACT
+  // perception의 /objects는 base_link_level이다. 같은 뒷차축 원점과 yaw를
+  // 공유하더라도 차량 roll/pitch가 제거되어 차체 고정 base_link와 좌표축이 다르다.
+  // 현재 PredictionPassThrough는 좌표와 header를 그대로 복사하므로 예측 배열도
+  // base_link_level을 유지한다. 현재 LocalPath는 객체 위치를 실제 장애물 회피
+  // 계산에 사용하지 않고 map 중심선 경로만 계산하므로 변환을 추가하지 않는다.
+  // 향후 tracking·prediction·회피·충돌 검사는 객체를 base_link라고 가정하면 안 된다.
+  // Objects.header.frame_id를 확인하고 다른 frame이 필요하면 해당 알고리즘 입력
+  // 경계에서 메시지 timestamp에 맞는 명시적인 TF 변환을 수행해야 한다.
+  // 헤더 이름만 바꾸거나 최신 차량 자세로 역회전하면 frame 또는 시간 불일치가 생긴다.
+  // competition은 실제 차체 상태이므로 위 슬롯 1의 base_link 계약은 그대로 둔다.
+  limits[2].frame = pkg::kObjectsFrame;
   limits[2].stale_ns = np::readDurationNs(params, "inputs/objects/stale_after_sec", 0.3);
   limits[2].receive_timeout_ns = np::readDurationNs(params, "inputs/objects/receive_timeout_sec", 0.3);
   limits[3].frame = "map";
@@ -87,7 +98,11 @@ int main(int argc, char** argv) {
   const auto local_path = pkg::loadLocalPathParameters(stage3_params, global_path.map);
   std::array<np::HealthLimits, 6> stage2_limits{{limits[0], limits[1], limits[2], limits[3], limits[4], settings.health}};
   std::array<np::HealthLimits, 7> stage3_limits{{limits[0], limits[1], limits[2], limits[3], limits[4], settings.health, settings.health}};
-  stage3_limits[6].frame = "base_link";
+  // #DOWNSTREAM_CONTRACT
+  // 예측 원소는 원본 Objects.header와 좌표를 유지하므로 원본과 같은 frame을 검사한다.
+  // 여기서 base_link를 기대하면 정상적인 수평 perception 결과가 제거되어 후속
+  // LocalPath 호출이 막힌다. 검사 이름을 맞추는 것이며 객체를 회전하는 단계가 아니다.
+  stage3_limits[6].frame = pkg::kObjectsFrame;
   using Context = Components::Buffer::ContextType;
   const auto started = io.readClocks().steady_ns;
   std::vector<np::Stage<pkg::CoreSet, Context>> stages{

@@ -99,8 +99,70 @@ Pose와 TF의 orientation은 ROS `geometry_msgs/Quaternion`의 **`(x, y, z, w)`*
 | 원점 | **MORAI 차량 좌표계 원점**: 공식 정의상 좌우 뒷바퀴 축의 중점(뒷차축 중심) |
 | 축 | `+x` 전방, `+y` 좌측, `+z` 위쪽 |
 | 단위 | m |
-| 적용 대상 | `/velodyne_points/leveled`, `/objects`, `/local_path/velocity_injected` |
+| 적용 대상 | 차체·센서 장착 TF, `/local_path/velocity_injected` |
 
+
+#### 좌표계 계약 — perception
+
+##### #BASE_LINK_LEVEL — perception 수평 좌표계
+
+차량 차체가 roll/pitch하면 센서 좌표에서 본 지면과 물체도 기울어진다. RollPitchLeveler는 이 차체 기울기를 제거하여 ROI의 높이·범위, clustering 거리와 OBB의 수평 형상을 같은 수평 좌표에서 계산하도록 한다. 실제 도로 자체의 경사까지 평평하게 만드는 지면 추정 알고리즘은 아니다.
+
+기존 `base_link`는 차량 뒷차축 중심을 원점으로 하는 차체 고정 좌표계이며 차량과 함께 roll/pitch한다. `base_link_level`은 같은 원점과 차량 yaw를 공유하지만 roll/pitch는 0이다. +x는 yaw로 정해지는 수평 진행 방향, +y는 좌측, +z는 중력 반대 방향의 수직 위쪽이다. 단위는 m이고 두 frame의 축은 zero roll/pitch에서 일치한다.
+
+**base_link_level is a perception-frame contract. It is not an alias for base_link.**
+
+##### #LEVELING — 장착 변환과 자세 수평화
+
+`/tf_static`의 센서 장착 변환으로 `velodyne` 점을 `base_link`로 옮긴 다음 차량 roll/pitch를 적용하여 `base_link_level`로 표현한다. 장착 이동 `(1.5, 0, 1.403)` m와 장착 회전은 이 첫 변환에서 한 번만 적용한다. ROI·DBSCAN·OBB에서 센서 offset이나 차량 기울기를 다시 적용하지 않는다.
+
+##### #LEVELING_ROTATION — 회전 방향과 순서
+
+차량 자세 규약이 `R_world_body = Rz(yaw) Ry(pitch) Rx(roll)`이고 수평 frame의 자세가 `R_world_level = Rz(yaw)`이므로, `R_level_body = R_world_levelᵀ R_world_body = Ry(pitch) Rx(roll)`이다. 따라서 rad 단위 `setRPY(roll, pitch, 0)`을 사용한다. 실제 점의 처리식은 `p_level = Ry(pitch) Rx(roll) (R_mount p_raw + t_mount)`이며 mounting → roll → pitch 순서다. yaw 회전은 추가하지 않는다. 부호를 단순히 음수로 바꾸면 평평한 world ground의 기울기를 상쇄하지 못한다.
+
+##### #FRAME_CONTRACT — 계산과 발행의 기준
+
+production의 `/velodyne_points/leveled`, ROI, VoxelGrid, DBSCAN, OBB와 `/objects`는 모두 `base_link_level`을 사용한다. OBB yaw는 그 frame의 +x/+y 평면 기준이고, bbox_size는 박스 자체 local 축의 전체 길이이다. 객체 중심·bbox pose·유효한 속도와 가속도는 `Objects.header.frame_id`를 따른다. `/objects.header.stamp`는 입력 점군의 stamp를 유지한다.
+
+**Do not change frame_id from base_link_level to base_link without transforming the actual coordinates.** 좌표값을 바꾸지 않고 이름만 변경하면 TF나 장애물 계산에서 차체 roll/pitch가 중복 반영될 수 있다.
+
+```text
+Raw /velodyne_points (velodyne)
+        |
+        | static sensor mounting transform
+        v
+vehicle body reference (base_link)
+        |
+        | vehicle roll/pitch leveling
+        v
+base_link_level
+        |
+        v
+ROI
+        |
+        v
+VoxelGrid
+        |
+        v
+DBSCAN
+        |
+        v
+OBB
+        |
+        v
+/objects
+frame_id = base_link_level
+```
+
+##### #NO_LEVEL_TO_BASE — 검출 결과의 역변환을 하지 않는 이유
+
+검출 결과는 OBB를 실제 계산한 `base_link_level`에 유지한다. OBB를 `base_link`로 정확히 역변환하려면 해당 LiDAR frame을 수평화할 때 사용한 동일 timestamp의 roll/pitch 변환을 결과 생성까지 함께 보존·연결해야 한다. DBSCAN/OBB가 끝난 시점의 최신 CompetitionVehicleStatus를 다시 읽으면 차량 이동 중 자세가 바뀌어 수평화에 사용한 자세와 다를 수 있다. 그러면 두 회전이 상쇄되지 않아 객체 중심과 orientation에 오차가 생긴다.
+
+이 불필요한 시간 동기화 복잡성과 좌표 오차 가능성을 perception 내부에 추가하지 않으므로 ROI·DBSCAN·OBB와 `/objects`는 실제 계산 좌표계를 그대로 유지한다. object_detector는 최신 roll/pitch를 다시 읽어 Object를 역회전하지 않는다.
+
+##### #DOWNSTREAM_CONTRACT — 소비 모듈의 책임
+
+downstream은 `Objects.header.frame_id`를 확인하고 수평 좌표를 차체 고정 `base_link`로 가정하지 않는다. `base_link`나 `map`이 필요한 모듈은 자신의 입력 경계에서 메시지 timestamp에 맞는 명시적인 frame transform을 수행한다. 위치와 bbox orientation, 유효한 벡터 성분을 함께 변환하며 bbox 자체 축의 길이는 유지한다. 현재 path_planner의 PredictionPassThrough는 header와 객체를 그대로 복사하고 LocalPath는 객체 위치를 장애물 회피 계산에 사용하지 않는다. 향후 prediction·tracking·회피·충돌 검사는 서로 다른 frame의 좌표를 그대로 혼합하면 안 된다.
 
 #### 센서 좌표계 및 변환
 
@@ -296,8 +358,8 @@ flowchart TD
 | MORAI-UDP-Bridge-Node | 커밋 `dbd2da34abbd13634304ad20803b17be13228007`(현장 점검에서 검증된 저장소)에 고정하여 깃 서브모듈 링크. MORAI UDP 패킷과 ROS 토픽 사이를 번역. 단순 번역 계층으로 독자적인 로직·판단으로 콘텐츠를 훼손·누락하지 않는다. 센서·차량 상태 수신 및 최종 제어 명령 송신. |
 | velodyne | 커밋 `29abd0e1361cb7f5eda451d2b51c35eeca45e0d5`에 고정하여 깃 서브모듈 링크. velodyne vlp16의 공식 드라이버. LiDAR 데이터를 `/velodyne_points`로 발행. |
 | Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 /localization/ego로 발행한다.         |
-| LiDAR_Leveler_Node | TF_Publisher의 센서 장착 TF로 점군을 `base_link`로 변환해 `/velodyne_points/leveled` 발행. |
-| Object_Detector_Node | 수평화 점군을 클러스터링해 `/objects` 발행. |
+| LiDAR_Leveler_Node | 센서 장착 TF와 차량 roll/pitch 수평화를 적용해 `base_link_level` 점군을 `/velodyne_points/leveled`로 발행. |
+| Object_Detector_Node | `base_link_level` 점군에서 ROI·VoxelGrid·DBSCAN·OBB를 계산해 같은 frame으로 `/objects` 발행. |
 | Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 YOLO 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
 | Section_Annotator_Node | ego가 맵의 어느 구간에 위치해 있는지 발행. 각 노드는 콜백으로 자신의 모드를 스위치할 수 있다. |
 | TF_Publisher_Node | ego 콜백으로 동적 `map → base_link` 발행. 센서 장착 변환은 시작 시 정적 발행. |
@@ -346,9 +408,9 @@ flowchart TD
 | `/image/right/compressed` | 우측 영상 | `sensor_msgs/CompressedImage` | `camera_right_optical_frame` | Bridge 영상 수신 ROS 시각 | 영상 프레임 조립 완료마다 |
 | `/image/camera_7/compressed` | 신호등 영상 | `sensor_msgs/CompressedImage` | `camera_7_optical_frame` | Bridge 영상 수신 ROS 시각 | 영상 프레임 조립 완료마다 |
 | `/velodyne_points` | 원본 점군 | `sensor_msgs/PointCloud2` | `velodyne` | 드라이버 scan stamp 유지; 현재 설정은 마지막 패킷 시각 | 10 Hz (100 ms); scan 수신마다 |
-| `/velodyne_points/leveled` | 차량 기준 점군 | `sensor_msgs/PointCloud2` | `base_link` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
+| `/velodyne_points/leveled` | 수평 perception 점군 | `sensor_msgs/PointCloud2` | `base_link_level` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
 | `/localization/ego` | 차량 위치·자세·3축 선속도·각속도 | `nav_msgs/Odometry` | pose: `map`, twist: `base_link`; 차량 뒷차축 중심 | 추정 상태가 나타내는 시각; 발행 시각으로 대체하지 않음 | 50 Hz |
-| `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `base_link` | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
+| `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `base_link_level` | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
 | `/traffic_light` | 신호등 인식 결과 | `interfaces/TrafficLight` | `camera_7_optical_frame` | 판정에 사용한 영상 stamp 유지 | 목표 5 Hz (200 ms); 최신 미처리 영상 사용 |
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf` | 동적 좌표 변환 | `tf2_msgs/TFMessage` | 각 변환의 `header.frame_id`가 부모, `child_frame_id`가 자식 | ego stamp 유지 | `/localization/ego` 콜백마다 |
