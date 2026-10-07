@@ -1,4 +1,4 @@
-#include <section_annotator/config.hpp>
+#include <section_annotator/parameters/checkpoint_sections.hpp>
 #include <gtest/gtest.h>
 
 TEST(CheckpointConfig, ReadsCoordinatesFromCsvWithLaneletIds) {

@@ -1,0 +1,12 @@
+name: ego_tf.hpp
+type: tf_publisher::EgoTf
+stage: stage1
+inputs: [ego]
+outputs:
+  -
+    name: tf
+    type: tf2_msgs/TFMessage
+validator: NoValidator
+policy: RemoveInvalid
+allowed_issues: {}
+assets: []

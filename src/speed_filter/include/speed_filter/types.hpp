@@ -1,5 +1,4 @@
 #pragma once
-#include <node_pipeline/components.hpp>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <interfaces/SectionAnnotation.h>
 #include <morai_msgs/CtrlCmd.h>
@@ -11,6 +10,5 @@ struct SpeedFilterParameters {
   double start_accel = 0.2;
   double stop_speed_mps = 0.1;
 };
-using Data = node_pipeline::Data<morai_msgs::CtrlCmd, interfaces::CompetitionVehicleStatus>;
 using Message = morai_msgs::CtrlCmd;
 }  // namespace speed_filter

@@ -161,7 +161,7 @@ TEST(PathCores, RegisteredStagesHandleMapCheckpointsAndRepeatedSections) {
   const auto parameters = pp::readGlobalPathParameters(
       readFile(std::string(PATH_PLANNER_MAP_DIR) + "/kcity_lanelet2.osm"),
       readFile(std::string(PATH_PLANNER_MAP_DIR) + "/checkpoints.csv"));
-  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})};
+  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0}), pp::PredictionCore{}};
   const std::array<std::size_t, 2> required{{0, 4}};
   pp::Data snapshot;
   EXPECT_FALSE(snapshot.hasInputs(required));
@@ -227,7 +227,7 @@ TEST(PathCores, RegisteredStagesHandleMapCheckpointsAndRepeatedSections) {
 
 TEST(PathStages, MissingObjectsOrPredictionStopsBeforeCoreCall) {
   const auto parameters = shortMap();
-  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})};
+  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0}), pp::PredictionCore{}};
   pp::Stage3Data typed;
   typed.get<0>().sample.message = std::make_shared<nav_msgs::Odometry>();
   typed.get<4>().sample.message = std::make_shared<interfaces::SectionAnnotation>();
@@ -241,6 +241,53 @@ TEST(PathStages, MissingObjectsOrPredictionStopsBeforeCoreCall) {
   EXPECT_FALSE(called);
   EXPECT_FALSE(pp::processStage3(cores, pp::ThirdCoreId::LocalPath, data, result, before));
   EXPECT_FALSE(called);
+}
+
+TEST(PathStages, PredictionCoreRequiresCompetitionObjectsAndRouteThenReturnsNativeArray) {
+  const auto parameters = shortMap();
+  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{},
+      pp::LocalPath({parameters.map, 20.0}), pp::PredictionCore(pp::PredictionParameters{0.0})};
+  pp::Stage2Data typed;
+  auto status = std::make_shared<interfaces::CompetitionVehicleStatus>();
+  status->yaw_rad = std::acos(-1.0) / 2.0;
+  auto objects = std::make_shared<interfaces::Objects>();
+  objects->header.stamp.fromSec(2.0);
+  objects->header.frame_id = "base_link";
+  interfaces::Object object;
+  object.position.x = 3.0;
+  object.bbox_pose.position = object.position;
+  object.bbox_pose.orientation.w = 1.0;
+  object.velocity.x = 10.0;
+  object.velocity_available = true;
+  objects->objects.push_back(object);
+  const auto route = std::make_shared<pp::Route>();
+  typed.get<1>().sample.message = status;
+  typed.get<2>().sample.message = objects;
+  typed.get<5>().sample.message = route;
+  np::StageData complete;
+  complete.update(typed);
+  np::CoreResult result;
+  std::size_t calls = 0;
+  const np::BeforeCore before = [&] { ++calls; };
+  for (const std::size_t missing : {1u, 2u, 5u}) {
+    auto data = complete;
+    data.inputs[missing].message.reset();
+    EXPECT_FALSE(pp::processStage2(cores, pp::SecondCoreId::PredictionCore, data, result, before));
+    EXPECT_EQ(calls, 0u);
+  }
+  ASSERT_TRUE(pp::processStage2(cores, pp::SecondCoreId::PredictionCore, complete, result, before));
+  EXPECT_EQ(calls, 1u);
+  const auto predicted = result(complete);
+  ASSERT_EQ(predicted.inputs.size(), 1u);
+  EXPECT_FALSE(predicted.inputs.front().has_stamp);
+  EXPECT_FALSE(predicted.inputs.front().has_receipt);
+  const auto& samples = predicted.message<pp::PredictedObjects>(0);
+  ASSERT_EQ(samples.size(), 10u);
+  ASSERT_EQ(samples.back().objects.size(), 1u);
+  EXPECT_NEAR(samples.back().objects.front().position.x, 3.0, 1e-5);
+  EXPECT_NEAR(samples.back().objects.front().position.y, -50.0, 1e-5);
+  EXPECT_EQ(samples.back().objects.front().velocity, object.velocity);
+  EXPECT_EQ(samples.back().header, objects->header);
 }
 
 namespace {
@@ -293,7 +340,7 @@ TEST(PathStages, ThreeStagePipelinePublishesOnceAndStopsWhenObjectsAreMissing) {
        TestComponents::Stage2Policy{{common.upper}, {common.lower}}, selector.stage2, pp::retainInputs(pp::processStage2)),
      np::makeStage<pp::CoreSet, Context, pp::Stage3Data>(TestComponents::Stage3Checker(local_limits, 1000000000),
        TestComponents::Stage3Policy{{common.upper}, {common.lower}}, selector.stage3, pp::processStage3)},
-    pp::CoreSet{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})},
+    pp::CoreSet{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0}), pp::PredictionCore{}},
     TestHeaderInjector{headers}, TestIO{output});
   nav_msgs::Odometry ego;
   ego.header.stamp.fromSec(1.0);

@@ -1,4 +1,6 @@
-#include <control/components.hpp>
+#include <control/cores/path_tracking.hpp>
+#include <control/validators/path_contract.hpp>
+#include <node_pipeline/detail/message_traits.hpp>
 #include <gtest/gtest.h>
 #include <limits>
 namespace {
@@ -77,49 +79,45 @@ TEST(PathTrackingCore, RunsBothMpcSolversWithoutRosIo) {
   EXPECT_GE(command.brake, 0);
   EXPECT_FALSE(command.accel > 0 && command.brake > 0);
 }
-struct Access {
-  template<class M> static std::int64_t stamp(const M& m) { return m.header.stamp.toNSec(); }
-  template<class M> static const std::string& frame(const M& m) { return m.header.frame_id; }
+struct TestParameters {
+  control::tracking::Parameters operator()(const node_pipeline::Parameters&) const { return parameters(); }
 };
-struct IO {
-  using MessageType = morai_msgs::CtrlCmd;
-  int* outputs;
-  node_pipeline::Clocks readClocks() const { return {1000000000, 1000000000}; }
-  void publish(const morai_msgs::CtrlCmd&) { ++*outputs; }
-  template<class H> void reportHealth(const H&, std::size_t) {}
-  void report(const node_pipeline::ProcessReport&) noexcept {}
-};
-struct Header { void injectHeader(morai_msgs::CtrlCmd&, const node_pipeline::Context<3>&) {} };
 TEST(PathTrackingPipeline, AllSectionsSelectCoreAndInvalidInputsAreRemoved) {
-  namespace np = node_pipeline;
-  using C = control::Components<Access>;
-  auto selector = C::selector();
-  for (int i = 0; i <= 16; ++i) selector.section_core_map[i] = control::CoreId::PathTracking;
-  np::ExecutionConfig<control::Input> config;
-  config.mode = np::ExecutionMode::OnInput;
-  config.trigger_input = control::Input::Path;
-  std::array<np::HealthLimits, 3> limits;
-  limits[0].frame = "base_link"; limits[1].frame = "map"; limits[2].frame = "base_link";
-  auto policy = C::policy(limits[0]); policy.priority.fill(100);
-  int outputs = 0;
-  C::Node<IO, Header> node(config, C::Buffer(8), {},
-    std::vector<C::Stage>{np::makeStage<control::CoreSet, C::Buffer::ContextType, control::Data>(
-      C::Checker(limits, 1000000000), policy, selector, control::processCore)},
-    control::CoreSet(parameters()), {}, IO{&outputs});
-  auto input = path(6);
-  EXPECT_EQ(node.onInput(control::InputTag<control::Input::Path>{}, std::make_shared<const interfaces::Path>(input)).status, np::ProcessStatus::NoCore);
-  node.onInput(control::InputTag<control::Input::Ego>{}, std::make_shared<const nav_msgs::Odometry>(ego()));
-  node.onInput(control::InputTag<control::Input::Competition>{}, std::make_shared<const interfaces::CompetitionVehicleStatus>(status()));
-  for (int i = 0; i <= 16; ++i) {
-    node.onSection(np::Section{true, static_cast<std::uint8_t>(i), 1000000000, "map"});
-    EXPECT_EQ(node.onInput(control::InputTag<control::Input::Path>{}, std::make_shared<const interfaces::Path>(input)).status, np::ProcessStatus::Published);
+  namespace np=node_pipeline; namespace nd=np::detail;
+  nd::Engine engine(8,1000000000);
+  nd::InputSpec path_spec("path","/local_path/velocity_injected");path_spec.limits.frame="base_link";
+  nd::InputSpec ego_spec("ego","/localization/ego");ego_spec.limits.frame="map";
+  nd::InputSpec status_spec("competition","/vehicle/competition_status");status_spec.limits.frame="base_link";
+  engine.input<interfaces::Path>(path_spec);engine.input<nav_msgs::Odometry>(ego_spec);
+  engine.input<interfaces::CompetitionVehicleStatus>(status_spec);
+  nd::CoreSpec declaration;declaration.name="path_tracking.hpp";declaration.stage="stage1";
+  declaration.inputs={"path","ego","competition"};declaration.outputs={{"command",""}};
+  engine.core<control::PathTracking,TestParameters,control::validators::PathContract>(declaration,{});
+  nd::StageSpec stage;stage.name="stage1";
+  for(int i=0;i<=16;++i)stage.section_core_map[i]=declaration.name;
+  engine.stage(stage);
+  int outputs=0;const np::Clocks clocks{1000000000,1000000000};
+  auto input=path(6);
+  const auto publish_path=[&] {
+    const auto id=engine.push<interfaces::Path>("path",std::make_shared<const interfaces::Path>(input),clocks,input.header.stamp.toNSec());
+    const auto report=engine.process(clocks,false,"path",id);
+    if(report.status==np::ProcessStatus::Published)++outputs;
+    return report.status;
+  };
+  EXPECT_EQ(np::ProcessStatus::Rejected,publish_path());
+  engine.push<nav_msgs::Odometry>("ego",std::make_shared<const nav_msgs::Odometry>(ego()),clocks,1000000000);
+  engine.push<interfaces::CompetitionVehicleStatus>("competition",std::make_shared<const interfaces::CompetitionVehicleStatus>(status()),clocks,1000000000);
+  for(int i=0;i<=16;++i) {
+    engine.section(np::Section{true,static_cast<std::uint8_t>(i),1000000000,"map"});
+    EXPECT_EQ(np::ProcessStatus::Published,publish_path());
   }
-  EXPECT_EQ(outputs, 17);
-  auto invalid = status(); invalid.velocity_x_mps = std::numeric_limits<float>::quiet_NaN();
-  node.onInput(control::InputTag<control::Input::Competition>{}, std::make_shared<const interfaces::CompetitionVehicleStatus>(invalid));
-  EXPECT_EQ(node.onInput(control::InputTag<control::Input::Path>{}, std::make_shared<const interfaces::Path>(input)).status, np::ProcessStatus::NoCore);
-  EXPECT_EQ(outputs, 17);
+  EXPECT_EQ(17,outputs);
+  auto invalid=status();invalid.velocity_x_mps=std::numeric_limits<float>::quiet_NaN();
+  engine.push<interfaces::CompetitionVehicleStatus>("competition",std::make_shared<const interfaces::CompetitionVehicleStatus>(invalid),clocks,1000000000);
+  EXPECT_EQ(np::ProcessStatus::Rejected,publish_path());
+  EXPECT_EQ(17,outputs);
 }
+
 }
 int main(int argc, char** argv) {
   ros::Time::init();

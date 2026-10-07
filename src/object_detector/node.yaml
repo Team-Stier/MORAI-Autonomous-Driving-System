@@ -1,0 +1,61 @@
+name: object_detector_node
+execution: {mode: on_input, trigger_input: cloud, queue_capacity: 8}
+section_topic: /section_annotation
+inputs:
+  cloud:
+    type: sensor_msgs/PointCloud2
+    topic: /velodyne_points/leveled
+    limits: {frame: base_link, stale_after_sec: 0.3, receive_timeout_sec: 0.3, max_sensor_skew_sec: 0.1, check_skew: true}
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    limits: {frame: base_link, stale_after_sec: 0.06, receive_timeout_sec: 0.06, max_sensor_skew_sec: 0.1, check_skew: true}
+stages:
+  stage1:
+    cores: [cluster_match.hpp]
+    max_health_checks: 10
+    section_core_map:
+      "0": cluster_match.hpp
+      "1": cluster_match.hpp
+      "2": cluster_match.hpp
+      "3": cluster_match.hpp
+      "4": cluster_match.hpp
+      "5": cluster_match.hpp
+      "6": cluster_match.hpp
+      "7": cluster_match.hpp
+      "8": cluster_match.hpp
+      "9": cluster_match.hpp
+      "10": cluster_match.hpp
+      "11": cluster_match.hpp
+      "12": cluster_match.hpp
+      "13": cluster_match.hpp
+      "14": cluster_match.hpp
+      "15": cluster_match.hpp
+      "16": cluster_match.hpp
+    health_core_map: []
+  stage2:
+    cores: [tracker.hpp]
+    max_health_checks: 10
+    section_core_map:
+      "0": tracker.hpp
+      "1": tracker.hpp
+      "2": tracker.hpp
+      "3": tracker.hpp
+      "4": tracker.hpp
+      "5": tracker.hpp
+      "6": tracker.hpp
+      "7": tracker.hpp
+      "8": tracker.hpp
+      "9": tracker.hpp
+      "10": tracker.hpp
+      "11": tracker.hpp
+      "12": tracker.hpp
+      "13": tracker.hpp
+      "14": tracker.hpp
+      "15": tracker.hpp
+      "16": tracker.hpp
+    health_core_map: []
+output:
+  source: stage2.objects
+  topic: /objects
+  header: {stamp_from: cloud, frame_id: base_link}

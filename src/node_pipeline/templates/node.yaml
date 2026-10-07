@@ -1,0 +1,11 @@
+name: pipeline_template
+execution: {mode: on_input, trigger_input: scalar, queue_capacity: 8}
+inputs:
+  scalar: {type: std_msgs/Float64, topic: /scalar, limits: {check_stamp: false, check_skew: false, receive_timeout_sec: 0.3}}
+stages:
+  calculate:
+    cores: [scalar_core.hpp]
+    max_health_checks: 10
+    section_core_map: {"0": scalar_core.hpp}
+    health_core_map: []
+output: {source: calculate.result, topic: /result, header: {}}

@@ -1,0 +1,68 @@
+if(@DEVELSPACE@)
+  set(_NODE_PIPELINE_SHARE "@PROJECT_SOURCE_DIR@")
+else()
+  get_filename_component(_NODE_PIPELINE_SHARE "${node_pipeline_DIR}/.." ABSOLUTE)
+endif()
+find_program(NODE_PIPELINE_PYTHON NAMES python3)
+find_program(NODE_PIPELINE_CLANG NAMES clang++ clang++-10)
+if(NOT NODE_PIPELINE_PYTHON OR NOT NODE_PIPELINE_CLANG)
+  message(FATAL_ERROR "node_pipeline requires Python 3, PyYAML and Clang AST checks")
+endif()
+execute_process(COMMAND "${NODE_PIPELINE_PYTHON}" -c "import yaml"
+  RESULT_VARIABLE _NODE_PIPELINE_YAML_RESULT)
+if(NOT _NODE_PIPELINE_YAML_RESULT EQUAL 0)
+  message(FATAL_ERROR "node_pipeline requires python3-yaml")
+endif()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE BOOL "Compile flags for mandatory Clang contracts" FORCE)
+
+function(node_pipeline_add_node target)
+  if(CMAKE_VERSION VERSION_LESS 3.12)
+    message(FATAL_ERROR "node_pipeline declaration discovery requires CMake 3.12 or newer")
+  endif()
+  cmake_parse_arguments(PIPELINE "" "NODE" "" ${ARGN})
+  if(PIPELINE_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "node_pipeline_add_node: unknown arguments ${PIPELINE_UNPARSED_ARGUMENTS}")
+  endif()
+  if(NOT PIPELINE_NODE)
+    set(PIPELINE_NODE node.yaml)
+  endif()
+  get_filename_component(node "${PIPELINE_NODE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+  file(GLOB registrations CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/registrations/*.yaml")
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${node}" ${registrations})
+  set(generated "${CMAKE_CURRENT_BINARY_DIR}/${target}_registration.cpp")
+  set(manifest "${CMAKE_CURRENT_BINARY_DIR}/${target}_registration.json")
+  set(numeric_header "${CMAKE_CURRENT_BINARY_DIR}/${target}_registration_numeric.hpp")
+  set(generator "${_NODE_PIPELINE_SHARE}/scripts/generate_registration.py")
+  set(numeric_generator "${_NODE_PIPELINE_SHARE}/scripts/generate_numeric_traits.py")
+  set(checker "${_NODE_PIPELINE_SHARE}/scripts/check_extensions.py")
+  execute_process(COMMAND "${NODE_PIPELINE_PYTHON}" "${generator}"
+    --package-dir "${CMAKE_CURRENT_SOURCE_DIR}" --node "${node}" --output "${generated}" --manifest "${manifest}" --traits-header "${numeric_header}"
+    RESULT_VARIABLE declaration_result ERROR_VARIABLE declaration_error)
+  if(NOT declaration_result EQUAL 0)
+    message(FATAL_ERROR "${target}: ${declaration_error}")
+  endif()
+  execute_process(COMMAND "${NODE_PIPELINE_PYTHON}" -c
+    "import json,sys; print(';'.join(json.load(open(sys.argv[1])).get('message_definitions', [])))" "${manifest}"
+    OUTPUT_VARIABLE message_definitions OUTPUT_STRIP_TRAILING_WHITESPACE)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${message_definitions})
+  add_custom_command(OUTPUT "${generated}" "${manifest}" "${numeric_header}"
+    COMMAND "${NODE_PIPELINE_PYTHON}" "${generator}"
+      --package-dir "${CMAKE_CURRENT_SOURCE_DIR}" --node "${node}" --output "${generated}" --manifest "${manifest}" --traits-header "${numeric_header}"
+    DEPENDS "${generator}" "${numeric_generator}" "${node}" ${registrations} ${message_definitions}
+    VERBATIM)
+  add_executable(${target} "${_NODE_PIPELINE_SHARE}/src/main.cpp" "${generated}")
+  target_compile_features(${target} PRIVATE cxx_std_14)
+  add_custom_target(${target}_extension_contract
+    COMMAND "${NODE_PIPELINE_PYTHON}" "${checker}"
+      --manifest "${manifest}" --compile-commands "${CMAKE_BINARY_DIR}/compile_commands.json"
+      --translation-unit "${generated}" --clang "${NODE_PIPELINE_CLANG}"
+    DEPENDS "${generated}" "${manifest}" "${numeric_header}" "${checker}"
+    COMMENT "Checking ${target} extension contracts with Clang AST"
+    VERBATIM)
+  add_dependencies(${target}_extension_contract ${catkin_EXPORTED_TARGETS})
+  add_dependencies(${target} ${target}_extension_contract)
+  install(FILES "${node}" DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/registrations")
+    install(DIRECTORY registrations DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
+  endif()
+endfunction()

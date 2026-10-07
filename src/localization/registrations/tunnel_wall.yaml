@@ -1,0 +1,12 @@
+name: tunnel_wall.hpp
+type: localization::TunnelWall
+stage: stage1
+inputs: [imu, competition_status, lidar]
+outputs:
+  - {name: ego, type: "nav_msgs/Odometry"}
+parameter_loader: parameters/tunnel_wall.hpp
+parameter_namespace: tunnel_wall
+validator: validators/tunnel_wall.hpp
+policy: policies/remove_invalid.hpp
+bank: state
+allowed_issues: {}

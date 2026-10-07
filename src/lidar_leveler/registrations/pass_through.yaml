@@ -1,0 +1,12 @@
+name: pass_through.hpp
+type: lidar_leveler::PassThrough
+stage: stage1
+inputs: [cloud, tf_static]
+outputs:
+  -
+    name: cloud
+    type: sensor_msgs/PointCloud2
+    time_from: cloud
+parameter_loader: parameters/pass_through.hpp
+parameter_namespace: pass_through
+validator: validators/pass_through.hpp

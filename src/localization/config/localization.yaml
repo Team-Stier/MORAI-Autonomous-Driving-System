@@ -1,37 +1,3 @@
-execution_mode: periodic
-frequency_hz: 50.0
-queue_capacity: 8
-max_health_checks: 10
-frame: map
-# GPS 설정 33.3ms 기준의 공통 임시 한도다.
-stale_after_sec: 0.1
-receive_timeout_sec: 0.1
-max_sensor_skew_sec: 0.06
-inputs:
-  gps: {stale_after_sec: 0.1, receive_timeout_sec: 0.1}
-  imu: {stale_after_sec: 0.06, receive_timeout_sec: 0.06}
-  competition_status: {stale_after_sec: 0.06, receive_timeout_sec: 0.06}
-stage1:
-  section_core_map:
-    "0": full_ekf.hpp
-    "1": full_ekf.hpp
-    "2": full_ekf.hpp
-    "3": full_ekf.hpp
-    "4": full_ekf.hpp
-    "5": full_ekf.hpp
-    "6": full_ekf.hpp
-    "7": full_ekf.hpp
-    "8": full_ekf.hpp
-    "9": full_ekf.hpp
-    "10": full_ekf.hpp
-    "11": full_ekf.hpp
-    "12": full_ekf.hpp
-    "13": full_ekf.hpp
-    "14": full_ekf.hpp
-    "15": full_ekf.hpp
-    "16": full_ekf.hpp
-  health_core_map: []
-# 모든 issue의 strategy는 Remove로 고정한다. 세 입력이 모두 Green일 때만 Core를 호출한다.
 ekf:
   acceleration_noise: 0.03
   yaw_rate_noise: 0.05
@@ -40,3 +6,24 @@ ekf:
   yaw_noise: 0.005
   gps_height_m: 1.2
   yaw_offset_rad: -0.023509
+
+tunnel_wall:
+  origin_x_m: -23.5
+  origin_y_m: -519.2000122070312
+  axis_yaw_rad: -2.6434409392630127
+  left_wall_m: 5.995789344373857
+  right_wall_m: -6.01444403868076
+  wall_normal_z_ratio: 0.023916274752440667
+  yaw_offset_rad: -0.023509
+  acceleration_noise_mps2: 0.3
+  velocity_noise_mps: 0.01
+  lateral_velocity_noise_mps: 0.05
+  wall_noise_m: 0.01
+  wall_fit_band_m: 0.12
+  wall_min_points: 20
+  wall_min_side_m: 0.8
+  wall_max_range_m: 20.0
+  wall_min_station_m: -58.61842773450474
+  wall_max_station_m: 58.61843533549703
+  wall_min_height_m: 0.3
+  wall_max_height_m: 3.5

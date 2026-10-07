@@ -6,43 +6,38 @@ MORAI SIM 기반 자율주행 시스템. ROS 1 Noetic을 사용한다.
 
 ### 협업과 Core 작성
 
-이 프로젝트는 Strategy 패턴으로 작성하며, 알고리즘 Core와 ROS 실행 Pipeline을 분리해 협업한다.
+이 프로젝트는 알고리즘 Core와 ROS 실행 Pipeline을 분리한다. 실행 노드는 `node.yaml`로 선언하고 모든 노드가 공통 실행기를 사용한다.
 
-- 각 파트 담당자는 노드를 직접 개발하지 않고 자신의 Core만 작성한다. 등록 전제 확인을 위한 기존 코드의 읽기는 허용한다.
-- Core 개발·등록 전에 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)를 읽고 등록 전제 확인, 수정 범위, 검증, 사용자 안내·보고 절차를 따른다. Core 파일 외 수정은 가이드의 diff에 정의된 변경 종류와 담당 범위만 허용한다.
-- 허용 범위 밖의 변경은 중단하고, 가이드의 보고·리드 협의·명시적 허가 절차를 따른다.
-- Core 개발 요청이나 원하는 동작의 지정만으로 허용 범위 밖의 변경이 승인된 것으로 해석하지 않는다. 알고리즘을 Core 밖의 Policy·Validator·Selector·callback 등에 옮겨 요구사항을 우회 구현하지 않는다.
-- 리드 개발자는 Pipeline 라이브러리와 템플릿을 따르는 노드를 제공하고, 담당자가 작성한 Core를 ROS 입출력에 연결한다.
-- Core는 정규 `process()`의 인자와 반환값만으로 Pipeline에 연결되는 알고리즘 컴포넌트다. 계산 라이브러리와 Core가 소유한 내부 계산 상태는 사용할 수 있다. 시각화 목적의 토픽 발행을 제외한 ROS 통신, 다른 노드·Pipeline 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다.
-- 시각화 목적의 토픽 발행만 Core 디커플링 규칙의 예외로 허용한다. 해당 토픽 이름은 `/visualizer/*`로 지정하며, `/visualizer/*` 토픽은 `src/visualizer` 패키지 이외에서 절대 구독하지 않는다.
-- Core는 입력이 자신의 입력 계약을 만족한다고 전제하고 계산한다. 입력 유효성 검사, 누락 감지, 입력 대체, fallback 및 처리 성공·실패 상태 반환을 구현하지 않는다. 입력 검사와 처리 정책은 Pipeline이 담당한다. 알고리즘 자체에 필요한 조건 분기와 수치 계산은 수행한다.
-- Core 하나당 파일 하나를 둔다. 첫 Core는 실제 구독 메시지를 `process()`의 개별 인자로 받고, 후속 Core는 이전 Core의 반환값을 개별 인자로 받는다. 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있으며, 개수·타입·순서는 연결된 Core의 계약으로 정한다. 마지막 Core는 목표 발행 메시지 타입의 payload를 완성해 반환하며, 출력 헤더 주입과 발행은 Pipeline이 담당한다.
+- Core 개발자는 Core 본체·전용 파라미터 로더·등록 YAML을 작성한다. 등록 전에 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)를 읽고 따른다. Core 밖의 수정 권한은 가이드의 fenced `diff`에 한정한다.
+- 리드는 입력·Stage·선택 매핑·발행 선언을 제공한다. Validator와 Policy는 별도 파일의 공식 확장점으로 관리한다. 노드별 callback·dispatch·Assembler·HeaderInjector·IO·별도 main을 작성하지 않는다.
+- 입력·출력·Validator·Policy·허용 issue는 Core별로 연결한다. Core의 `inputs`는 `process()`의 인자 순서이며 모두 필수다. `required_inputs`를 별도로 선언하지 않는다.
+- Core는 `process()`의 실제 메시지 인자와 반환값으로만 Pipeline에 연결된다. Data·Slot·Health·section·수신 메타데이터를 인자로 받지 않는다. 계산 라이브러리와 자신의 내부 계산 상태는 사용할 수 있다.
+- 실행 패키지는 Bank Core를 둘 수 있다. `process()` 입출력 외 객체 간 커플링은 같은 패키지 Bank 참조만 허용한다. 다른 계산 Core의 소유·참조·호출, 외부 공유 상태, 다른 노드·Pipeline 접근은 금지한다.
+- Core는 입력 계약이 충족된 상태에서 계산한다. 입력 검사·누락 감지·입력 대체·fallback·성공/실패 반환은 구현하지 않는다. 알고리즘에 필요한 조건 분기와 수치 계산은 Core에 둔다.
+- Core 하나당 파일 하나를 둔다. 첫 Core는 구독 메시지의 실제 타입을 개별 인자로 받고, 후속 Core는 앞 Core의 반환값을 받는다. 앞 Core가 후속 Core에 필요한 값을 함께 반환하며 여러 값은 `std::pair`·`std::tuple`로 묶는다. Pipeline은 반환값으로 다음 입력을 교체한다.
+- 수정·패스스루 출력의 시간 상속은 등록 출력의 `time_from`으로 선언한다. 새 계산값의 시간 메타데이터는 비운다. 마지막 Core는 목표 발행 payload를 반환하고 Pipeline이 최종 헤더 주입·발행을 한 번 수행한다. 공통 인젝터는 `output.header`의 `stamp_from`·`frame_id`를 가장 바깥 `header`에만 주입하며, 바깥 `header`가 없으면 아무 작업도 하지 않는다.
+- Core의 ROS 통신은 `/visualizer/*` 발행만 예외로 허용한다. 이 토픽은 `src/visualizer` 이외에서 구독하지 않는다.
+- Core 설정 로더는 해당 Core의 읽기 전용 설정과 선언된 정적 자산만 읽는다. Pipeline 설정 로드는 공통 실행기 내부에서 처리한다.
 
-구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)와
-그 안의 [템플릿 코드](src/node_pipeline/templates/)를 참고한다.
+### Core 등록과 실행
 
-### Core 등록
+`include/<package>/cores/`에 Core를, `parameters/`에 전용 로더를, `registrations/`에 Core별 YAML을 둔다. 이름은 확장자를 포함한 Core 파일명이다. 등록·제거 후 재빌드하며 Pipeline C++은 수정하지 않는다. 선언에는 C++ 표현식·함수 본문·임의 factory를 받지 않는다.
 
-등록 절차와 설정 주입은 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)에 따른다.
+Stage는 순서·후보 Core·section/health 선택 매핑을 선언한다. 검사 루프는 다음 순서로 고정한다.
 
-각 노드의 등록 파일은 `include/<package_name>/core_set.hpp`,
-Core 작성 위치는 `include/<package_name>/cores/`다.
-개발 단계에서 데모 테스트가 필요하면 먼저 노드의 `core_set.hpp`에서 Core 파일을
-include하고 Core ID·객체·필수 입력·`process()` 인자 연결을 등록한다.
-config 로더의 이름→Core ID 등록 키와 YAML의 Core 매핑 값은 확장자를 포함한
-Core 파일 이름(예: `full_ekf.hpp`)으로 통일한다.
-이후 각 패키지의 `config/<package_name>.yaml`에서 Core 매핑을 변경해
-등록한 Core를 바꿔 끼우며 개발한다. CoreSet 등록은 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)에 따른다.
+1. section 매핑으로 초기 Core를 선택한다.
+2. 선택된 Core의 입력 계약·공통 검사·Validator로 health를 만든다.
+3. 선언 입력이 모두 존재하고 허용 issue만 남으면 검사 루프를 끝낸다.
+4. 일치하는 health 매핑으로 Core를 덮어쓴다. 없으면 현재 Core를 유지한다.
+5. 선택된 Core의 Policy를 적용하고 다음 회차에서 재검사한다.
 
-Core 내부에는 입력 valid 처리를 두지 않는다. `process()` 인자의 개수·타입은
-컴파일 시 고정하며, Pipeline은 등록된 필수 입력이 하나라도 Missing이면
-해당 Core 호출과 발행을 거부한다. 필수 입력 외의 추가 메시지는 허용한다.
-업스트림 메시지 환경에 대응하도록 사용할 입력 조합과 인자 개수별로 Core를 마련하고,
-`health_core_map`에서 input별 issue 조건을 해당 Core 파일 이름에 연결한다.
-`section_core_map`으로 기본 Core를 선택하고, 일치하는 health 매핑이 있으면 덮어쓴다.
+Missing은 허용 issue로 면제하지 않는다. Missing·NaN·Inf·수치 범위·frame·stamp·timeout·skew는 공통 검사층, 도메인 고유 검사는 Validator가 담당한다. 모든 Stage가 같은 스냅샷 문맥·검사 시각을 사용하고 Stage별 검사 상한을 적용한다. 첫 Core 호출 전에 Pipeline이 token을 직접 기록한다. Core·Bank는 선택 변경 후에도 유지한다.
 
-입력 불안정에 대한 fallback은 이 Core 교체로 수행한다.
-다른 곳, 특히 Core 내부에서 입력 대체나 별도의 fallback을 구현하지 않는다.
+`/section_annotation`은 Core 선택에만 사용하며 조립·Core 주입 경로에 넣지 않는다. 입력 조립·시간 정렬은 공통 Assembler가 담당한다. `on_input`·`periodic`·시작 시 한 번 발행하는 `latched`를 지원한다. localization의 최종 stamp는 조립된 IMU 입력에서 가져온다.
+
+YAML·컴파일 타입 검사·Clang AST 계약 검사를 필수 빌드 단계로 수행한다. Pipeline 내부 접근·다른 Core 결합·허용되지 않은 ROS 통신·별도 실행 진입점을 거부한다. 상세 선언과 실행 흐름은 [node_pipeline 계약](src/node_pipeline/README.md)을 따른다.
+
+path_planner는 GlobalPath 진행 계산 결정 후 별도로 전환한다. 전환 전 실행 코드는 해당 target의 명시적 legacy 빌드 경로에만 한정한다.
 
 ### 좌표계
 
@@ -269,6 +264,7 @@ flowchart TD
     tf --> VP
     e ---> C
     c ---> C
+    i ---> C
     P ---> p
     sa --> VP
     e ---> VP
@@ -293,7 +289,7 @@ flowchart TD
 | 노드 | 역할 |
 |---|---|
 | MORAI-ROS_morai_msgs | 커밋 `45c6baf148f2327f4c9fefd48262f25bdfe4b567`에 고정하여 깃 서브모듈 링크. MORAI ROS 메시지 정의. |
-| MORAI-UDP-Bridge-Node | 커밋 `dbd2da34abbd13634304ad20803b17be13228007`(현장 점검에서 검증된 저장소)에 고정하여 깃 서브모듈 링크. MORAI UDP 패킷과 ROS 토픽 사이를 번역. 단순 번역 계층으로 독자적인 로직·판단으로 콘텐츠를 훼손·누락하지 않는다. 센서·차량 상태 수신 및 최종 제어 명령 송신. |
+| MORAI-UDP-Bridge-Node | 커밋 `e250c69b892b6e50242a92f2e7aed9078b0cccd4`에 고정하여 깃 서브모듈 링크. MORAI UDP 패킷과 ROS 토픽 사이를 번역. 단순 번역 계층으로 독자적인 로직·판단으로 콘텐츠를 훼손·누락하지 않는다. 센서·차량 상태 수신 및 최종 제어 명령 송신. |
 | velodyne | 커밋 `29abd0e1361cb7f5eda451d2b51c35eeca45e0d5`에 고정하여 깃 서브모듈 링크. velodyne vlp16의 공식 드라이버. LiDAR 데이터를 `/velodyne_points`로 발행. |
 | Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 /localization/ego로 발행한다.         |
 | LiDAR_Leveler_Node | TF_Publisher의 센서 장착 TF로 점군을 `base_link`로 변환해 `/velodyne_points/leveled` 발행. |
@@ -303,7 +299,7 @@ flowchart TD
 | TF_Publisher_Node | ego 콜백으로 동적 `map → base_link` 발행. 센서 장착 변환은 시작 시 정적 발행. |
 | Path_Planner_Node | ego 위치·자세와 `/vehicle/competition_status`의 차량 상태를 사용해 차선 추종·장애물 회피 경로 생성. |
 | Velocity_Planner_Node | 전달받은 경로의 속도 프로파일을 생성하고 TF로 `map`에서 `base_link`로 변환해 발행. 경로 형상을 다시 계획하지 않는다.     |
-| Control_Node | 속도 프로파일이 주입된 경로와 ego·차량 상태를 사용해 제어 명령 생성. |
+| Control_Node | 속도 프로파일이 주입된 경로와 ego·차량 상태·IMU를 사용해 제어 명령 생성. |
 | Speed_Filter_Node | 제어 명령에 최종 속도 제한을 적용해 Bridge에 전달. 최종 제어 명령. |
 
 ### Topics
@@ -317,6 +313,7 @@ flowchart TD
 - 모든 토픽은 **최신값 우선, 대기 깊이 1**을 원칙으로 한다. ROS 2 QoS로 표현하면
   **Best Effort + Keep Last(1)**이다. 현재 ROS 1 Noetic에서는 발행·구독 `queue_size=1`로 설정한다.
   이는 대기 메시지 수 제한이며, TCPROS를 Best Effort 전송으로 바꾸는 설정은 아니다.
+- 공식 Velodyne 드라이버의 `velodyne_packets`·`velodyne_points`·`scan` 경로는 예외로 발행·구독 `queue_size=10`을 유지한다.
 - 대기 메시지는 **ROS 구독 큐(`queue_size=1`)**가 관리한다. 새 메시지가 수신되면
   ROS는 큐에서 대기 중인 이전 메시지를 버리고 최신 메시지만 남긴다.
 - 다중 입력을 시각으로 결합하는 노드는 각 입력에 제한된 큐를 둘 수 있다. 이 큐는 인접 timestamp

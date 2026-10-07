@@ -21,6 +21,7 @@ class PlainVelocity60 {
       tf2::Transform pose;
       tf2::fromMsg(point.pose.pose, pose);
       tf2::toMsg(base_from_map * pose, point.pose.pose);
+      point.pose.header.frame_id = "base_link";
       point.velocity = 60.0 / 3.6;
       point.acceleration = 0.0;
     }

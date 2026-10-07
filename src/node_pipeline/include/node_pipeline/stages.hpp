@@ -1,4 +1,7 @@
 #pragma once
+#ifndef NODE_PIPELINE_LEGACY_PATH_PLANNER
+#error "Stage callbacks are private legacy APIs; use Core registration YAML."
+#endif
 #include "components.hpp"
 #include <functional>
 #include <typeindex>

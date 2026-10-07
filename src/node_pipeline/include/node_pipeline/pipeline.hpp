@@ -1,4 +1,7 @@
 #pragma once
+#ifndef NODE_PIPELINE_LEGACY_PATH_PLANNER
+#error "Direct PipelineNode construction is retired; use node.yaml and Core registration YAML."
+#endif
 #include "stages.hpp"
 
 namespace node_pipeline {

@@ -1,0 +1,11 @@
+name: path_tracking.hpp
+type: control::PathTracking
+stage: stage1
+inputs: [path, ego, competition]
+outputs:
+  -
+    name: command
+    type: morai_msgs/CtrlCmd
+validator: validators/path_contract.hpp
+parameter_loader: parameters/path_tracking.hpp
+parameter_namespace: tracking

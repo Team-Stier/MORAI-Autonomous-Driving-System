@@ -1,0 +1,29 @@
+name: traffic_light_node
+inputs:
+  image:
+    type: sensor_msgs/CompressedImage
+    topic: '/image/camera_7/compressed'
+    limits:
+      stale_after_sec: 0.100000002
+      receive_timeout_sec: 0.100000002
+      max_sensor_skew_sec: 0.1
+      frame: camera_7_optical_frame
+stages:
+  stage1:
+    cores: []
+    section_core_map: {}
+    health_core_map: []
+    max_health_checks: 10
+output:
+  source: stage1.light
+  type: interfaces/TrafficLight
+  topic: '/traffic_light'
+  header:
+    stamp_from: image
+    frame_id: camera_7_optical_frame
+execution:
+  mode: periodic
+  frequency_hz: 5
+  queue_capacity: 8
+  require_new_snapshot: true
+section_topic: '/section_annotation'

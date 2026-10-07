@@ -6,10 +6,11 @@
 - 발행 연결: `/velodyne_points/leveled`
 - 실행: /velodyne_points 콜백. ROS 발행·구독 큐는 1, 콜백은 직렬 실행한다.
 - `launch.sh`가 ROS·워크스페이스 환경을 준비하고 자기 노드만 실행한다.
-- `config/lidar_leveler.yaml`의 `stage1`은 UNKNOWN=0과 섹션 1~16을 `pass_through.hpp`에 매핑한다.
-- `CoreSet`은 지속 Core 객체를 소유한다. `core_dispatch.hpp`의 각 case가 필수 입력 인덱스를 선언·확인하고 실제 메시지를 개별 `process()` 인자로 전달한다. 현재 필수 입력은 cloud(0), tf_static(2)다.
-- Pipeline은 단계 목록을 순서대로 실행하며, 단계마다 독립된 HealthChecker·Policy·Selector가 입력 검사·보정·선택을 수행한다. 선택 매핑과 정책 우선순위는 `stage1`에서 읽는다.
-- 원본에서 전달·보정한 출력은 입력의 stamp·receipt metadata를 계승한다. 새 반환 변수는 시각 metadata 없이 전달하며, 시각 정보가 없으면 시간 검사를 생략한다.
-- 필수 payload가 Missing이면 Core를 호출하지 않는다. 마지막 결과에만 HeaderInjector가 입력 점군 stamp와 `base_link`를 주입하고 한 번 발행한다. 출력은 검사하지 않는다.
+- `node.yaml`의 `stage1`은 UNKNOWN=0과 섹션 1~16을 `pass_through.hpp`에 매핑한다.
+- `registrations/pass_through.yaml`은 필수 입력 `cloud`·`tf_static`과 `process(cloud, tf_static)`의 반환 점군을 연결한다.
+- `parameters/pass_through.hpp`의 읽기 전용 로더가 z 범위를 생성자에 주입하고 `validators/pass_through.hpp`가 점군 layout과 센서 장착 TF 존재를 검사한다.
+- 공통 실행기는 지속 Core 객체·조립·선택·공통 검사·Policy·계산·최종 발행을 담당한다.
+- 점군 출력은 `time_from: cloud`로 입력 stamp·수신 시각을 계승한다. `output.header`가 입력 점군 stamp와 `base_link`를 한 번 주입한다. 출력은 검사하지 않는다.
+- 기존 `config/lidar_leveler.yaml`의 실행 설정·z 범위·`stage1` 매핑은 공통 실행기가 읽는다.
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.

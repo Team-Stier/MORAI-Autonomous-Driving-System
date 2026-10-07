@@ -1,0 +1,12 @@
+name: full_ekf.hpp
+type: localization::FullEkf
+stage: stage1
+inputs: [gps, imu, competition_status]
+outputs:
+  - {name: ego, type: "nav_msgs/Odometry"}
+parameter_loader: parameters/full_ekf.hpp
+parameter_namespace: ekf
+validator: validators/full_ekf.hpp
+policy: policies/remove_invalid.hpp
+bank: state
+allowed_issues: {}

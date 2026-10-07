@@ -1,0 +1,11 @@
+name: checkpoint_sections.hpp
+type: section_annotator::CheckpointSections
+stage: stage1
+inputs: [ego]
+outputs:
+  -
+    name: section
+    type: interfaces/SectionAnnotation
+parameter_loader: parameters/checkpoint_sections.hpp
+parameter_namespace: checkpoint_sections
+assets: [checkpoints]

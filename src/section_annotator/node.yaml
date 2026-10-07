@@ -1,0 +1,48 @@
+name: section_annotator_node
+inputs:
+  ego:
+    type: nav_msgs/Odometry
+    topic: '/localization/ego'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: map
+stages:
+  stage1:
+    cores: [checkpoint_sections.hpp]
+    section_core_map:
+      '0': checkpoint_sections.hpp
+      '1': checkpoint_sections.hpp
+      '2': checkpoint_sections.hpp
+      '3': checkpoint_sections.hpp
+      '4': checkpoint_sections.hpp
+      '5': checkpoint_sections.hpp
+      '6': checkpoint_sections.hpp
+      '7': checkpoint_sections.hpp
+      '8': checkpoint_sections.hpp
+      '9': checkpoint_sections.hpp
+      '10': checkpoint_sections.hpp
+      '11': checkpoint_sections.hpp
+      '12': checkpoint_sections.hpp
+      '13': checkpoint_sections.hpp
+      '14': checkpoint_sections.hpp
+      '15': checkpoint_sections.hpp
+      '16': checkpoint_sections.hpp
+    health_core_map: []
+    max_health_checks: 10
+output:
+  source: stage1.section
+  topic: '/section_annotation'
+  header:
+    stamp_from: ego
+    frame_id: map
+execution:
+  mode: on_input
+  trigger_input: ego
+  queue_capacity: 8
+assets:
+  checkpoints:
+    parameter: checkpoint_sections/checkpoints_file
+    fallback_parameter: checkpoint_sections/map_file
+    sibling: checkpoints.csv

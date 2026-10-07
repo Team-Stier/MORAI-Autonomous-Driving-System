@@ -1,0 +1,62 @@
+name: lidar_leveler_node
+inputs:
+  cloud:
+    type: sensor_msgs/PointCloud2
+    topic: '/velodyne_points'
+    limits:
+      stale_after_sec: 0.3
+      receive_timeout_sec: 0.3
+      max_sensor_skew_sec: 0.1
+      frame: velodyne
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: '/vehicle/competition_status'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: base_link
+  tf_static:
+    type: tf2_msgs/TFMessage
+    topic: '/tf_static'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: base_link
+      check_stamp: false
+      check_receive_timeout: false
+      check_skew: false
+stages:
+  stage1:
+    cores: [pass_through.hpp]
+    section_core_map:
+      '0': pass_through.hpp
+      '1': pass_through.hpp
+      '2': pass_through.hpp
+      '3': pass_through.hpp
+      '4': pass_through.hpp
+      '5': pass_through.hpp
+      '6': pass_through.hpp
+      '7': pass_through.hpp
+      '8': pass_through.hpp
+      '9': pass_through.hpp
+      '10': pass_through.hpp
+      '11': pass_through.hpp
+      '12': pass_through.hpp
+      '13': pass_through.hpp
+      '14': pass_through.hpp
+      '15': pass_through.hpp
+      '16': pass_through.hpp
+    health_core_map: []
+    max_health_checks: 10
+output:
+  source: stage1.cloud
+  topic: '/velodyne_points/leveled'
+  header:
+    stamp_from: cloud
+    frame_id: base_link
+execution:
+  mode: on_input
+  trigger_input: cloud
+  queue_capacity: 8

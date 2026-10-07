@@ -77,6 +77,14 @@ inline GlobalPathParameters readGlobalPathParameters(
   return parameters;
 }
 
+inline PredictionParameters loadPredictionParameters(ros::NodeHandle& params) {
+  PredictionParameters parameters;
+  params.param("prediction_core/yaw_offset_rad", parameters.yaw_offset_rad, parameters.yaw_offset_rad);
+  if (!std::isfinite(parameters.yaw_offset_rad))
+    throw std::invalid_argument("prediction_core/yaw_offset_rad must be finite");
+  return parameters;
+}
+
 inline LocalPathParameters loadLocalPathParameters(
     ros::NodeHandle& params, const std::shared_ptr<lanelet::LaneletMap>& map) {
   LocalPathParameters parameters;

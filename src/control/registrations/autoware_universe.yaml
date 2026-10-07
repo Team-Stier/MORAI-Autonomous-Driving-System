@@ -1,0 +1,11 @@
+name: autoware_universe.hpp
+type: control::AutowareUniverse
+stage: stage1
+inputs: [path, ego, competition, imu]
+outputs:
+  -
+    name: command
+    type: morai_msgs/CtrlCmd
+validator: validators/path_contract.hpp
+parameter_loader: parameters/autoware_universe.hpp
+parameter_namespace: universe

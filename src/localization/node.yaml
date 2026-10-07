@@ -1,0 +1,49 @@
+name: localization_node
+execution: {mode: periodic, frequency_hz: 50.0, queue_capacity: 8}
+section_topic: /section_annotation
+inputs:
+  gps:
+    type: sensor_msgs/NavSatFix
+    topic: /sensors/gps/fix
+    limits: {frame: gps_link, stale_after_sec: 0.1, receive_timeout_sec: 0.1, max_sensor_skew_sec: 0.06, check_skew: true}
+  imu:
+    type: sensor_msgs/Imu
+    topic: /sensors/imu/data
+    limits: {frame: imu_link, stale_after_sec: 0.06, receive_timeout_sec: 0.06, max_sensor_skew_sec: 0.06, check_skew: true}
+  competition_status:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    limits: {frame: base_link, stale_after_sec: 0.06, receive_timeout_sec: 0.06, max_sensor_skew_sec: 0.06, check_skew: true}
+  lidar:
+    type: sensor_msgs/PointCloud2
+    topic: /velodyne_points/leveled
+    limits: {frame: base_link, stale_after_sec: 0.3, receive_timeout_sec: 0.3, max_sensor_skew_sec: 0.06, check_skew: false}
+banks:
+  state: {type: "localization::StateBank", header: localization/cores/state_bank.hpp}
+stages:
+  stage1:
+    cores: [full_ekf.hpp, tunnel_wall.hpp]
+    max_health_checks: 10
+    section_core_map:
+      "0": full_ekf.hpp
+      "1": full_ekf.hpp
+      "2": full_ekf.hpp
+      "3": full_ekf.hpp
+      "4": full_ekf.hpp
+      "5": full_ekf.hpp
+      "6": full_ekf.hpp
+      "7": full_ekf.hpp
+      "8": full_ekf.hpp
+      "9": full_ekf.hpp
+      "10": full_ekf.hpp
+      "11": full_ekf.hpp
+      "12": full_ekf.hpp
+      "13": full_ekf.hpp
+      "14": full_ekf.hpp
+      "15": tunnel_wall.hpp
+      "16": full_ekf.hpp
+    health_core_map: []
+output:
+  source: stage1.ego
+  topic: /localization/ego
+  header: {stamp_from: imu, frame_id: map}

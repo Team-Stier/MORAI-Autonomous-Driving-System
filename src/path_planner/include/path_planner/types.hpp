@@ -27,6 +27,9 @@ struct GlobalPathParameters {
   std::shared_ptr<lanelet::LaneletMap> map;
   std::array<Checkpoint, 16> checkpoints{};
 };
+struct PredictionParameters {
+  double yaw_offset_rad = -0.023509;
+};
 struct LocalPathParameters {
   std::shared_ptr<lanelet::LaneletMap> map;
   double local_path_length_m = 20.0;

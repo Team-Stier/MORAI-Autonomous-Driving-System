@@ -1,0 +1,15 @@
+name: tf_static_publisher_node
+inputs: {}
+stages:
+  stage1:
+    cores: [static_tf.hpp]
+    section_core_map:
+      '0': static_tf.hpp
+    health_core_map: []
+    max_health_checks: 10
+output:
+  source: stage1.tf
+  topic: '/tf_static'
+  header: {}
+execution:
+  mode: latched

@@ -1,0 +1,66 @@
+name: control_node
+inputs:
+  path:
+    type: interfaces/Path
+    topic: '/local_path/velocity_injected'
+    limits:
+      stale_after_sec: 0.15
+      receive_timeout_sec: 0.15
+      max_sensor_skew_sec: 0.1
+      frame: base_link
+  ego:
+    type: nav_msgs/Odometry
+    topic: '/localization/ego'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: map
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: '/vehicle/competition_status'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: base_link
+  imu:
+    type: sensor_msgs/Imu
+    topic: '/sensors/imu/data'
+    limits:
+      max_sensor_skew_sec: 0.1
+      frame: imu_link
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+stages:
+  stage1:
+    cores: [autoware_universe.hpp, path_tracking.hpp]
+    section_core_map:
+      '0': autoware_universe.hpp
+      '1': autoware_universe.hpp
+      '2': autoware_universe.hpp
+      '3': autoware_universe.hpp
+      '4': autoware_universe.hpp
+      '5': autoware_universe.hpp
+      '6': autoware_universe.hpp
+      '7': autoware_universe.hpp
+      '8': autoware_universe.hpp
+      '9': autoware_universe.hpp
+      '10': autoware_universe.hpp
+      '11': autoware_universe.hpp
+      '12': autoware_universe.hpp
+      '13': autoware_universe.hpp
+      '14': autoware_universe.hpp
+      '15': autoware_universe.hpp
+      '16': autoware_universe.hpp
+    health_core_map: []
+    max_health_checks: 10
+output:
+  source: stage1.command
+  topic: '/control_cmd'
+  header: {}
+execution:
+  mode: on_input
+  trigger_input: path
+  queue_capacity: 8
+section_topic: '/section_annotation'

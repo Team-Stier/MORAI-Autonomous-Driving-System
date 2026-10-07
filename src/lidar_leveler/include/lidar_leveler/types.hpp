@@ -1,10 +1,12 @@
 #pragma once
-#include <node_pipeline/components.hpp>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <interfaces/SectionAnnotation.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf2_msgs/TFMessage.h>
 namespace lidar_leveler {
-using Data = node_pipeline::Data<sensor_msgs::PointCloud2, interfaces::CompetitionVehicleStatus, tf2_msgs::TFMessage>;
+struct PassThroughParameters {
+  double z_min_m = -0.5;
+  double z_max_m = 4.5;
+};
 using Message = sensor_msgs::PointCloud2;
 }  // namespace lidar_leveler

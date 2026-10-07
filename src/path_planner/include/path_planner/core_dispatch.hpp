@@ -28,6 +28,13 @@ inline bool processStage2(CoreSet& cores, SecondCoreId id, const node_pipeline::
       result = node_pipeline::wrapResult(cores.prediction.process(
         data.message<interfaces::Objects>(2), data.message<Route>(5)));
       return true;
+    case SecondCoreId::PredictionCore:
+      if (!data.hasInputs({1, 2, 5})) return false;
+      before();
+      result = node_pipeline::wrapResult(cores.prediction_core.process(
+        data.message<interfaces::Objects>(2), data.message<interfaces::CompetitionVehicleStatus>(1),
+        data.message<Route>(5)));
+      return true;
   }
   throw std::invalid_argument("unknown second stage core");
 }

@@ -1,13 +1,9 @@
-#include <speed_filter/components.hpp>
+#include <speed_filter/cores/speed_limit60.hpp>
+#include <speed_filter/cores/no_speed_limit.hpp>
+#include <node_pipeline/detail/message_traits.hpp>
 #include <gtest/gtest.h>
 
 namespace {
-struct Access {
-  template<class Message> static std::int64_t stamp(const Message& message) { return message.header.stamp.toNSec(); }
-  template<class Message> static const std::string& frame(const Message& message) { return message.header.frame_id; }
-  static std::int64_t stamp(const morai_msgs::CtrlCmd&) { return 0; }
-  static std::string frame(const morai_msgs::CtrlCmd&) { return ""; }
-};
 void expectCommand(const morai_msgs::CtrlCmd& expected, const morai_msgs::CtrlCmd& actual) {
   EXPECT_EQ(expected.longlCmdType, actual.longlCmdType);
   EXPECT_DOUBLE_EQ(expected.accel, actual.accel);
@@ -94,49 +90,41 @@ TEST(SpeedFilter, BothCoresLimitAndRecoverWithIndependentParameters) {
 TEST(SpeedFilter, QueueOneConnectsLatestStatusToBothRegisteredCores) {
   namespace np = node_pipeline;
   namespace sf = speed_filter;
-  using Components = sf::Components<Access>;
-  Components::Buffer buffer(1);
-  Components::Assembler assembler;
-  sf::CoreSet cores{sf::SpeedLimit60{}, sf::NoSpeedLimit{}};
-  np::StageData missing;
-  missing.update(sf::Data{});
-  np::CoreResult result;
-  int attempts = 0;
-  const auto before = [&] { ++attempts; };
-  for (const auto id : {sf::CoreId::SpeedLimit60, sf::CoreId::NoSpeedLimit})
-    EXPECT_FALSE(sf::processCore(cores, id, missing, result, before));
-  EXPECT_EQ(0, attempts);
-
+  namespace nd=np::detail;
+  nd::Engine engine(1,1);
+  nd::InputSpec command_spec("command","/control_cmd"); command_spec.limits.check_stamp=false;
+  command_spec.limits.check_skew=false;
+  nd::InputSpec status_spec("competition","/vehicle/competition_status");status_spec.limits.frame="base_link";
+  engine.input<morai_msgs::CtrlCmd>(command_spec); engine.input<interfaces::CompetitionVehicleStatus>(status_spec);
+  nd::CoreSpec limited;limited.name="speed_limit60.hpp";limited.stage="stage1";
+  limited.inputs={"command","competition"};limited.outputs={{"command","command"}};
+  auto unlimited=limited;unlimited.name="no_speed_limit.hpp";
+  engine.core<sf::SpeedLimit60>(limited,{});engine.core<sf::NoSpeedLimit>(unlimited,{});
+  nd::StageSpec stage;stage.name="stage1";stage.section_core_map[0]=unlimited.name;
+  stage.section_core_map[1]=limited.name;engine.stage(stage);
+  EXPECT_EQ(np::ProcessStatus::Rejected,engine.process({10000000000,1}).status);
+  EXPECT_TRUE(engine.output().empty());
   interfaces::CompetitionVehicleStatus status;
-  status.header.stamp.fromSec(10);
-  status.signed_velocity_mps = 50.0 / 3.6;
-  buffer.pushInput(sf::InputTag<sf::Input::Competition>{}, status, np::Clocks{10000000000, 1});
-  status.header.stamp.fromSec(10.04);
-  status.signed_velocity_mps = 65.0 / 3.6;
-  const auto latest = buffer.pushInput(sf::InputTag<sf::Input::Competition>{}, status, np::Clocks{10040000000, 2});
-  morai_msgs::CtrlCmd command;
-  command.accel = 0.4;
-  command.steering = 0.25;
-  const auto input = buffer.pushInput(sf::InputTag<sf::Input::Command>{}, command, np::Clocks{10040000000, 3});
-  const auto snapshot = assembler.assemble(buffer,
-    np::Trigger<sf::Input>{np::ExecutionMode::OnInput, sf::Input::Command, input.id, input.stamp_ns});
-  EXPECT_EQ(0, snapshot.data.get<0>().sample.stamp_ns);
-  EXPECT_EQ(latest.id, snapshot.data.get<1>().sample.id);
-  EXPECT_EQ(1, snapshot.context.evictions[1]);
-  np::StageData data;
-  data.update(snapshot.data);
-  ASSERT_TRUE(sf::processCore(cores, sf::CoreId::NoSpeedLimit, data, result, before));
-  const auto unlimited = result(data);
-  expectCommand(command, unlimited.message<morai_msgs::CtrlCmd>(0));
-  EXPECT_EQ(input.id, unlimited.inputs[0].id);
-  EXPECT_EQ(input.receipt_steady_ns, unlimited.inputs[0].receipt_steady_ns);
-  auto expected = command;
-  expected.accel = 0;
-  expected.brake = 1;
-  ASSERT_TRUE(sf::processCore(cores, sf::CoreId::SpeedLimit60, data, result, before));
-  const auto limited = result(data);
-  expectCommand(expected, limited.message<morai_msgs::CtrlCmd>(0));
-  EXPECT_EQ(2, attempts);
+  status.header.frame_id="base_link";status.header.stamp.fromSec(10);
+  status.signed_velocity_mps=50.0/3.6;
+  engine.push<interfaces::CompetitionVehicleStatus>("competition",std::make_shared<const interfaces::CompetitionVehicleStatus>(status),{10000000000,1},10000000000);
+  status.header.stamp.fromSec(10.04);status.signed_velocity_mps=65.0/3.6;
+  const auto latest=engine.push<interfaces::CompetitionVehicleStatus>("competition",std::make_shared<const interfaces::CompetitionVehicleStatus>(status),{10040000000,2},10040000000);
+  morai_msgs::CtrlCmd command;command.accel=.4;command.steering=.25;
+  const auto id=engine.push<morai_msgs::CtrlCmd>("command",std::make_shared<const morai_msgs::CtrlCmd>(command),{10040000000,3},0,false);
+  ASSERT_EQ(np::ProcessStatus::Published,engine.process({10040000000,3},false,"command",id).status);
+  EXPECT_EQ(0,engine.assembled().at("command").stamp_ns);
+  EXPECT_FALSE(engine.assembled().at("command").has_stamp);
+  EXPECT_EQ(latest,engine.assembled().at("competition").id);
+  expectCommand(command,engine.result<morai_msgs::CtrlCmd>("command"));
+  EXPECT_EQ(id,engine.output().at("command").id);
+  EXPECT_EQ(3,engine.output().at("command").receipt_ns);
+  engine.section(np::Section{true,1,10040000000,"map"});
+  const auto next=engine.push<morai_msgs::CtrlCmd>("command",std::make_shared<const morai_msgs::CtrlCmd>(command),{10040000000,4},0,false);
+  ASSERT_EQ(np::ProcessStatus::Published,engine.process({10040000000,4},false,"command",next).status);
+  auto expected=command;expected.accel=0;expected.brake=1;
+  expectCommand(expected,engine.result<morai_msgs::CtrlCmd>("command"));
+
 }
 
 int main(int argc, char** argv) {

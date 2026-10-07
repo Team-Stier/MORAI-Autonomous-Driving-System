@@ -1,0 +1,11 @@
+name: cluster_match.hpp
+type: object_detector::ClusterMatch
+stage: stage1
+inputs: [cloud, competition]
+outputs:
+  - {name: objects, type: "interfaces/Objects"}
+  - {name: competition, type: "interfaces/CompetitionVehicleStatus", time_from: competition}
+parameter_loader: parameters/cluster_match.hpp
+parameter_namespace: stage1/cluster_match
+validator: validators/cluster_match.hpp
+allowed_issues: {}

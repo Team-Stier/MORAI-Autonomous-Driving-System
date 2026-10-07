@@ -1,0 +1,11 @@
+name: no_speed_limit.hpp
+type: speed_filter::NoSpeedLimit
+stage: stage1
+inputs: [command, competition]
+outputs:
+  -
+    name: command
+    type: morai_msgs/CtrlCmd
+    time_from: command
+parameter_loader: parameters/no_speed_limit.hpp
+parameter_namespace: no_speed_limit

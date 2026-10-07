@@ -9,6 +9,7 @@ class EgoTf {
     tf2_msgs::TFMessage message;
     message.transforms.resize(1);
     auto& transform = message.transforms.front();
+    transform.header = ego.header;
     transform.child_frame_id = "base_link";
     transform.transform.translation.x = ego.pose.pose.position.x;
     transform.transform.translation.y = ego.pose.pose.position.y;

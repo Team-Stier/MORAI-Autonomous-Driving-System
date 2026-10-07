@@ -1,6 +1,5 @@
 <launch>
   <node pkg="section_annotator" type="section_annotator_node" name="section_annotator_node" output="screen">
-    <rosparam command="load" file="$(find section_annotator)/config/section_annotator.yaml"/>
-    <param name="map_file" value="$(find section_annotator)/../map/kcity_lanelet2.osm"/>
+    <rosparam command="load" file="$(find section_annotator)/config/section_annotator.yaml" subst_value="true"/>
   </node>
 </launch>

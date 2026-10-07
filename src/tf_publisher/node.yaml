@@ -1,0 +1,40 @@
+name: tf_publisher_node
+inputs:
+  ego:
+    type: nav_msgs/Odometry
+    topic: '/localization/ego'
+    limits:
+      frame: map
+      stale_after_sec: 0.060000000
+      receive_timeout_sec: 0.060000000
+stages:
+  stage1:
+    cores: [ego_tf.hpp]
+    section_core_map:
+      '0': ego_tf.hpp
+      '1': ego_tf.hpp
+      '2': ego_tf.hpp
+      '3': ego_tf.hpp
+      '4': ego_tf.hpp
+      '5': ego_tf.hpp
+      '6': ego_tf.hpp
+      '7': ego_tf.hpp
+      '8': ego_tf.hpp
+      '9': ego_tf.hpp
+      '10': ego_tf.hpp
+      '11': ego_tf.hpp
+      '12': ego_tf.hpp
+      '13': ego_tf.hpp
+      '14': ego_tf.hpp
+      '15': ego_tf.hpp
+      '16': ego_tf.hpp
+    health_core_map: []
+    max_health_checks: 10
+output:
+  source: stage1.tf
+  topic: '/tf'
+  header: {}
+execution:
+  mode: on_input
+  trigger_input: ego
+  queue_capacity: 8

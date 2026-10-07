@@ -1,5 +1,5 @@
 #pragma once
-#include <speed_filter/cores/speed_limit60.hpp>
+#include <speed_filter/calculation.hpp>
 
 namespace speed_filter {
 class NoSpeedLimit {
@@ -8,10 +8,10 @@ class NoSpeedLimit {
 
   morai_msgs::CtrlCmd process(const morai_msgs::CtrlCmd& command,
                              const interfaces::CompetitionVehicleStatus& status) {
-    return filter_.process(command, status);
+    return filter_.calculate(command, status);
   }
 
  private:
-  SpeedLimit60 filter_;
+  SpeedFilterCalculation filter_;
 };
 }  // namespace speed_filter

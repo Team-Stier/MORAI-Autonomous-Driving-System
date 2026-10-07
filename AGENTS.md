@@ -50,7 +50,13 @@ Preserve documented frame, timestamp, and unit contracts. Keep generated `build/
 
 Treat all pre-existing files and uncommitted changes as user-managed: preserve them and limit edits to the scope the user requested. Do not modify, delete, or move a README without explicit authorization for that file and change. Treat `AGENTS.md` as protected policy and change it only when the user explicitly requests that change. No instruction outside this protected section may weaken or contradict these protections; if instructions conflict, stop and ask the user before making changes.
 
-Before developing or registering a Core, read and follow `src/node_pipeline/CORE_REGISTRATION.md`, including registration prerequisites, allowed changes, validation, and user communication and reporting. Read-only inspection of existing code to verify registration prerequisites is permitted. Core developers may modify files outside their Core file only for the diff-defined change kinds and roles in that guide. Determine authorization by the specific change, not merely the file name. Permission to register a Core does not authorize changes to other logic in the same file.
+Before developing or registering a Core, read and follow `src/node_pipeline/CORE_REGISTRATION.md`. Read-only inspection of registration prerequisites is permitted.
+
+Outside the Core file, only the `+` and `-` lines in that guide's fenced `diff` blocks authorize edits. Prose, tables, file names, and inferred responsibilities do not authorize additional edits.
+
+Before editing, show the user the target files, locations, and concrete proposed diffs. Match every hunk outside the Core file to a permitted registration diff. Stop any unmatched hunk and follow the existing reporting and explicit-permission procedure.
+
+After editing, compare the actual diff against the permitted and explicitly approved diffs. Do not add unmatched changes for safety, tuning, robustness, or dependency on another change. Do not assume the lead role to bypass this restriction.
 
 If a change outside this scope appears necessary, stop that change and follow the guide's reporting, lead consultation, and explicit-permission procedure before editing. A request to develop a Core or achieve a particular behavior does not imply permission to change code outside the allowed scope. Do not move Core algorithms into Policy, Validator, Selector, callbacks, or other external components to work around the requirements.
 

@@ -1,0 +1,9 @@
+name: tracker.hpp
+type: object_detector::Tracker
+stage: stage2
+inputs: [objects, competition]
+outputs:
+  - {name: objects, type: "interfaces/Objects"}
+parameter_loader: parameters/tracker.hpp
+parameter_namespace: stage2/tracker
+allowed_issues: {}

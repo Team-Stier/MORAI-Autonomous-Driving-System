@@ -1,0 +1,11 @@
+name: speed_limit60.hpp
+type: speed_filter::SpeedLimit60
+stage: stage1
+inputs: [command, competition]
+outputs:
+  -
+    name: command
+    type: morai_msgs/CtrlCmd
+    time_from: command
+parameter_loader: parameters/speed_limit60.hpp
+parameter_namespace: speed_limit60

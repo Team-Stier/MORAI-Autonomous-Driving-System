@@ -9,4 +9,7 @@
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
   <depend>sensor_msgs</depend>
+  <build_depend>libpcl-all-dev</build_depend>
+  <build_export_depend>libpcl-all-dev</build_export_depend>
+  <exec_depend>libpcl-all</exec_depend>
 </package>

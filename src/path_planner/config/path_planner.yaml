@@ -6,7 +6,7 @@ frame: map
 stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
-# UNKNOWN과 섹션 1~16에서 글로벌 경로·예측 패스스루·로컬 경로 Core를 순차 실행한다.
+# UNKNOWN과 섹션 1~16에서 글로벌 경로·원형 예측·로컬 경로 Core를 순차 실행한다.
 stage1:
   section_core_map:
     "0": global_path.hpp
@@ -28,6 +28,8 @@ stage1:
     "16": global_path.hpp
   health_core_map: []
 stage2:
+  prediction_core:
+    yaw_offset_rad: -0.023509
   section_core_map:
     "0": prediction_core.hpp
     "1": prediction_core.hpp

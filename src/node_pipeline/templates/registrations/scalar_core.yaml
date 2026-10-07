@@ -1,0 +1,11 @@
+name: scalar_core.hpp
+type: pipeline_template::ScalarCore
+stage: calculate
+inputs: [scalar]
+outputs: [{name: result, type: std_msgs/Float64}]
+validator: NoValidator
+policy: RemoveInvalid
+parameter_loader: parameters/scalar_core.hpp
+parameter_namespace: scalar_core
+allowed_issues: {}
+assets: []

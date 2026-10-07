@@ -13,6 +13,20 @@
   <license>MIT</license>
   <!-- 빌드/설치 메타데이터를 처리하는 catkin을 build tool 의존성으로 선언한다. -->
   <buildtool_depend>catkin</buildtool_depend>
+  <depend>roscpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>tf2_msgs</depend>
+  <depend>interfaces</depend>
+  <depend>morai_msgs</depend>
+  <build_depend>clang</build_depend>
+  <build_export_depend>clang</build_export_depend>
+  <build_depend>python3-yaml</build_depend>
+  <build_export_depend>python3-yaml</build_export_depend>
+  <build_depend>genmsg</build_depend>
+  <build_export_depend>genmsg</build_export_depend>
+  <test_depend>rospy</test_depend>
   <!-- 추가 plugin 등의 export는 없다. 공개 include 경로는 CMake의 catkin_package가 export한다. -->
   <export/>
 </package>

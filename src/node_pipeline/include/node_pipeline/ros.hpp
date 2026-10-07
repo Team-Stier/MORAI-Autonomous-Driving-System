@@ -1,4 +1,7 @@
 #pragma once
+#ifndef NODE_PIPELINE_LEGACY_PATH_PLANNER
+#error "RosIO and manual config wiring are retired; use node.yaml and the fixed runtime."
+#endif
 // ROS 실행 패키지만 include한다. 공통 계산 헤더는 ROS에 의존하지 않는다.
 #include "pipeline.hpp"
 #include <ros/ros.h>

@@ -1,0 +1,10 @@
+name: plain_velocity60.hpp
+type: velocity_planner::PlainVelocity60
+stage: stage1
+inputs: [path, tf]
+outputs:
+  -
+    name: path
+    type: interfaces/Path
+    time_from: path
+validator: validators/transform.hpp

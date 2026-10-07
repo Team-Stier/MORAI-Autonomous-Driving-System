@@ -1,6 +1,7 @@
 #pragma once
 // 메시지 타입을 보존하는 큐·조립·검사·정책·선택 공통 구현이다.
 #include "types.hpp"
+#include <node_pipeline/detail/sdk_types.hpp>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,8 +14,7 @@
 
 namespace node_pipeline {
 // 공통 오류다. 노드 고유 오류는 Validator에서 추가할 수 있다.
-enum class Kind { Missing, InvalidStamp, FutureStamp, FrameMismatch, NaN, Inf,
-                  OutRangePositive, OutRangeNegative, Stale, ReceiveTimeout, Skew, Count };
+
 // tuple의 모든 서로 다른 타입을 컴파일 시점에 순회한다.
 template<class Tuple, class Fn, std::size_t... I>
 void eachImpl(Tuple& tuple, Fn fn, std::index_sequence<I...>) {
@@ -117,6 +117,37 @@ template<class Id, class Access, class... Messages> class InputBuffer {
   std::tuple<std::deque<Sample<Messages>>...> queues_;
   ContextType context_;
 };
+namespace detail {
+inline bool assemblyReference(bool pinned, bool matched, bool found, std::int64_t stamp,
+                              std::uint64_t id, std::int64_t reference_stamp, std::uint64_t reference_id) {
+  return pinned ? matched : !found || stamp > reference_stamp || (stamp == reference_stamp && id > reference_id);
+}
+template<class Queue> const typename Queue::value_type* nearestSample(const Queue& queue, std::int64_t stamp,
+                                                                     bool pinned=false, std::uint64_t pinned_id=0) {
+  const typename Queue::value_type* chosen=nullptr;
+  long double best=std::numeric_limits<long double>::infinity();
+  // ponytail: bounded linear scan; index only if measured assembly cost matters.
+  for(const auto& sample:queue) {
+    if(pinned && sample.id!=pinned_id)continue;
+    const auto distance=std::fabs(static_cast<long double>(sample.stamp_ns)-stamp);
+    if(distance<best || (distance==best && (!chosen || sample.id>chosen->id))) {chosen=&sample;best=distance;}
+  }
+  return chosen;
+}
+inline void addIssue(std::vector<Kind>& issues, Kind kind) {
+  if(std::find(issues.begin(),issues.end(),kind)==issues.end())issues.push_back(kind);
+}
+inline void checkTimes(bool present,std::int64_t stamp,std::int64_t receipt,bool has_stamp,bool has_receipt,
+                       const HealthLimits& limits,const Clocks& clocks,std::vector<Kind>& issues) {
+  if(present && limits.check_stamp && has_stamp) {
+    if(stamp<=0)issues.push_back(Kind::InvalidStamp);
+    if(stamp>clocks.ros_ns)issues.push_back(Kind::FutureStamp);
+    if(stamp>0 && static_cast<long double>(clocks.ros_ns)-stamp>limits.stale_ns)issues.push_back(Kind::Stale);
+  }
+  if(limits.check_receive_timeout && has_receipt && static_cast<long double>(clocks.steady_ns)-receipt>limits.receive_timeout_ns)
+    issues.push_back(Kind::ReceiveTimeout);
+}
+}
 // 큐에서 선택만 수행하며 값이나 시각을 이유로 조립을 거부하지 않는다.
 template<class Buffer, class Access> class SnapshotAssembler {
  public:
@@ -130,10 +161,9 @@ template<class Buffer, class Access> class SnapshotAssembler {
     // ponytail: bounded linear scan; indexed queues only if measured assembly cost matters.
     each(buffer.queues(), [&](auto tag, const auto& queue) {
       for (const auto& sample : queue) {
-        const bool candidate = trigger.mode == ExecutionMode::OnInput
-          ? static_cast<std::size_t>(trigger.input) == tag && sample.id == trigger.sample_id
-          : !found || sample.stamp_ns > snapshot.context.stamp_ns ||
-            (sample.stamp_ns == snapshot.context.stamp_ns && sample.id > reference_id);
+        const bool candidate = detail::assemblyReference(trigger.mode == ExecutionMode::OnInput,
+          static_cast<std::size_t>(trigger.input) == tag && sample.id == trigger.sample_id, found,
+          sample.stamp_ns, sample.id, snapshot.context.stamp_ns, reference_id);
         if (candidate) {
           found = true; reference_id = sample.id;
           snapshot.context.stamp_ns = sample.stamp_ns;
@@ -143,14 +173,9 @@ template<class Buffer, class Access> class SnapshotAssembler {
     });
     each(buffer.queues(), [&](auto tag, const auto& queue) {
       auto& slot = snapshot.data.template get<decltype(tag)::value>();
-      long double best = std::numeric_limits<long double>::infinity();
-      for (const auto& sample : queue) {
-        if (trigger.mode == ExecutionMode::OnInput && static_cast<std::size_t>(trigger.input) == tag && sample.id != reference_id) continue;
-        const auto distance = std::fabs(static_cast<long double>(sample.stamp_ns) - snapshot.context.stamp_ns);
-        if (distance < best || (distance == best && (!slot.present() || sample.id > slot.sample.id))) {
-          best = distance; slot.sample = sample;
-        }
-      }
+      const auto* chosen=detail::nearestSample(queue,snapshot.context.stamp_ns,
+        trigger.mode == ExecutionMode::OnInput && static_cast<std::size_t>(trigger.input) == tag,reference_id);
+      if(chosen)slot.sample=*chosen;
       snapshot.token[tag] = slot.present() ? slot.sample.id : 0;
     });
     snapshot.is_new = !attempted_ || snapshot.token != token_;
@@ -162,18 +187,7 @@ template<class Buffer, class Access> class SnapshotAssembler {
   Token token_{};
 };
 // 시간과 값의 한도는 config에서 주입하고 Validator는 필요한 필드만 검사한다.
-struct HealthLimits {
-  double lower = -1, upper = 1;
-  std::int64_t stale_ns = 300000000, receive_timeout_ns = 300000000, max_skew_ns = 100000000;
-  std::string frame = "map";
-  bool check_stamp = true;
-  bool check_receive_timeout = true;
-  bool check_skew = true;
-  void validate() const {
-    if (!std::isfinite(lower) || !std::isfinite(upper) || lower > upper || frame.empty() || stale_ns <= 0 || receive_timeout_ns <= 0 || max_skew_ns <= 0)
-      throw std::invalid_argument("invalid health limits");
-  }
-};
+
 template<class Id, std::size_t N> struct Health {
   std::array<InputHealth<Id, Kind>, N> inputs{};
   std::array<std::uint64_t, N> evictions{};
@@ -204,11 +218,9 @@ template<class Id, std::size_t N, class Validator> class HealthChecker {
       if (!slot.present()) result.issues.push_back(Kind::Missing);
       else {
         validator_(*slot.sample.message, input_limits_[tag], result.issues);
-        if (input_limits_[tag].check_stamp && slot.sample.has_stamp && slot.sample.stamp_ns <= 0) result.issues.push_back(Kind::InvalidStamp);
-        if (input_limits_[tag].check_stamp && slot.sample.has_stamp && slot.sample.stamp_ns > clocks.ros_ns) result.issues.push_back(Kind::FutureStamp);
-        if (input_limits_[tag].check_stamp && slot.sample.has_stamp && slot.sample.stamp_ns > 0 && exceeds(clocks.ros_ns, slot.sample.stamp_ns, input_limits_[tag].stale_ns)) result.issues.push_back(Kind::Stale);
       }
-      if (input_limits_[tag].check_receive_timeout && slot.sample.has_receipt && exceeds(clocks.steady_ns, slot.present() ? slot.sample.receipt_steady_ns : started_, input_limits_[tag].receive_timeout_ns)) result.issues.push_back(Kind::ReceiveTimeout);
+      detail::checkTimes(slot.present(),slot.sample.stamp_ns,slot.present() ? slot.sample.receipt_steady_ns : started_,
+        slot.sample.has_stamp,slot.sample.has_receipt,input_limits_[tag],clocks,result.issues);
     });
     for (std::size_t i = 0; i < N; ++i) for (std::size_t j = i + 1; j < N; ++j) {
       if (!input_limits_[i].check_skew || !input_limits_[j].check_skew || !present[i] || !present[j] || !stamped[i] || !stamped[j] || std::fabs(static_cast<long double>(stamps[i]) - stamps[j]) <= limits_.max_skew_ns) continue;
@@ -272,12 +284,6 @@ template<class Id, class Upper, class Lower, class Remove = RemoveInput> class I
   Upper upper_; Lower lower_; Remove remove_;
 };
 // 공통 수치 검사다. GPS NO_FIX 같은 특화 검사는 노드 Validator에 둔다.
-inline void checkNumber(double value, const HealthLimits& limits, std::vector<Kind>& issues) {
-  if (std::isnan(value)) issues.push_back(Kind::NaN);
-  else if (std::isinf(value)) issues.push_back(Kind::Inf);
-  else if (value > limits.upper) issues.push_back(Kind::OutRangePositive);
-  else if (value < limits.lower) issues.push_back(Kind::OutRangeNegative);
-}
 // when의 input/issue 조건은 모두 일치해야 한다.
 template<class Input, class CoreId> struct HealthCoreRule {
   // AND로 결합할 조건 목록이다. 비어 있는 규칙은 설정에서 거부한다.

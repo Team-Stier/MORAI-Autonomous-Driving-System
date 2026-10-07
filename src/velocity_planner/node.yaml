@@ -1,0 +1,76 @@
+name: velocity_planner_node
+inputs:
+  path:
+    type: interfaces/Path
+    topic: '/local_path'
+    limits:
+      stale_after_sec: 0.15
+      receive_timeout_sec: 0.15
+      max_sensor_skew_sec: 0.1
+      frame: map
+  ego:
+    type: nav_msgs/Odometry
+    topic: '/localization/ego'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: map
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: '/vehicle/competition_status'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: base_link
+  light:
+    type: interfaces/TrafficLight
+    topic: '/traffic_light'
+    limits:
+      stale_after_sec: 0.6
+      receive_timeout_sec: 0.6
+      max_sensor_skew_sec: 0.1
+      frame: camera_7_optical_frame
+  tf:
+    type: tf2_msgs/TFMessage
+    topic: '/tf'
+    limits:
+      stale_after_sec: 0.06
+      receive_timeout_sec: 0.06
+      max_sensor_skew_sec: 0.1
+      frame: map
+stages:
+  stage1:
+    cores: [plain_velocity60.hpp, plain_velocity100.hpp]
+    section_core_map:
+      '0': plain_velocity60.hpp
+      '1': plain_velocity60.hpp
+      '2': plain_velocity60.hpp
+      '3': plain_velocity60.hpp
+      '4': plain_velocity60.hpp
+      '5': plain_velocity60.hpp
+      '6': plain_velocity60.hpp
+      '7': plain_velocity60.hpp
+      '8': plain_velocity60.hpp
+      '9': plain_velocity60.hpp
+      '10': plain_velocity60.hpp
+      '11': plain_velocity100.hpp
+      '12': plain_velocity100.hpp
+      '13': plain_velocity60.hpp
+      '14': plain_velocity60.hpp
+      '15': plain_velocity60.hpp
+      '16': plain_velocity60.hpp
+    health_core_map: []
+    max_health_checks: 10
+output:
+  source: stage1.path
+  topic: '/local_path/velocity_injected'
+  header:
+    stamp_from: path
+    frame_id: base_link
+execution:
+  mode: on_input
+  trigger_input: path
+  queue_capacity: 8
+section_topic: '/section_annotation'
