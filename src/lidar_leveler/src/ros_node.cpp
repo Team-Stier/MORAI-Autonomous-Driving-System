@@ -1,4 +1,5 @@
 #include <lidar_leveler/components.hpp>
+#include <lidar_leveler/header_injector.hpp>
 #include <node_pipeline/ros.hpp>
 namespace pkg = lidar_leveler;
 namespace np = node_pipeline;
@@ -11,12 +12,7 @@ struct RosAccess {
 using Message = pkg::Message;
 using Components = pkg::Components<RosAccess>;
 using IO = np::RosIO<Message>;
-struct RosHeaderInjector {
-  void injectHeader(sensor_msgs::PointCloud2& message, const np::Context<3>& context) const {
-    message.header.stamp.fromNSec(context.stamp_ns);
-    message.header.frame_id = "base_link";
-  }
-};
+using RosHeaderInjector = pkg::HeaderInjector;
 using Node = Components::Node<IO, RosHeaderInjector>;
 struct RosCallbacks {
   Node& node;
@@ -37,7 +33,8 @@ int main(int argc, char** argv) {
   ros::NodeHandle stage1_params(params, "stage1");
   np::loadStageConfig(stage1_params,
     std::map<std::string, pkg::Input>{{"cloud", pkg::Input::Cloud}, {"competition", pkg::Input::Competition}, {"tf_static", pkg::Input::TfStatic}},
-    std::map<std::string, pkg::CoreId>{{"pass_through.hpp", pkg::CoreId::PassThrough}}, selector, policy);
+    std::map<std::string, pkg::CoreId>{{"pass_through.hpp", pkg::CoreId::PassThrough},
+      {"roll_pitch_leveler.hpp", pkg::CoreId::RollPitchLeveler}}, selector, policy);
   std::array<np::HealthLimits, 3> limits;
   limits.fill(settings.health);
   limits[0].frame = "velodyne";
@@ -56,7 +53,7 @@ int main(int argc, char** argv) {
   Node node(settings.execution, Components::Buffer(settings.queue_capacity), {},
     {np::makeStage<pkg::CoreSet, Components::Buffer::ContextType, pkg::Data>(
       Components::Checker(limits, io.readClocks().steady_ns), policy, selector, pkg::processCore)},
-    pkg::CoreSet{pkg::PassThrough{}}, {}, io);
+    pkg::CoreSet{pkg::PassThrough{}, pkg::RollPitchLeveler{}}, RosHeaderInjector{settings.health.frame}, io);
   RosCallbacks callbacks{node};
   const auto sub_cloud = nh.subscribe("/velodyne_points", 1, &RosCallbacks::onCloud, &callbacks);
   const auto sub_competition = nh.subscribe("/vehicle/competition_status", 1, &RosCallbacks::onCompetition, &callbacks);

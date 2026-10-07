@@ -2,30 +2,30 @@ execution_mode: on_input
 frequency_hz: 10.0
 queue_capacity: 8
 max_health_checks: 10
-frame: base_link
+frame: base_link_level
 stale_after_sec: 0.3
 receive_timeout_sec: 0.3
 max_sensor_skew_sec: 0.1
 # 빈 문자열은 Core 미등록을 뜻한다. 등록 후 해당 파일 이름으로 변경한다.
 stage1:
   section_core_map:
-    "0": pass_through.hpp
-    "1": pass_through.hpp
-    "2": pass_through.hpp
-    "3": pass_through.hpp
-    "4": pass_through.hpp
-    "5": pass_through.hpp
-    "6": pass_through.hpp
-    "7": pass_through.hpp
-    "8": pass_through.hpp
-    "9": pass_through.hpp
-    "10": pass_through.hpp
-    "11": pass_through.hpp
-    "12": pass_through.hpp
-    "13": pass_through.hpp
-    "14": pass_through.hpp
-    "15": pass_through.hpp
-    "16": pass_through.hpp
+    "0": roll_pitch_leveler.hpp
+    "1": roll_pitch_leveler.hpp
+    "2": roll_pitch_leveler.hpp
+    "3": roll_pitch_leveler.hpp
+    "4": roll_pitch_leveler.hpp
+    "5": roll_pitch_leveler.hpp
+    "6": roll_pitch_leveler.hpp
+    "7": roll_pitch_leveler.hpp
+    "8": roll_pitch_leveler.hpp
+    "9": roll_pitch_leveler.hpp
+    "10": roll_pitch_leveler.hpp
+    "11": roll_pitch_leveler.hpp
+    "12": roll_pitch_leveler.hpp
+    "13": roll_pitch_leveler.hpp
+    "14": roll_pitch_leveler.hpp
+    "15": roll_pitch_leveler.hpp
+    "16": roll_pitch_leveler.hpp
   health_core_map: []
 trigger_input: /velodyne_points
 inputs:
