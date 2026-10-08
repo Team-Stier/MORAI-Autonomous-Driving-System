@@ -52,7 +52,7 @@ C++ 소스는 위 경로와 `test/` 밖에 두지 않는다. `test/unit/test_*.c
 3. Assembler는 누락·오래됨·invalid 여부와 무관하게 항상 스냅샷을 반환하며 원본 stamp를 새로 만들지 않는다. 조립 기준은 `on_input`이면 방금 수신한 sample, `periodic`이면 `reference_input`의 최신 샘플이며, `reference_input`이 없으면 전체 입력 중 최신 stamp 샘플이다. 나머지 입력은 기준 stamp에 가장 가까운 샘플을 고르고, 동률이면 수신 ID가 큰 것을 고른다. context stamp는 기준 샘플의 stamp다. `latched`는 기준 샘플이 없어 context stamp가 0이다.
 4. `readClocks()`로 `health_clocks`를 한 번 읽은 뒤 Stage 루프에 진입한다. 모든 Stage와 그 안의 재검사는 같은 시각을 사용한다. 큐 전체는 최초 Assembler만 읽는다.
 5. Stage마다 `section_core_map`으로 Core를 선택한다. section이 미수신이거나 `frame_id≠map`·`stamp≤0`·미래 stamp이면 UNKNOWN(0)을 사용한다. 매핑된 Core가 없으면 `finish(NoCore, checks, "no compatible core")`로 종료한다.
-6. 검사 회차마다 선택된 Core의 profile로 입력 계약을 확인하고 health를 생성한다. Core 선언 입력의 슬롯이 부족하거나 존재하는 payload의 타입이 다르면 예외로 종료한다. 공통 검사층이 Missing·frame·선언 수치 필드의 NaN·Inf·범위·stamp·수신 timeout·skew를 검사한 뒤, 선택된 Core의 Validator가 도메인 고유 검사를 추가한다. timestamp 나이는 ROS 시각, 수신 경과는 steady 시각으로 검사한다. 최초 Stage의 구독 입력이 Missing이면 수신 대기는 노드 시작 시각 기준이다. Health는 input별 모든 오류를 보관한다.
+6. 검사 회차마다 선택된 Core의 profile로 입력 계약을 확인하고 health를 생성한다. Core 선언 입력의 슬롯이 부족하거나 존재하는 payload의 타입이 다르면 예외를 발생시키며, Failed로 보고하고 해당 처리 회차만 종료한다. 공통 검사층이 Missing·frame·선언 수치 필드의 NaN·Inf·범위·stamp·수신 timeout·skew를 검사한 뒤, 선택된 Core의 Validator가 도메인 고유 검사를 추가한다. timestamp 나이는 ROS 시각, 수신 경과는 steady 시각으로 검사한다. 최초 Stage의 구독 입력이 Missing이면 수신 대기는 노드 시작 시각 기준이다. Health는 input별 모든 오류를 보관한다.
 7. 선택된 Core의 선언 입력이 모두 존재하고 그 입력의 issue가 모두 `allowed_issues`에 포함되면 검사를 끝낸다. 선언 입력의 Missing은 허용 issue로 면제하지 않는다. Core가 선언하지 않은 입력의 issue는 판정에서 제외한다.
 8. 수용 조건을 만족하지 못하면 `health_core_map`으로 Core를 덮어쓴다. `when`은 AND 조건이고 가장 높은 priority의 일치 규칙을 적용한다. 일치하는 규칙이 없으면 현재 Core를 유지하며, 최고 priority 동률은 설정 오류다. 이어서 그 시점에 선택된 Core의 Policy를 적용하고, 다음 회차에서 그 Core의 Validator로 재검사한다. Policy는 입력의 보정 복사본만 수정하며 stamp·수신 시각을 보존한다.
 9. Stage당 최대 검사 횟수는 `max_health_checks`이며 기본값은 10이다. 한도 안에서 수용하지 못하면 `finish(Rejected, checks, "health check limit")`로 종료한다.
@@ -453,7 +453,7 @@ sequenceDiagram
 | 공통 `main` | `node.yaml`·등록 YAML·`selection.yaml`·파라미터를 읽어 실행기를 구성한다. 입력마다 구독을, `periodic`이면 timer를, `latched`면 `onStartup()`을 연결한다. 시작 실패는 ROS ERROR로 보고하고 구독 없이 대기한다. |
 | `RosCallbacks` | 구독 메시지를 `retainMessage()` 후 `onInput()`에 전달하고 section은 `onSection()`으로 저장한다. callback 밖으로 예외를 내보내지 않고 ROS ERROR로 보고한다. |
 | `PipelineNode` | 최초 조립·중복 확인·시각 조회 후 n개 Stage를 순회한다. 중복·검사 한도·미선택·Missing·예외는 `finish()`와 `IO::report()`로 이번 처리를 종료한다. |
-| `InputBuffer`·`SnapshotAssembler` | 원본 메시지와 수신 시각을 보존하고 최초 스냅샷·token을 조립한다. `markAttempted()`는 첫 Stage의 Core 호출 직전에 한 번 수행한다. |
+| `InputBuffer`·`SnapshotAssembler` | 원본 메시지와 수신 시각을 보존하고 최초 스냅샷·token을 조립한다. `markAttempted()`는 첫 Stage의 Core 호출 직전에 수행하며, 조립 이후 실패한 회차도 Failed 보고 전에 시도 token을 기록한다. |
 | `CoreSelector` | `selectSection()`은 section 유효성을 확인해 `section_core_map`으로 선택한다. `overrideHealth()`는 `health_core_map`으로 덮어쓴다. |
 | `stage.coreProfile(id)` | 등록 YAML에서 생성한 Core profile을 반환한다. profile은 입력 계약 검사, `required_inputs`, Validator, Policy, 허용 issue를 갖는다. |
 | `HealthChecker`·Validator | 공통 검사 후 profile의 Validator를 호출한다. 모든 재검사의 시각은 `health_clocks`다. |
