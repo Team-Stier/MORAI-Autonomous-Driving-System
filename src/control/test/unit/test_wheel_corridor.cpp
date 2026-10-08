@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/planning/wheel_corridor.hpp"
+#include "control/libraries/tracking/planning/wheel_corridor.hpp"
 
 namespace control { namespace tracking {
 namespace {

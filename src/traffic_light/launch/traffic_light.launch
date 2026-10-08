@@ -1,5 +1,3 @@
 <launch>
-  <node pkg="traffic_light" type="traffic_light_node" name="traffic_light_node" output="screen">
-    <rosparam command="load" file="$(find traffic_light)/config/traffic_light.yaml"/>
-  </node>
+  <node pkg="traffic_light" type="traffic_light_node" name="traffic_light_node" output="screen"/>
 </launch>

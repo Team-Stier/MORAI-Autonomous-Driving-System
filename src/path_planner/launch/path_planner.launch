@@ -1,7 +1,3 @@
 <launch>
-  <node pkg="path_planner" type="path_planner_node" name="path_planner_node" output="screen">
-    <rosparam command="load" file="$(find path_planner)/config/path_planner.yaml"/>
-    <param name="map_file" value="$(find path_planner)/../map/kcity_lanelet2.osm"/>
-    <param name="checkpoints_file" value="$(find path_planner)/../map/checkpoints.csv"/>
-  </node>
+  <node pkg="path_planner" type="path_planner_node" name="path_planner_node" output="screen"/>
 </launch>

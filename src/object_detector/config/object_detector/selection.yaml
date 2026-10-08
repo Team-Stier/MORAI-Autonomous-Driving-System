@@ -1,0 +1,7 @@
+# 등록된 Core가 없다. 등록 후 Stage마다 UNKNOWN=0과 섹션 1~16을 Core 파일 이름에 매핑한다.
+detect:
+  section_core_map: {}
+  health_core_map: []
+track:
+  section_core_map: {}
+  health_core_map: []

@@ -1,4 +1,5 @@
-#include <velocity_planner/core_dispatch.hpp>
+#include <velocity_planner/cores/plain_velocity60.hpp>
+#include <velocity_planner/cores/plain_velocity100.hpp>
 #include <gtest/gtest.h>
 #include <cmath>
 
@@ -30,25 +31,11 @@ TEST(PlainVelocity, InjectsBothSpeedsAndTransformsAllPoses) {
   transform.transform.rotation.z = std::sqrt(0.5);
   transform.transform.rotation.w = std::sqrt(0.5);
 
-  velocity_planner::CoreSet cores{velocity_planner::PlainVelocity60{}, velocity_planner::PlainVelocity100{}};
-  velocity_planner::Data data;
-  data.get<0>().sample.message = std::make_shared<const interfaces::Path>(path);
-  node_pipeline::StageData stage_data;
-  stage_data.update(data);
-  node_pipeline::CoreResult result;
-  int calls = 0;
-  const auto before = [&] { ++calls; };
-  for (const auto id : {velocity_planner::CoreId::PlainVelocity60, velocity_planner::CoreId::PlainVelocity100}) {
-    EXPECT_FALSE(velocity_planner::processCore(cores, id, stage_data, result, before));
-  }
-  EXPECT_EQ(0, calls);
-  data.get<4>().sample.message = std::make_shared<const tf2_msgs::TFMessage>(tf);
-  stage_data.update(data);
-  for (const auto id : {velocity_planner::CoreId::PlainVelocity60, velocity_planner::CoreId::PlainVelocity100}) {
-    ASSERT_TRUE(velocity_planner::processCore(cores, id, stage_data, result, before));
-    const auto stage_output = result(stage_data);
-    const auto& output = stage_output.message<interfaces::Path>(0);
-    const double speed_mps = (id == velocity_planner::CoreId::PlainVelocity60 ? 60.0 : 100.0) / 3.6;
+  velocity_planner::PlainVelocity60 plain60;
+  velocity_planner::PlainVelocity100 plain100;
+  for (const bool fast : {false, true}) {
+    const auto output = fast ? plain100.process(path, tf) : plain60.process(path, tf);
+    const double speed_mps = (fast ? 100.0 : 60.0) / 3.6;
     EXPECT_TRUE(output.header.stamp.isZero());
     EXPECT_TRUE(output.header.frame_id.empty());
     ASSERT_EQ(path.points.size(), output.points.size());
@@ -66,7 +53,6 @@ TEST(PlainVelocity, InjectsBothSpeedsAndTransformsAllPoses) {
       EXPECT_EQ(path.points[i].pose.header, point.pose.header);
     }
   }
-  EXPECT_EQ(2, calls);
   EXPECT_EQ(-1, path.points.front().velocity);
   EXPECT_EQ(10, path.points.front().pose.pose.position.x);
 }

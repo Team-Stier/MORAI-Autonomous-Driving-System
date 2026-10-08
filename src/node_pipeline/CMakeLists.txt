@@ -1,31 +1,38 @@
-# ROS Noetic catkin 패키지에서 사용할 최소 CMake 버전을 지정한다.
 cmake_minimum_required(VERSION 3.0.2)
-# 패키지 이름을 선언한다. PROJECT_NAME과 설치 경로에 같은 이름을 사용한다.
 project(node_pipeline)
 
-# 공통 라이브러리 자체는 ROS 메시지/roscpp에 의존하지 않고 catkin만 필요하다.
-find_package(catkin REQUIRED)
-# 다른 실행 패키지가 include 경로를 받아 header-only 템플릿을 사용할 수 있게 export한다.
-catkin_package(INCLUDE_DIRS include)
+find_package(catkin REQUIRED COMPONENTS interfaces roscpp roslib)
+find_package(yaml-cpp REQUIRED)
+catkin_package(
+  INCLUDE_DIRS include
+  LIBRARIES node_pipeline
+  CATKIN_DEPENDS interfaces roscpp roslib
+  CFG_EXTRAS node_pipeline-extras.cmake)
+
+add_library(node_pipeline src/runtime.cpp)
+target_include_directories(node_pipeline PUBLIC include ${catkin_INCLUDE_DIRS})
+target_include_directories(node_pipeline PRIVATE ${YAML_CPP_INCLUDE_DIR})
+target_compile_features(node_pipeline PUBLIC cxx_std_14)
+target_compile_options(node_pipeline PRIVATE -Wall -Wextra -Wpedantic)
+target_link_libraries(node_pipeline ${catkin_LIBRARIES} ${YAML_CPP_LIBRARIES})
+add_dependencies(node_pipeline ${catkin_EXPORTED_TARGETS})
 
 if(CATKIN_ENABLE_TESTING)
-  catkin_add_gtest(test_core_sequence test/unit/test_core_sequence.cpp)
-  if(TARGET test_core_sequence)
-    target_include_directories(test_core_sequence PRIVATE include)
-    target_compile_features(test_core_sequence PRIVATE cxx_std_14)
-    target_compile_options(test_core_sequence PRIVATE -Wall -Wextra -Wpedantic)
-    target_link_libraries(test_core_sequence gtest_main)
-  endif()
+  foreach(test_name test_pipeline test_param_reader test_ros_header_injector)
+    catkin_add_gtest(${test_name} test/unit/${test_name}.cpp)
+    if(TARGET ${test_name})
+      target_compile_features(${test_name} PRIVATE cxx_std_14)
+      target_compile_options(${test_name} PRIVATE -Wall -Wextra -Wpedantic)
+      target_link_libraries(${test_name} node_pipeline gtest_main)
+    endif()
+  endforeach()
+  catkin_add_nosetests(test/unit/test_np_check.py)
 endif()
 
-# 서비스 패키지는 헤더와 가이드 템플릿 소스를 배포한다. ROS 가이드 템플릿 실행 파일은 여기서 빌드하지 않는다.
-# 공개 헤더 디렉터리의 내용을 설치 대상에 넣는다. 뒤의 /는 디렉터리 내용 복사를 뜻한다.
-install(DIRECTORY include/${PROJECT_NAME}/
-  # include/node_pipeline 아래로 설치해 include 이름을 개발/설치 환경에서 동일하게 유지한다.
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
-# 복사해서 전문화할 가이드 템플릿 코드와 합성 가이드 템플릿 설정을 함께 설치한다.
-install(DIRECTORY templates config
-  # 패키지 share 디렉터리에 가이드 템플릿/설정 하위 디렉터리를 보존한다.
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
-# 처리 계약과 다이어그램이 담긴 README도 설치 패키지에 포함한다.
+install(TARGETS node_pipeline
+  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
+  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
+install(DIRECTORY include/${PROJECT_NAME}/ DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
+install(DIRECTORY cmake scripts DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION} PATTERN "*.in" EXCLUDE)
+install(FILES src/node_main.cpp DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/src)
 install(FILES README.md CORE_REGISTRATION.md DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})

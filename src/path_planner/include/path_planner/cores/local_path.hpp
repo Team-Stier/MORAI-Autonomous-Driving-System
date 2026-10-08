@@ -1,5 +1,6 @@
 #pragma once
-#include <path_planner/types.hpp>
+#include <path_planner/banks/shared_map.hpp>
+#include <path_planner/libraries/types.hpp>
 #include <lanelet2_routing/RoutingGraph.h>
 #include <lanelet2_traffic_rules/TrafficRulesFactory.h>
 #include <algorithm>
@@ -8,16 +9,20 @@
 #include <utility>
 
 namespace path_planner {
+struct LocalPathParameters {
+  double local_path_length_m = 20.0;
+};
+
 class LocalPath {
  public:
-  explicit LocalPath(LocalPathParameters parameters)
-      : parameters_(std::move(parameters)),
+  LocalPath(LocalPathParameters parameters, SharedMap& shared)
+      : parameters_(parameters),
+        map_(shared.map),
         rules_(lanelet::traffic_rules::TrafficRulesFactory::create(
             lanelet::Locations::Germany, lanelet::Participants::Vehicle)),
-        graph_(lanelet::routing::RoutingGraph::build(*parameters_.map, *rules_)) {}
+        graph_(lanelet::routing::RoutingGraph::build(*map_, *rules_)) {}
 
-  Message process(const nav_msgs::Odometry& ego, const interfaces::SectionAnnotation&,
-                  const Route& global_path, const PredictedObjects&) {
+  Message process(const nav_msgs::Odometry& ego, const Route& global_path, const PredictedObjects&) {
     const auto& route = global_path.value();
     const auto& position = ego.pose.pose.position;
     const lanelet::BasicPoint2d ego_xy(position.x, position.y);
@@ -108,6 +113,7 @@ class LocalPath {
   }
 
   LocalPathParameters parameters_;
+  std::shared_ptr<lanelet::LaneletMap> map_;
   lanelet::traffic_rules::TrafficRulesPtr rules_;
   lanelet::routing::RoutingGraphUPtr graph_;
 };

@@ -4,8 +4,8 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/controllers/lateral/mpc/mpc_lateral_controller.hpp"
-#include "control/tracking/controllers/lateral/mpc/mpc_controller.hpp"
+#include "control/libraries/tracking/controllers/lateral/mpc/mpc_lateral_controller.hpp"
+#include "control/libraries/tracking/controllers/lateral/mpc/mpc_controller.hpp"
 
 namespace control { namespace tracking {
 namespace {

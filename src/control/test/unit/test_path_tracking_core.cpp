@@ -1,4 +1,8 @@
-#include <control/components.hpp>
+#include <control/parameters/path_tracking.hpp>
+#include <control/parameters/safe_stop.hpp>
+#include <control/validators/tracking_inputs.hpp>
+#include <fstream>
+#include <iterator>
 #include <gtest/gtest.h>
 #include <limits>
 namespace {
@@ -77,48 +81,47 @@ TEST(PathTrackingCore, RunsBothMpcSolversWithoutRosIo) {
   EXPECT_GE(command.brake, 0);
   EXPECT_FALSE(command.accel > 0 && command.brake > 0);
 }
-struct Access {
-  template<class M> static std::int64_t stamp(const M& m) { return m.header.stamp.toNSec(); }
-  template<class M> static const std::string& frame(const M& m) { return m.header.frame_id; }
-};
-struct IO {
-  using MessageType = morai_msgs::CtrlCmd;
-  int* outputs;
-  node_pipeline::Clocks readClocks() const { return {1000000000, 1000000000}; }
-  void publish(const morai_msgs::CtrlCmd&) { ++*outputs; }
-  template<class H> void reportHealth(const H&, std::size_t) {}
-  void report(const node_pipeline::ProcessReport&) noexcept {}
-};
-struct Header { void injectHeader(morai_msgs::CtrlCmd&, const node_pipeline::Context<3>&) {} };
-TEST(PathTrackingPipeline, AllSectionsSelectCoreAndInvalidInputsAreRemoved) {
-  namespace np = node_pipeline;
-  using C = control::Components<Access>;
-  auto selector = C::selector();
-  for (int i = 0; i <= 16; ++i) selector.section_core_map[i] = control::CoreId::PathTracking;
-  np::ExecutionConfig<control::Input> config;
-  config.mode = np::ExecutionMode::OnInput;
-  config.trigger_input = control::Input::Path;
-  std::array<np::HealthLimits, 3> limits;
-  limits[0].frame = "base_link"; limits[1].frame = "map"; limits[2].frame = "base_link";
-  auto policy = C::policy(limits[0]); policy.priority.fill(100);
-  int outputs = 0;
-  C::Node<IO, Header> node(config, C::Buffer(8), {},
-    std::vector<C::Stage>{np::makeStage<control::CoreSet, C::Buffer::ContextType, control::Data>(
-      C::Checker(limits, 1000000000), policy, selector, control::processCore)},
-    control::CoreSet(parameters()), {}, IO{&outputs});
-  auto input = path(6);
-  EXPECT_EQ(node.onInput(control::InputTag<control::Input::Path>{}, std::make_shared<const interfaces::Path>(input)).status, np::ProcessStatus::NoCore);
-  node.onInput(control::InputTag<control::Input::Ego>{}, std::make_shared<const nav_msgs::Odometry>(ego()));
-  node.onInput(control::InputTag<control::Input::Competition>{}, std::make_shared<const interfaces::CompetitionVehicleStatus>(status()));
-  for (int i = 0; i <= 16; ++i) {
-    node.onSection(np::Section{true, static_cast<std::uint8_t>(i), 1000000000, "map"});
-    EXPECT_EQ(node.onInput(control::InputTag<control::Input::Path>{}, std::make_shared<const interfaces::Path>(input)).status, np::ProcessStatus::Published);
-  }
-  EXPECT_EQ(outputs, 17);
-  auto invalid = status(); invalid.velocity_x_mps = std::numeric_limits<float>::quiet_NaN();
-  node.onInput(control::InputTag<control::Input::Competition>{}, std::make_shared<const interfaces::CompetitionVehicleStatus>(invalid));
-  EXPECT_EQ(node.onInput(control::InputTag<control::Input::Path>{}, std::make_shared<const interfaces::Path>(input)).status, np::ProcessStatus::NoCore);
-  EXPECT_EQ(outputs, 17);
+TEST(PathTrackingParameters, LoadsEveryConfiguredKey) {
+  std::ifstream stream(std::string(NP_PACKAGE_DIR) + "/config/control/parameters/path_tracking.yaml");
+  ASSERT_TRUE(stream.good());
+  const std::string text{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+  const auto loaded = control::loadPathTrackingParameters(node_pipeline::ParamReader::fromString(text));
+  EXPECT_EQ("mpc", loaded.lateral_controller);
+  EXPECT_NEAR(60.0 / 3.6, loaded.longitudinal_mpc.maximum_speed_mps, 1e-12);
+  EXPECT_NEAR(40.0 * 0.017453292519943295, loaded.pure_pursuit.maximum_steering_angle_rad, 1e-12);
+  EXPECT_THROW(control::loadPathTrackingParameters(node_pipeline::ParamReader::fromString("nominal_dt_sec: 0.05\n")),
+               std::invalid_argument);
+}
+TEST(SafeStop, PublishesConfiguredBrakeWithoutInputs) {
+  control::SafeStop core(control::loadSafeStopParameters(node_pipeline::ParamReader::fromString("brake: 0.5\n")));
+  const auto command = core.process();
+  EXPECT_EQ(command.longlCmdType, 1);
+  EXPECT_DOUBLE_EQ(command.accel, 0);
+  EXPECT_DOUBLE_EQ(command.steering, 0);
+  EXPECT_DOUBLE_EQ(command.brake, 0.5);
+  EXPECT_THROW(control::loadSafeStopParameters(node_pipeline::ParamReader::fromString("brake: 0\n")), std::invalid_argument);
+}
+TEST(TrackingInputs, RejectsDegeneratePathsAndOverspeed) {
+  node_pipeline::HealthLimits limits;
+  limits.frame = "base_link";
+  limits.lower = 0;
+  limits.upper = 60.0 / 3.6;
+  const control::TrackingInputs validator;
+  std::vector<node_pipeline::Kind> issues;
+  validator(path(6), limits, issues);
+  EXPECT_TRUE(issues.empty());
+  validator(path(20), limits, issues);
+  EXPECT_EQ(std::vector<node_pipeline::Kind>(4, node_pipeline::Kind::OutRangePositive), issues);
+  issues.clear();
+  auto single = path(6);
+  single.points.resize(1);
+  validator(single, limits, issues);
+  EXPECT_EQ(std::vector<node_pipeline::Kind>(2, node_pipeline::Kind::Missing), issues);
+  issues.clear();
+  auto odometry = ego();
+  odometry.child_frame_id = "odom";
+  validator(odometry, limits, issues);
+  EXPECT_EQ(std::vector<node_pipeline::Kind>{node_pipeline::Kind::FrameMismatch}, issues);
 }
 }
 int main(int argc, char** argv) {

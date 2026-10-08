@@ -1,0 +1,38 @@
+execution: {mode: on_input, trigger_input: path, queue_capacity: 8, max_health_checks: 10}
+section_topic: /section_annotation
+max_skew_sec: 0.1
+inputs:
+  path:
+    type: interfaces/Path
+    topic: /local_path
+    frame: map
+    stale_after_sec: 0.15
+    receive_timeout_sec: 0.15
+  ego:
+    type: nav_msgs/Odometry
+    topic: /localization/ego
+    frame: map
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    frame: base_link
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+  light:
+    type: interfaces/TrafficLight
+    topic: /traffic_light
+    frame: camera_7_optical_frame
+    stale_after_sec: 0.6
+    receive_timeout_sec: 0.6
+  tf:
+    type: tf2_msgs/TFMessage
+    topic: /tf
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+stages:
+  - name: inject
+    outputs:
+      - {name: path, from: path}
+output: {topic: /local_path/velocity_injected, frame_id: base_link}

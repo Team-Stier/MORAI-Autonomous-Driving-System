@@ -5,7 +5,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/planning/curvature_speed_planner.hpp"
+#include "control/libraries/tracking/planning/curvature_speed_planner.hpp"
 
 namespace control { namespace tracking {
 namespace {

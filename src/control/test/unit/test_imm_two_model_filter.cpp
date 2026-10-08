@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/controllers/lateral/imm_two_model_filter.hpp"
+#include "control/libraries/tracking/controllers/lateral/imm_two_model_filter.hpp"
 
 namespace control { namespace tracking {
 namespace {

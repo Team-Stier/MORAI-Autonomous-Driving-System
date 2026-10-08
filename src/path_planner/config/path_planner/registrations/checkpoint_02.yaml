@@ -1,0 +1,8 @@
+stage: checkpoint
+inputs: [ego, competition, objects, tf]
+policy: remove_invalid.hpp
+allowed_issues:
+  ego: [Stale, ReceiveTimeout, Skew]
+  competition: [Stale, ReceiveTimeout, Skew]
+  objects: [Stale, ReceiveTimeout, Skew]
+  tf: [Stale, ReceiveTimeout, Skew]

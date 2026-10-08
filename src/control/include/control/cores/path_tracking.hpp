@@ -1,5 +1,5 @@
 #pragma once
-#include <control/tracking/commands.hpp>
+#include <control/libraries/tracking/commands.hpp>
 #include <interfaces/Path.h>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <nav_msgs/Odometry.h>

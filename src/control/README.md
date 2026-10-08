@@ -1,7 +1,7 @@
 # control
 
-`node_pipeline` 라이브러리로 `path_tracking.hpp` Core를 실행한다.
-UNKNOWN을 포함한 모든 section(0~16)에 같은 지속 Core를 등록한다.
+`path_tracking.hpp` Core로 경로 추종 제어 명령을 만든다. 입력에 문제가 있으면 `safe_stop.hpp` Core로 교체해 안전 정지 명령을 발행한다.
+노드 구성은 `config/control/`, 확장점은 `include/control/`에 둔다.
 
 ## 입출력
 
@@ -25,25 +25,23 @@ Velocity Planner, 최종 속도 제한과 Bridge 전달은 Speed Filter가 수�
 ## 실행과 설정
 
 `launch.sh`는 ROS·워크스페이스 환경을 준비하고 이 노드만 실행한다.
-전체 bringup은 루트 `run.sh`를 사용한다. 경로 콜백마다 계산하며 ROS 큐는 1이다.
-`config/control.yaml`의 `tracking`에서 계산 파라미터를 설정한다.
-기본 횡·종방향은 MPC이며 횡방향은 Hybrid·Stanley·Pure Pursuit,
-종방향은 PID로 선택할 수 있다. 파라미터를 바꾸면 노드를 재시작한다.
-Core 등록 파일은 `include/control/core_set.hpp`, 계산 라이브러리는
-`include/control/tracking/`과 `src/controllers/`에 둔다.
-CoreSet은 지속 PathTracking 객체를 소유한다. 현재 단일 Stage는 자기 Checker·Policy·Selector를 소유하며 선택 매핑은 `stage1`에서 읽는다.
-`include/control/core_dispatch.hpp`의 선택 case가 필수 입력 0·1·2를 검사하고, 존재할 때만 `before()`와 `process(path, ego, competition)`를 호출한다. Missing이면 NoCore로 종료한다.
-Stage 사이에서 입력을 계승한 슬롯은 stamp·수신 시각을 유지한다. 새 계산값은 시각 메타데이터가 없어도 정상 입력이며, 없는 시각의 검사만 생략한다.
-PathTracking의 새 CtrlCmd는 시각 메타데이터 없이 전달한다. Pipeline은 마지막 결과에 HeaderInjector를 한 번 적용하고 발행하며, CtrlCmd에는 주입할 Header가 없다.
+전체 bringup은 루트 `run.sh`를 사용한다. `/local_path/velocity_injected` 입력마다 계산한다.
+계산 파라미터는 `config/control/parameters/path_tracking.yaml`에서 설정하고 노드를 재시작해 반영한다.
+기본 횡·종방향은 MPC이며 횡방향은 Hybrid·Stanley·Pure Pursuit, 종방향은 PID로 선택할 수 있다.
+계산 라이브러리는 `include/control/libraries/tracking/`과 `src/libraries/`에 둔다.
 계산 간격은 경로 stamp 차이이며 첫 호출은 `nominal_dt_sec`를 사용하고,
 적분 간격은 `minimum_control_dt_sec`~`maximum_control_dt_sec`로 제한한다.
 
-Pipeline은 frame·NaN/Inf·경로점 수·형상·목표속도 범위와 stamp·stale·수신 timeout·입력 시차를 검사한다.
-오류 입력은 Remove 정책으로 Missing이 된다. 세 필수 입력 중 하나라도 없으면 Core를 호출하지 않는다.
-경로 stamp가 역행하면 계산을 거부하고, 이미 발행한 동일 stamp는 다시 계산하지 않는다.
-입력 거부 또는 watchdog 수신 공백에는 ROS adapter가 accel=0·steering=0·설정 brake로 안전 명령을 발행한다.
-수치 계산 오류는 adapter가 안전 명령을 발행한 뒤 노드를 종료한다. PID 자동 fallback과 계산 재시도는 하지 않는다.
-출력 검사와 payload 변경은 수행하지 않는다.
+| Core | 입력 | 선택 |
+| --- | --- | --- |
+| `path_tracking.hpp` | path·ego·competition | UNKNOWN=0과 섹션 1~16 |
+| `safe_stop.hpp` | 없음 | path·ego·competition 중 하나가 Missing이면 health 매핑으로 교체 |
+
+공통 검사층이 frame·NaN/Inf·stamp·stale·수신 timeout·입력 시차를, Validator `tracking_inputs.hpp`가 경로점 수·형상·quaternion·point frame·목표속도 범위와 ego `child_frame_id`를 검사한다.
+목표속도 범위는 `config/control/node.yaml`의 path `range`다.
+Policy `remove_all.hpp`는 issue가 있는 입력을 제거해 Missing으로 만들고, 이어서 `safe_stop.hpp`가 선택된다.
+`safe_stop.hpp`는 accel=0·steering=0·설정 brake(`config/control/parameters/safe_stop.yaml`)의 CtrlCmd를 반환한다.
+CtrlCmd에는 Header가 없으므로 헤더를 주입하지 않는다. 출력 검사와 payload 변경은 수행하지 않는다.
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
 `docs/`와 bag 분석 도구는 기존 데모의 설계·측정 기록을 보존한다.

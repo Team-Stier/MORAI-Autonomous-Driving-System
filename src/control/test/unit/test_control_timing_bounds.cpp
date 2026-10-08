@@ -2,7 +2,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/common/control_timing_bounds.hpp"
+#include "control/libraries/tracking/common/control_timing_bounds.hpp"
 
 namespace control { namespace tracking {
 namespace {

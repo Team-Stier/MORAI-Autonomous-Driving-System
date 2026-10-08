@@ -1,11 +1,25 @@
 #pragma once
-#include <section_annotator/types.hpp>
+#include <interfaces/SectionAnnotation.h>
+#include <nav_msgs/Odometry.h>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <limits>
 
 namespace section_annotator {
+struct Checkpoint {
+  double x_m = 0;
+  double y_m = 0;
+};
+struct CheckpointParameters {
+  std::array<Checkpoint, 16> checkpoints{};
+  double radius_m = 10.0;
+};
+
 class CheckpointSections {
  public:
   explicit CheckpointSections(CheckpointParameters parameters) : parameters_(parameters) {}
-  Message process(const nav_msgs::Odometry& ego) {
+  interfaces::SectionAnnotation process(const nav_msgs::Odometry& ego) {
     const auto& position = ego.pose.pose.position;
     double closest_distance = std::numeric_limits<double>::infinity();
     std::size_t closest_index = 0;
@@ -19,13 +33,13 @@ class CheckpointSections {
     }
     if (closest_distance <= parameters_.radius_m)
       section_ = static_cast<std::uint8_t>(closest_index + 1);
-    Message message;
+    interfaces::SectionAnnotation message;
     message.state = section_;
     return message;
   }
 
  private:
   CheckpointParameters parameters_;
-  std::uint8_t section_ = Message::UNKNOWN;
+  std::uint8_t section_ = interfaces::SectionAnnotation::UNKNOWN;
 };
 }  // namespace section_annotator

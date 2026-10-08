@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/controllers/lateral/pure_pursuit.hpp"
+#include "control/libraries/tracking/controllers/lateral/pure_pursuit.hpp"
 
 namespace control { namespace tracking {
 namespace {

@@ -1,0 +1,20 @@
+execution: {mode: on_input, trigger_input: command, queue_capacity: 1, max_health_checks: 10}
+section_topic: /section_annotation
+inputs:
+  command:
+    type: morai_msgs/CtrlCmd
+    topic: /control_cmd
+    check_stamp: false
+    check_skew: false
+    receive_timeout_sec: 0.06
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    frame: base_link
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+stages:
+  - name: limit
+    outputs:
+      - {name: command, from: command}
+output: {topic: /morai_udp_bridge/control_cmd}

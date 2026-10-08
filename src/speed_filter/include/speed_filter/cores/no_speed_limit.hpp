@@ -1,17 +1,17 @@
 #pragma once
-#include <speed_filter/cores/speed_limit60.hpp>
+#include <speed_filter/libraries/speed_limiter.hpp>
 
 namespace speed_filter {
 class NoSpeedLimit {
  public:
-  explicit NoSpeedLimit(SpeedFilterParameters parameters = {0}) : filter_(parameters) {}
+  explicit NoSpeedLimit(SpeedFilterParameters parameters = {0}) : limiter_(parameters) {}
 
   morai_msgs::CtrlCmd process(const morai_msgs::CtrlCmd& command,
                              const interfaces::CompetitionVehicleStatus& status) {
-    return filter_.process(command, status);
+    return limiter_.process(command, status);
   }
 
  private:
-  SpeedLimit60 filter_;
+  SpeedLimiter limiter_;
 };
 }  // namespace speed_filter

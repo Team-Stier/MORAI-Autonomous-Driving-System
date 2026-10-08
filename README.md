@@ -7,39 +7,51 @@ MORAI SIM 기반 자율주행 시스템. ROS 1 Noetic을 사용한다.
 ### 협업과 Core 작성
 
 이 프로젝트는 Strategy 패턴으로 작성하며, 알고리즘 Core와 ROS 실행 Pipeline을 분리해 협업한다.
+Pipeline은 공통 실행기로 봉인한다. 노드는 YAML로 구성하고, 기능은 공식 확장점 파일로만 확장한다.
 
-- 각 파트 담당자는 노드를 직접 개발하지 않고 자신의 Core만 작성한다. 등록 전제 확인을 위한 기존 코드의 읽기는 허용한다.
-- Core 개발·등록 전에 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)를 읽고 등록 전제 확인, 수정 범위, 검증, 사용자 안내·보고 절차를 따른다. Core 파일 외 수정은 가이드의 diff에 정의된 변경 종류와 담당 범위만 허용한다.
+- 각 파트 담당자는 노드를 직접 개발하지 않고 자신의 Core와 공식 확장점 파일만 작성한다. 등록 전제 확인을 위한 기존 코드의 읽기는 허용한다.
+- Core 개발·등록 전에 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)를 읽고 등록 전제 확인, 수정 범위, 검증, 사용자 안내·보고 절차를 따른다. Core 개발자는 가이드가 지정한 확장점 파일과 YAML 경로만 작성·수정한다.
 - 허용 범위 밖의 변경은 중단하고, 가이드의 보고·리드 협의·명시적 허가 절차를 따른다.
-- Core 개발 요청이나 원하는 동작의 지정만으로 허용 범위 밖의 변경이 승인된 것으로 해석하지 않는다. 알고리즘을 Core 밖의 Policy·Validator·Selector·callback 등에 옮겨 요구사항을 우회 구현하지 않는다.
-- 리드 개발자는 Pipeline 라이브러리와 템플릿을 따르는 노드를 제공하고, 담당자가 작성한 Core를 ROS 입출력에 연결한다.
-- Core는 정규 `process()`의 인자와 반환값만으로 Pipeline에 연결되는 알고리즘 컴포넌트다. 계산 라이브러리와 Core가 소유한 내부 계산 상태는 사용할 수 있다. 시각화 목적의 토픽 발행을 제외한 ROS 통신, 다른 노드·Pipeline 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다.
+- Core 개발 요청이나 원하는 동작의 지정만으로 허용 범위 밖의 변경이 승인된 것으로 해석하지 않는다. 알고리즘을 Core 밖의 Policy·Validator·Selector·파라미터 로더·Bank·callback 등에 옮겨 요구사항을 우회 구현하지 않는다.
+- 리드 개발자는 노드의 `node.yaml`로 실행 방식·입력 계약·Stage 순서와 출력 계약·발행을 선언한다. 공통 실행기가 등록된 Core를 ROS 입출력에 연결하며, 노드별 실행 코드는 작성하지 않는다.
+- Core는 정규 `process()`의 인자와 반환값만으로 Pipeline에 연결되는 알고리즘 컴포넌트다. 계산 라이브러리와 Core가 소유한 내부 계산 상태는 사용할 수 있다. 시각화 목적의 토픽 발행을 제외한 ROS 통신, 다른 노드·Pipeline·Core 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다. 같은 패키지에서 선언된 Bank는 예외로 허용한다.
 - 시각화 목적의 토픽 발행만 Core 디커플링 규칙의 예외로 허용한다. 해당 토픽 이름은 `/visualizer/*`로 지정하며, `/visualizer/*` 토픽은 `src/visualizer` 패키지 이외에서 절대 구독하지 않는다.
-- Core는 입력이 자신의 입력 계약을 만족한다고 전제하고 계산한다. 입력 유효성 검사, 누락 감지, 입력 대체, fallback 및 처리 성공·실패 상태 반환을 구현하지 않는다. 입력 검사와 처리 정책은 Pipeline이 담당한다. 알고리즘 자체에 필요한 조건 분기와 수치 계산은 수행한다.
-- Core 하나당 파일 하나를 둔다. 첫 Core는 실제 구독 메시지를 `process()`의 개별 인자로 받고, 후속 Core는 이전 Core의 반환값을 개별 인자로 받는다. 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있으며, 개수·타입·순서는 연결된 Core의 계약으로 정한다. 마지막 Core는 목표 발행 메시지 타입의 payload를 완성해 반환하며, 출력 헤더 주입과 발행은 Pipeline이 담당한다.
+- Core는 입력이 자신의 입력 계약을 만족한다고 전제하고 계산한다. 입력 유효성 검사, 누락 감지, 입력 대체, fallback 및 처리 성공·실패 상태 반환을 구현하지 않는다. 입력 검사와 처리 정책은 Pipeline의 공통 검사층과 Validator·Policy 확장점이 담당한다. 알고리즘 자체에 필요한 조건 분기와 수치 계산은 수행한다.
+- Core 하나당 파일 하나를 둔다. 첫 Core는 실제 구독 메시지를 `process()`의 개별 인자로 받고, 후속 Core는 이전 Core의 반환값을 개별 인자로 받는다. 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있으며, 개수·타입·순서는 `node.yaml`의 Stage 출력 계약으로 정한다. 마지막 Core는 목표 발행 메시지 타입의 payload를 완성해 반환하며, 출력 헤더 주입과 발행은 Pipeline이 담당한다.
 
-구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)와
-그 안의 [템플릿 코드](src/node_pipeline/templates/)를 참고한다.
+구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)를 참고한다.
 
 ### Core 등록
 
 등록 절차와 설정 주입은 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)에 따른다.
 
-각 노드의 등록 파일은 `include/<package_name>/core_set.hpp`,
-Core 작성 위치는 `include/<package_name>/cores/`다.
-개발 단계에서 데모 테스트가 필요하면 먼저 노드의 `core_set.hpp`에서 Core 파일을
-include하고 Core ID·객체·필수 입력·`process()` 인자 연결을 등록한다.
-config 로더의 이름→Core ID 등록 키와 YAML의 Core 매핑 값은 확장자를 포함한
-Core 파일 이름(예: `full_ekf.hpp`)으로 통일한다.
-이후 각 패키지의 `config/<package_name>.yaml`에서 Core 매핑을 변경해
-등록한 Core를 바꿔 끼우며 개발한다. CoreSet 등록은 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)에 따른다.
+Core 등록·해제에 Pipeline C++을 수정하지 않는다. 노드별 YAML은 `src/<package_name>/config/<node>/`,
+확장점 파일은 `src/<package_name>/include/<package_name>/` 아래 종류별 디렉터리에 둔다.
+각 YAML은 아래 담당 범위만 선언하며 같은 정보를 다른 YAML에 다시 선언하지 않는다.
 
-Core 내부에는 입력 valid 처리를 두지 않는다. `process()` 인자의 개수·타입은
-컴파일 시 고정하며, Pipeline은 등록된 필수 입력이 하나라도 Missing이면
-해당 Core 호출과 발행을 거부한다. 필수 입력 외의 추가 메시지는 허용한다.
+| 파일 | 담당 | 내용 | 변경 반영 |
+|---|---|---|---|
+| `config/<node>/node.yaml` | 리드 | 실행 방식, 입력 계약, Stage 순서와 출력 계약, 발행 | 재빌드 |
+| `config/<node>/registrations/<core>.yaml` | Core 개발자 | Core의 Stage, `process()` 인자, 확장점 연결 | 재빌드 |
+| `config/<node>/selection.yaml` | Core 개발자 | Stage별 `section_core_map`·`health_core_map` | 재시작 |
+| `config/<node>/parameters/<core>.yaml` | Core 개발자 | Core 계수 | 재시작 |
+| `include/<package_name>/{cores,validators,policies,parameters,banks}/` | Core 개발자 | 확장점 구현 | 재빌드 |
+| `include/<package_name>/libraries/`, `src/libraries/` | Core 개발자 | 계산 라이브러리 | 재빌드 |
+
+등록 파일 이름이 Core ID·Core 파일·클래스 이름을 정한다. 예를 들어 `full_ekf.yaml`은
+Core ID `full_ekf.hpp`, 파일 `cores/full_ekf.hpp`, 클래스 `FullEkf`다.
+등록 YAML을 추가하면 Core가 연결되고, 삭제하면 해제된다. 선택 매핑의 값은
+확장자를 포함한 Core 파일 이름이다. 이후 `selection.yaml`의 매핑을 변경해
+등록한 Core를 바꿔 끼우며 개발한다.
+
+Core 내부에는 입력 valid 처리를 두지 않는다. 등록 YAML의 `inputs`는 `process()` 인자 순서이며
+모두 필수 입력이다. `process()` 인자의 개수·타입은 컴파일 시 고정하며, Pipeline은 선언된 입력이
+하나라도 Missing이면 해당 Core 호출과 발행을 거부한다. 선언된 입력의 Missing은 허용 issue로
+면제하지 않는다. 필수 입력 외의 추가 메시지는 허용한다.
 업스트림 메시지 환경에 대응하도록 사용할 입력 조합과 인자 개수별로 Core를 마련하고,
 `health_core_map`에서 input별 issue 조건을 해당 Core 파일 이름에 연결한다.
-`section_core_map`으로 기본 Core를 선택하고, 일치하는 health 매핑이 있으면 덮어쓴다.
+`section_core_map`으로 기본 Core를 선택한다. 선택된 Core의 선언 입력이 모두 존재하고 허용 issue만
+남을 때까지, 일치하는 health 매핑으로 Core를 덮어쓰고 선택된 Core의 Policy를 적용해 재검사한다.
 
 입력 불안정에 대한 fallback은 이 Core 교체로 수행한다.
 다른 곳, 특히 Core 내부에서 입력 대체나 별도의 fallback을 구현하지 않는다.
@@ -157,13 +169,14 @@ src/
 ├── MORAI-UDP-Bridge-Node/      # MORAI UDP 입출력
 ├── velodyne/                  # LiDAR 드라이버
 ├── interfaces/                # 공유 사용자 정의 타입
+├── node_pipeline/             # 공통 실행기·생성기·계약 검사
 ├── map/                       # 지도 자산 및 체크포인트
 ├── localization/              # Localization_Node
 ├── lidar_leveler/             # LiDAR_Leveler_Node
 ├── object_detector/           # Object_Detector_Node
 ├── traffic_light/             # Traffic_Light_Node
 ├── section_annotator/         # Section_Annotator_Node
-├── tf_publisher/              # TF_Publisher_Node
+├── tf_publisher/              # TF_Publisher_Node, Static_TF_Publisher_Node
 ├── path_planner/              # Path_Planner_Node
 ├── velocity_planner/          # Velocity_Planner_Node
 ├── control/                   # Control_Node
@@ -182,6 +195,7 @@ src/
 * interfaces/
 * MORAI-ROS-morai_msgs/
 * map/
+* node_pipeline/
 
 **실행 패키지**: 실행되는 ROS 노드를 갖는 패키지. **실행 패키지 사이에 커플링을 만들지 않는다.**
 * localization/
@@ -208,6 +222,7 @@ flowchart TD
     subgraph GM ["global manager"]
         SA(("Section_Annotator_Node"))
         TF(("TF_Publisher_Node"))
+        STF(("Static_TF_Publisher_Node"))
     end
     subgraph J ["judgement layer"]
         P(("Path_Planner_Node"))
@@ -252,7 +267,7 @@ flowchart TD
     V ---> l ---> LL ---> ll
     e ---> SA ---> sa
     e ---> TF --> tf
-    TF --> tfs
+    STF --> tfs
     tfs --> LL
     tfs --> L
     sa ---> TL
@@ -300,7 +315,8 @@ flowchart TD
 | Object_Detector_Node | 수평화 점군을 클러스터링해 `/objects` 발행. |
 | Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 YOLO 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
 | Section_Annotator_Node | ego가 맵의 어느 구간에 위치해 있는지 발행. 각 노드는 콜백으로 자신의 모드를 스위치할 수 있다. |
-| TF_Publisher_Node | ego 콜백으로 동적 `map → base_link` 발행. 센서 장착 변환은 시작 시 정적 발행. |
+| TF_Publisher_Node | ego 콜백으로 동적 `map → base_link` 발행. |
+| Static_TF_Publisher_Node | 센서 장착 변환을 시작 시 한 번 `/tf_static`으로 latched 발행. TF_Publisher_Node와 같은 `tf_publisher` 패키지에 둔다. |
 | Path_Planner_Node | ego 위치·자세와 `/vehicle/competition_status`의 차량 상태를 사용해 차선 추종·장애물 회피 경로 생성. |
 | Velocity_Planner_Node | 전달받은 경로의 속도 프로파일을 생성하고 TF로 `map`에서 `base_link`로 변환해 발행. 경로 형상을 다시 계획하지 않는다.     |
 | Control_Node | 속도 프로파일이 주입된 경로와 ego·차량 상태를 사용해 제어 명령 생성. |
@@ -352,7 +368,7 @@ flowchart TD
 | `/traffic_light` | 신호등 인식 결과 | `interfaces/TrafficLight` | `camera_7_optical_frame` | 판정에 사용한 영상 stamp 유지 | 목표 5 Hz (200 ms); 최신 미처리 영상 사용 |
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf` | 동적 좌표 변환 | `tf2_msgs/TFMessage` | 각 변환의 `header.frame_id`가 부모, `child_frame_id`가 자식 | ego stamp 유지 | `/localization/ego` 콜백마다 |
-| `/tf_static` | 센서 고정 장착 변환 | `tf2_msgs/TFMessage` | `base_link` → 센서 frame (`velodyne`, `imu_link`, `gps_link`, 카메라 optical frame) | 발행 ROS 시각 | 시작 시 1회 (latched) |
+| `/tf_static` | 센서 고정 장착 변환 | `tf2_msgs/TFMessage` | `base_link` → 센서 frame (`velodyne`, `imu_link`, `gps_link`, 카메라 optical frame) | 0 (조립 기준 입력 없음) | 시작 시 1회 (latched) |
 | `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 입력 조립 기준 stamp(전체 입력 큐의 최대 stamp); 각 point pose stamp도 동일 | 20 Hz 주기 |
 | `/local_path/velocity_injected` | 속도 프로파일이 주입된 경로 | `interfaces/Path` | `base_link`; 각 point의 pose도 `base_link` | 입력 경로 및 각 point pose stamp 유지 | `/local_path` 콜백마다 |
 | `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | `/local_path/velocity_injected` 콜백마다 |
@@ -362,7 +378,8 @@ flowchart TD
 
 #### 시간 및 frame 계약
 
-TF_Publisher가 아래 트리를 소유한다. 동적 변환은 ego stamp를 유지하고,
+`tf_publisher` 패키지가 아래 트리를 소유한다. TF_Publisher_Node가 동적 변환을,
+Static_TF_Publisher_Node가 정적 변환을 발행한다. 동적 변환은 ego stamp를 유지하고,
 정적 변환은 센서 장착 위치·자세와 camera optical 축 규약을 반영한다.
 정적 변환 전체는 시작 시 한 메시지로 latched 발행한다.
 

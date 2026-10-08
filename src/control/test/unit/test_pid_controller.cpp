@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/controllers/longitudinal/pid_controller.hpp"
+#include "control/libraries/tracking/controllers/longitudinal/pid_controller.hpp"
 
 namespace control { namespace tracking {
 namespace {

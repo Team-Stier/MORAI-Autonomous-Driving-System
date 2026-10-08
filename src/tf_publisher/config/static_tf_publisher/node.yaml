@@ -1,0 +1,6 @@
+execution: {mode: latched}
+stages:
+  - name: mounts
+    outputs:
+      - {name: tf_static, type: tf2_msgs/TFMessage}
+output: {topic: /tf_static, frame_id: base_link}

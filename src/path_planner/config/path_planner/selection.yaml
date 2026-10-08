@@ -1,0 +1,80 @@
+checkpoint:
+  section_core_map:
+    "0": checkpoint_00.hpp
+    "1": checkpoint_01.hpp
+    "2": checkpoint_02.hpp
+    "3": checkpoint_03.hpp
+    "4": checkpoint_04.hpp
+    "5": checkpoint_05.hpp
+    "6": checkpoint_06.hpp
+    "7": checkpoint_07.hpp
+    "8": checkpoint_08.hpp
+    "9": checkpoint_09.hpp
+    "10": checkpoint_10.hpp
+    "11": checkpoint_11.hpp
+    "12": checkpoint_12.hpp
+    "13": checkpoint_13.hpp
+    "14": checkpoint_14.hpp
+    "15": checkpoint_15.hpp
+    "16": checkpoint_16.hpp
+  health_core_map: []
+global:
+  section_core_map:
+    "0": global_path.hpp
+    "1": global_path.hpp
+    "2": global_path.hpp
+    "3": global_path.hpp
+    "4": global_path.hpp
+    "5": global_path.hpp
+    "6": global_path.hpp
+    "7": global_path.hpp
+    "8": global_path.hpp
+    "9": global_path.hpp
+    "10": global_path.hpp
+    "11": global_path.hpp
+    "12": global_path.hpp
+    "13": global_path.hpp
+    "14": global_path.hpp
+    "15": global_path.hpp
+    "16": global_path.hpp
+  health_core_map: []
+prediction:
+  section_core_map:
+    "0": prediction_pass_through.hpp
+    "1": prediction_pass_through.hpp
+    "2": prediction_pass_through.hpp
+    "3": prediction_pass_through.hpp
+    "4": prediction_pass_through.hpp
+    "5": prediction_pass_through.hpp
+    "6": prediction_pass_through.hpp
+    "7": prediction_pass_through.hpp
+    "8": prediction_pass_through.hpp
+    "9": prediction_pass_through.hpp
+    "10": prediction_pass_through.hpp
+    "11": prediction_pass_through.hpp
+    "12": prediction_pass_through.hpp
+    "13": prediction_pass_through.hpp
+    "14": prediction_pass_through.hpp
+    "15": prediction_pass_through.hpp
+    "16": prediction_pass_through.hpp
+  health_core_map: []
+local:
+  section_core_map:
+    "0": local_path.hpp
+    "1": local_path.hpp
+    "2": local_path.hpp
+    "3": local_path.hpp
+    "4": local_path.hpp
+    "5": local_path.hpp
+    "6": local_path.hpp
+    "7": local_path.hpp
+    "8": local_path.hpp
+    "9": local_path.hpp
+    "10": local_path.hpp
+    "11": local_path.hpp
+    "12": local_path.hpp
+    "13": local_path.hpp
+    "14": local_path.hpp
+    "15": local_path.hpp
+    "16": local_path.hpp
+  health_core_map: []

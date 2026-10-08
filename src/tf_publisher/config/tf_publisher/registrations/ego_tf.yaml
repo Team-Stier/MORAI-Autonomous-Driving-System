@@ -1,0 +1,4 @@
+stage: transform
+inputs: [ego]
+policy: remove_invalid.hpp
+allowed_issues: {ego: [Stale, ReceiveTimeout]}

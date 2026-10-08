@@ -1,4 +1,4 @@
-#include <lidar_leveler/core_dispatch.hpp>
+#include <lidar_leveler/cores/pass_through.hpp>
 #include <ros/serialization.h>
 #include <gtest/gtest.h>
 #include <cstring>
@@ -40,20 +40,7 @@ TEST(PassThrough, AppliesMountingTfAndPreservesOtherFields) {
   mount.transform.rotation.z = std::sqrt(0.5);
   mount.transform.rotation.w = std::sqrt(0.5);
 
-  lidar_leveler::CoreSet cores{lidar_leveler::PassThrough{}};
-  lidar_leveler::Data data;
-  data.get<0>().sample.message = std::make_shared<const sensor_msgs::PointCloud2>(cloud);
-  node_pipeline::StageData stage_data;
-  stage_data.update(data);
-  node_pipeline::CoreResult result;
-  bool called = false;
-  const auto before = [&] { called = true; };
-  EXPECT_FALSE(lidar_leveler::processCore(cores, lidar_leveler::CoreId::PassThrough, stage_data, result, before));
-  EXPECT_FALSE(called);
-  data.get<2>().sample.message = std::make_shared<const tf2_msgs::TFMessage>(tf_static);
-  stage_data.update(data);
-  ASSERT_TRUE(lidar_leveler::processCore(cores, lidar_leveler::CoreId::PassThrough, stage_data, result, before));
-  EXPECT_TRUE(called);
+  lidar_leveler::PassThrough core;
 
   auto expected_cloud = cloud;
   sensor_msgs::PointCloud2Iterator<float> expected_x(expected_cloud, "x"),
@@ -62,8 +49,7 @@ TEST(PassThrough, AppliesMountingTfAndPreservesOtherFields) {
   ++expected_x; ++expected_y; ++expected_z;
   *expected_x = 10; *expected_y = 19; *expected_z = 30.5;
   const auto expected = ros::serialization::serializeMessage(expected_cloud);
-  const auto output = result(stage_data);
-  const auto actual = ros::serialization::serializeMessage(output.message<sensor_msgs::PointCloud2>(0));
+  const auto actual = ros::serialization::serializeMessage(core.process(cloud, tf_static));
   ASSERT_EQ(expected.num_bytes, actual.num_bytes);
   EXPECT_EQ(0, std::memcmp(expected.buf.get(), actual.buf.get(), expected.num_bytes));
 }

@@ -1,0 +1,13 @@
+execution: {mode: on_input, trigger_input: ego, queue_capacity: 8, max_health_checks: 10}
+inputs:
+  ego:
+    type: nav_msgs/Odometry
+    topic: /localization/ego
+    frame: map
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+stages:
+  - name: annotate
+    outputs:
+      - {name: section, type: interfaces/SectionAnnotation}
+output: {topic: /section_annotation, frame_id: map}

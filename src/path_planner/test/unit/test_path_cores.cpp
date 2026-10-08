@@ -1,14 +1,16 @@
-#include <path_planner/config.hpp>
-#include <path_planner/components.hpp>
-#include <path_planner/core_dispatch.hpp>
+#include <path_planner/libraries/map_parameters.hpp>
+#include <path_planner/cores/global_path.hpp>
+#include <path_planner/cores/local_path.hpp>
 #include <path_planner/cores/prediction_pass_through.hpp>
+#include <path_planner/parameters/local_path.hpp>
+#include <path_planner/parameters/shared_map.hpp>
+#include <path_planner/validators/route_present.hpp>
 #include <gtest/gtest.h>
 #include <fstream>
 #include <iterator>
 #include <type_traits>
 
 namespace pp = path_planner;
-namespace np = node_pipeline;
 namespace {
 std::string readFile(const std::string& path) {
   std::ifstream stream(path);
@@ -42,8 +44,7 @@ void expectPayload(const interfaces::Path& path) {
   }
 }
 
-pp::GlobalPathParameters shortMap() {
-  pp::GlobalPathParameters parameters;
+pp::SharedMap shortMap() {
   lanelet::Lanelets lanes;
   std::vector<lanelet::Point3d> left, right;
   for (int i = 0; i <= 10; ++i) {
@@ -59,12 +60,20 @@ pp::GlobalPathParameters shortMap() {
     lane.attributes()["one_way"] = "yes";
     lanes.push_back(lane);
   }
-  parameters.map = lanelet::utils::createMap(lanes);
-  for (auto& checkpoint : parameters.checkpoints) {
+  return pp::SharedMap({lanelet::utils::createMap(lanes)});
+}
+
+pp::Checkpoints shortCheckpoints() {
+  pp::Checkpoints checkpoints(16);
+  for (auto& checkpoint : checkpoints) {
     checkpoint.x_m = 1;
     checkpoint.lanelet_id = 300;
   }
-  return parameters;
+  return checkpoints;
+}
+
+template<class Container> pp::Checkpoints remaining(const Container& checkpoints, std::size_t completed) {
+  return pp::Checkpoints(checkpoints.begin() + completed, checkpoints.end());
 }
 }  // namespace
 
@@ -85,7 +94,7 @@ TEST(PredictionPassThrough, CopiesAllTenSamplesWithoutChangingObservation) {
     objects.objects.push_back(object);
   }
   pp::PredictionPassThrough core;
-  auto samples = core.process(objects, lanelet::Optional<lanelet::routing::LaneletPath>{});
+  auto samples = std::get<0>(core.process(objects, pp::Route{}, nav_msgs::Odometry{}));
   ASSERT_EQ(samples.size(), 10u);
   for (const auto& sample : samples) {
     ASSERT_EQ(sample.objects.size(), 12u);
@@ -100,29 +109,30 @@ TEST(PredictionPassThrough, PreservesEmptyObjectLists) {
   interfaces::Objects objects;
   objects.header.frame_id = "base_link";
   pp::PredictionPassThrough core;
-  const auto samples = core.process(objects, lanelet::Optional<lanelet::routing::LaneletPath>{});
+  const auto samples = std::get<0>(core.process(objects, pp::Route{}, nav_msgs::Odometry{}));
   for (const auto& sample : samples) EXPECT_EQ(sample, objects);
 }
 
-TEST(PathCores, ReturnsOnlyRouteAndExtendsShortRoute) {
-  static_assert(std::is_same<pp::GlobalPath::Result,
-      lanelet::Optional<lanelet::routing::LaneletPath>>::value, "native optional path contract");
-  const auto parameters = shortMap();
-  pp::GlobalPath global(parameters);
-  pp::LocalPath local({parameters.map, 20.0});
+TEST(PathCores, ReturnsRouteWithPassThroughAndExtendsShortRoute) {
+  auto shared = shortMap();
+  const auto checkpoints = shortCheckpoints();
+  pp::GlobalPath global(shared);
+  pp::LocalPath local({20.0}, shared);
   nav_msgs::Odometry ego;
   ego.header.stamp.fromSec(1);
   ego.header.frame_id = "map";
   ego.pose.pose.position.x = 2;
   ego.pose.pose.orientation.w = 1;
-  interfaces::SectionAnnotation section;
-  section.header = ego.header;
-  for (int state : {0, 1, 1, 16, 0}) {
-    section.state = state;
-    const auto route = global.process(ego, section);
+  interfaces::Objects objects;
+  objects.header.frame_id = "base_link";
+  for (std::size_t completed : {0, 1, 1, 16, 0}) {
+    const auto result = global.process(ego, objects, remaining(checkpoints, completed));
+    EXPECT_EQ(std::get<1>(result), ego);
+    EXPECT_EQ(std::get<2>(result), objects);
+    const auto& route = std::get<0>(result);
     ASSERT_TRUE(static_cast<bool>(route));
     ASSERT_EQ(route->size(), 1u);
-    const auto path = local.process(ego, section, route, pp::PredictedObjects{});
+    const auto path = local.process(ego, route, pp::PredictedObjects{});
     ASSERT_GE(path.points.size(), 2u);
     expectPayload(path);
     EXPECT_NEAR(path.points.front().pose.pose.position.x, 2.0, 1e-9);
@@ -135,72 +145,52 @@ TEST(PathCores, ReturnsOnlyRouteAndExtendsShortRoute) {
 }
 
 TEST(PathCores, UsesPinnedLaneletInsteadOfRematchingCheckpointCoordinates) {
-  auto parameters = shortMap();
-  parameters.checkpoints.back().lanelet_id = 301;
-  pp::GlobalPath global(parameters);
+  auto shared = shortMap();
+  auto checkpoints = shortCheckpoints();
+  checkpoints.back().lanelet_id = 301;
+  pp::GlobalPath global(shared);
   nav_msgs::Odometry ego;
   ego.pose.pose.position.x = 2;
   ego.pose.pose.orientation.w = 1;
-  interfaces::SectionAnnotation section;
-  const auto route = global.process(ego, section);
+  const auto route = std::get<0>(global.process(ego, interfaces::Objects{}, checkpoints));
   ASSERT_TRUE(static_cast<bool>(route));
   ASSERT_EQ(route->size(), 2u);
   EXPECT_EQ(route->back().id(), 301);
 }
 
 TEST(PathCores, RejectsInvalidCheckpointLaneletIds) {
-  const auto map = readFile(std::string(PATH_PLANNER_MAP_DIR) + "/kcity_lanelet2.osm");
+  const auto map = readFile(std::string(NP_PACKAGE_DIR "/../map") + "/kcity_lanelet2.osm");
   for (const std::string id : {"", "0", "-1", "100070.0", "100070x", "9223372036854775808", "9999999999"}) {
     std::string csv = "x,y,z,yaw,lanelet_id\n";
     for (int i = 0; i < 16; ++i) csv += "0,0,0,0," + id + "\n";
-    EXPECT_ANY_THROW(pp::readGlobalPathParameters(map, csv)) << id;
+    EXPECT_ANY_THROW(pp::readCheckedLaneletMap(map, csv)) << id;
   }
 }
 
-TEST(PathCores, RegisteredStagesHandleMapCheckpointsAndRepeatedSections) {
-  const auto parameters = pp::readGlobalPathParameters(
-      readFile(std::string(PATH_PLANNER_MAP_DIR) + "/kcity_lanelet2.osm"),
-      readFile(std::string(PATH_PLANNER_MAP_DIR) + "/checkpoints.csv"));
-  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})};
-  const std::array<std::size_t, 2> required{{0, 4}};
-  pp::Data snapshot;
-  EXPECT_FALSE(snapshot.hasInputs(required));
+TEST(PathCores, CoresFollowRemainingMapCheckpoints) {
+  const auto csv = readFile(std::string(NP_PACKAGE_DIR "/../map") + "/checkpoints.csv");
+  pp::SharedMap shared({pp::readCheckedLaneletMap(
+      readFile(std::string(NP_PACKAGE_DIR "/../map") + "/kcity_lanelet2.osm"), csv)});
+  const auto checkpoints = pp::readCheckpoints(csv);
+  std::size_t completed = 0;
+  pp::GlobalPath global(shared);
+  pp::PredictionPassThrough prediction;
+  pp::LocalPath local({20.0}, shared);
   auto ego = std::make_shared<nav_msgs::Odometry>();
-  auto section = std::make_shared<interfaces::SectionAnnotation>();
   auto objects = std::make_shared<interfaces::Objects>();
   objects->header.stamp.fromSec(1.0);
   objects->header.frame_id = "base_link";
-  snapshot.get<0>().sample.message = ego;
-  snapshot.get<4>().sample.message = section;
-  snapshot.get<2>().sample.message = objects;
-  ASSERT_TRUE(snapshot.hasInputs(required));
-  ego->pose.pose.position.x = parameters.checkpoints.front().x_m;
-  ego->pose.pose.position.y = parameters.checkpoints.front().y_m;
-  ego->pose.pose.orientation.z = std::sin(parameters.checkpoints.front().yaw_rad / 2);
-  ego->pose.pose.orientation.w = std::cos(parameters.checkpoints.front().yaw_rad / 2);
+  ego->pose.pose.position.x = checkpoints.front().x_m;
+  ego->pose.pose.position.y = checkpoints.front().y_m;
+  ego->pose.pose.orientation.z = std::sin(checkpoints.front().yaw_rad / 2);
+  ego->pose.pose.orientation.w = std::cos(checkpoints.front().yaw_rad / 2);
   const auto run = [&] {
-    np::StageData data; data.update(snapshot);
-    np::CoreResult first, prediction, last;
-    EXPECT_TRUE(pp::retainInputs(pp::processStage1)(cores, pp::FirstCoreId::GlobalPath, data, first, []{}));
-    auto next = first(data);
-    EXPECT_EQ(next.inputs.size(), 6u);
-    for (std::size_t i = 0; i < data.inputs.size(); ++i) {
-      EXPECT_EQ(next.inputs[i].message, data.inputs[i].message);
-      EXPECT_EQ(next.inputs[i].stamp_ns, data.inputs[i].stamp_ns);
-      EXPECT_EQ(next.inputs[i].receipt_steady_ns, data.inputs[i].receipt_steady_ns);
-    }
-    EXPECT_TRUE(next.inputs[0].has_stamp);
-    EXPECT_FALSE(next.inputs[5].has_stamp);
-    EXPECT_TRUE(pp::retainInputs(pp::processStage2)(cores, pp::SecondCoreId::PredictionPassThrough, next, prediction, []{}));
-    auto predicted = prediction(next);
-    EXPECT_EQ(predicted.inputs.size(), 7u);
-    EXPECT_FALSE(predicted.inputs[6].has_stamp);
-    EXPECT_FALSE(predicted.inputs[6].has_receipt);
-    for (const auto& sample : predicted.message<pp::PredictedObjects>(6)) EXPECT_EQ(sample, *objects);
-    EXPECT_TRUE(pp::processStage3(cores, pp::ThirdCoreId::LocalPath, predicted, last, []{}));
-    return last(predicted).message<interfaces::Path>(0);
+    const auto route = std::get<0>(global.process(*ego, *objects, remaining(checkpoints, completed)));
+    const auto predictions = std::get<0>(prediction.process(*objects, route, *ego));
+    for (const auto& sample : predictions) EXPECT_EQ(sample, *objects);
+    return local.process(*ego, route, predictions);
   };
-  const auto route = cores.global_path.process(*ego, *section);
+  const auto route = std::get<0>(global.process(*ego, *objects, remaining(checkpoints, 0)));
   ASSERT_TRUE(static_cast<bool>(route));
   lanelet::Ids route_ids;
   for (const auto& lane : *route) route_ids.push_back(lane.id());
@@ -208,115 +198,62 @@ TEST(PathCores, RegisteredStagesHandleMapCheckpointsAndRepeatedSections) {
     EXPECT_NE(std::find(route_ids.begin(), route_ids.end(), id), route_ids.end());
   for (const auto id : {200312, 140377})
     EXPECT_EQ(std::find(route_ids.begin(), route_ids.end(), id), route_ids.end());
-  for (std::size_t i = 0; i < parameters.checkpoints.size(); ++i) {
-    const auto& checkpoint = parameters.checkpoints[i];
+  for (std::size_t i = 0; i < checkpoints.size(); ++i) {
+    const auto& checkpoint = checkpoints[i];
     ego->pose.pose.position.x = checkpoint.x_m;
     ego->pose.pose.position.y = checkpoint.y_m;
     ego->pose.pose.orientation.z = std::sin(checkpoint.yaw_rad / 2);
     ego->pose.pose.orientation.w = std::cos(checkpoint.yaw_rad / 2);
-    section->state = i;
+    completed = i;
     expectPayload(run());
-    section->state = i + 1;
+    completed = i + 1;
     const auto path = run();
     expectPayload(path);
     EXPECT_EQ(run(), path);
-    section->state = 0;
-    EXPECT_EQ(run(), path);
   }
 }
 
-TEST(PathStages, MissingObjectsOrPredictionStopsBeforeCoreCall) {
-  const auto parameters = shortMap();
-  pp::CoreSet cores{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})};
-  pp::Stage3Data typed;
-  typed.get<0>().sample.message = std::make_shared<nav_msgs::Odometry>();
-  typed.get<4>().sample.message = std::make_shared<interfaces::SectionAnnotation>();
-  typed.get<5>().sample.message = std::make_shared<pp::Route>();
-  np::StageData data;
-  data.update(typed);
-  np::CoreResult result;
-  bool called = false;
-  const np::BeforeCore before = [&] { called = true; };
-  EXPECT_FALSE(pp::processStage2(cores, pp::SecondCoreId::PredictionPassThrough, data, result, before));
-  EXPECT_FALSE(called);
-  EXPECT_FALSE(pp::processStage3(cores, pp::ThirdCoreId::LocalPath, data, result, before));
-  EXPECT_FALSE(called);
-}
-
-namespace {
-struct TestAccess {
-  template<class Message> static std::int64_t stamp(const Message& m) { return m.header.stamp.toNSec(); }
-  template<class Message> static const std::string& frame(const Message& m) { return m.header.frame_id; }
-  static std::int64_t stamp(const tf2_msgs::TFMessage& m) { return m.transforms.empty() ? 0 : m.transforms.front().header.stamp.toNSec(); }
-  static std::string frame(const tf2_msgs::TFMessage& m) { return m.transforms.empty() ? "" : m.transforms.front().header.frame_id; }
-};
-using TestComponents = pp::Components<TestAccess>;
-struct TestIO {
-  using MessageType = interfaces::Path;
-  std::shared_ptr<std::vector<interfaces::Path>> output;
-  np::Clocks readClocks() const { return {1000000000, 1000000000}; }
-  void publish(const interfaces::Path& message) { output->push_back(message); }
-  void reportHealth(const np::StageHealth&, std::size_t) const {}
-  void report(const np::ProcessReport&) const noexcept {}
-};
-struct TestHeaderInjector {
-  std::shared_ptr<std::size_t> calls;
-  void injectHeader(interfaces::Path& message, const np::Context<5>& context) const {
-    ++*calls;
-    message.header.stamp.fromNSec(context.stamp_ns);
-    message.header.frame_id = "map";
-    for (auto& point : message.points) point.pose.header = message.header;
-  }
-};
-}  // namespace
-
-TEST(PathStages, ThreeStagePipelinePublishesOnceAndStopsWhenObjectsAreMissing) {
-  const auto parameters = shortMap();
-  auto selector = TestComponents::selector();
-  selector.stage1.section_core_map[0] = pp::FirstCoreId::GlobalPath;
-  selector.stage2.section_core_map[0] = pp::SecondCoreId::PredictionPassThrough;
-  selector.stage3.section_core_map[0] = pp::ThirdCoreId::LocalPath;
-  np::HealthLimits common;
-  std::array<np::HealthLimits, 5> raw_limits;
-  raw_limits.fill(common);
-  raw_limits[1].frame = raw_limits[2].frame = "base_link";
-  std::array<np::HealthLimits, 6> prediction_limits{{raw_limits[0], raw_limits[1], raw_limits[2], raw_limits[3], raw_limits[4], common}};
-  std::array<np::HealthLimits, 7> local_limits{{raw_limits[0], raw_limits[1], raw_limits[2], raw_limits[3], raw_limits[4], common, common}};
-  local_limits[6].frame = "base_link";
-  auto output = std::make_shared<std::vector<interfaces::Path>>();
-  auto headers = std::make_shared<std::size_t>(0);
-  using Context = TestComponents::Buffer::ContextType;
-  TestComponents::Node<TestIO, TestHeaderInjector> node({}, TestComponents::Buffer(8), {},
-    {np::makeStage<pp::CoreSet, Context, pp::Data>(TestComponents::Checker(raw_limits, 1000000000),
-       TestComponents::policy(common), selector.stage1, pp::retainInputs(pp::processStage1)),
-     np::makeStage<pp::CoreSet, Context, pp::Stage2Data>(TestComponents::Stage2Checker(prediction_limits, 1000000000),
-       TestComponents::Stage2Policy{{common.upper}, {common.lower}}, selector.stage2, pp::retainInputs(pp::processStage2)),
-     np::makeStage<pp::CoreSet, Context, pp::Stage3Data>(TestComponents::Stage3Checker(local_limits, 1000000000),
-       TestComponents::Stage3Policy{{common.upper}, {common.lower}}, selector.stage3, pp::processStage3)},
-    pp::CoreSet{pp::GlobalPath(parameters), pp::PredictionPassThrough{}, pp::LocalPath({parameters.map, 20.0})},
-    TestHeaderInjector{headers}, TestIO{output});
+TEST(PredictionPassThrough, PassesRouteAndEgoToTheLocalStage) {
+  auto shared = shortMap();
+  pp::GlobalPath global(shared);
   nav_msgs::Odometry ego;
-  ego.header.stamp.fromSec(1.0);
-  ego.header.frame_id = "map";
-  ego.pose.pose.position.x = 2.0;
-  ego.pose.pose.orientation.w = 1.0;
-  interfaces::SectionAnnotation section;
-  section.header = ego.header;
-  node.onInput(pp::InputTag<pp::Input::Ego>{}, ego);
-  node.onInput(pp::InputTag<pp::Input::Section>{}, section);
-  EXPECT_EQ(node.onPeriodic().status, np::ProcessStatus::NoCore);
-  EXPECT_TRUE(output->empty());
-  EXPECT_EQ(*headers, 0u);
-  interfaces::Objects objects;
-  objects.header.stamp = ego.header.stamp;
-  objects.header.frame_id = "base_link";
-  node.onInput(pp::InputTag<pp::Input::Objects>{}, objects);
-  EXPECT_EQ(node.onPeriodic().status, np::ProcessStatus::Published);
-  ASSERT_EQ(output->size(), 1u);
-  EXPECT_EQ(*headers, 1u);
-  EXPECT_EQ(output->front().header.stamp, ego.header.stamp);
-  EXPECT_EQ(output->front().header.frame_id, "map");
-  EXPECT_NEAR(lengthM(output->front()), 20.0, 1e-6);
+  ego.pose.pose.position.x = 2;
+  ego.pose.pose.orientation.w = 1;
+  const auto route = std::get<0>(global.process(ego, interfaces::Objects{}, shortCheckpoints()));
+  const auto result = pp::PredictionPassThrough{}.process(interfaces::Objects{}, route, ego);
+  EXPECT_EQ(std::get<1>(result), route);
+  EXPECT_EQ(std::get<2>(result), ego);
+}
+
+TEST(LocalPathStage, RoutePresentMarksEmptyRouteMissing) {
+  const pp::RoutePresent validator;
+  std::vector<node_pipeline::Kind> issues;
+  validator(pp::Route{}, node_pipeline::HealthLimits{}, issues);
+  EXPECT_EQ(std::vector<node_pipeline::Kind>{node_pipeline::Kind::Missing}, issues);
+  issues.clear();
+  auto shared = shortMap();
+  pp::GlobalPath global(shared);
+  nav_msgs::Odometry ego;
+  ego.pose.pose.orientation.w = 1;
+  validator(std::get<0>(global.process(ego, interfaces::Objects{}, shortCheckpoints())), node_pipeline::HealthLimits{}, issues);
+  EXPECT_TRUE(issues.empty());
+}
+
+TEST(LocalPathStage, LoaderReadsPathLength) {
+  EXPECT_DOUBLE_EQ(20.0, pp::loadLocalPathParameters(
+      node_pipeline::ParamReader::fromString("local_path_length_m: 20.0\n")).local_path_length_m);
+  EXPECT_THROW(pp::loadLocalPathParameters(node_pipeline::ParamReader::fromString("local_path_length_m: 0\n")),
+               std::invalid_argument);
+}
+
+TEST(SharedMapBank, LoaderReadsMapOnceForBothPathCores) {
+  pp::SharedMap shared(pp::loadSharedMapParameters(node_pipeline::ParamReader::fromString(
+      "map_file: kcity_lanelet2.osm\ncheckpoints_file: checkpoints.csv\n", NP_PACKAGE_DIR "/../map")));
+  ASSERT_TRUE(static_cast<bool>(shared.map));
+  EXPECT_FALSE(shared.map->laneletLayer.empty());
+  pp::GlobalPath global(shared);
+  pp::LocalPath local({20.0}, shared);
+  EXPECT_EQ(shared.map.use_count(), 3);
 }
 
 int main(int argc, char** argv) {

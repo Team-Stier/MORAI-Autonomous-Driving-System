@@ -1,0 +1,14 @@
+execution: {mode: periodic, frequency_hz: 5.0, require_new_snapshot: true, queue_capacity: 8, max_health_checks: 10}
+section_topic: /section_annotation
+inputs:
+  image:
+    type: sensor_msgs/CompressedImage
+    topic: /image/camera_7/compressed
+    frame: camera_7_optical_frame
+    stale_after_sec: 0.1
+    receive_timeout_sec: 0.1
+stages:
+  - name: recognize
+    outputs:
+      - {name: light, type: interfaces/TrafficLight}
+output: {topic: /traffic_light, frame_id: camera_7_optical_frame}

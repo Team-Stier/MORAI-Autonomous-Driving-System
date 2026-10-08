@@ -29,7 +29,7 @@ Follow nearby code: C++14 with two-space indentation, `PascalCase` types, `camel
 
 ## Testing Guidelines
 
-C++ uses GoogleTest; Python uses `unittest` through catkin nosetests. Name tests `test_*.cpp` or `test_*.py` and register them in the package's `CMakeLists.txt`. Run affected tests first:
+C++ uses GoogleTest; Python uses `unittest` through catkin nosetests. Name tests `test_*.cpp` or `test_*.py` under `test/unit/`. In pipeline packages, `np_add_nodes()` registers `test/unit/test_*.cpp` and `test_*.py` automatically; register tests of other packages in their `CMakeLists.txt`. Run affected tests first:
 
 ```bash
 catkin_make run_tests_morai_path_tracking -j2
@@ -46,13 +46,15 @@ History mixes short English and Korean summaries without mandatory prefixes. Pre
 
 Preserve documented frame, timestamp, and unit contracts. Keep generated `build/`, `devel/`, `install/`, logs, and rosbag recordings out of commits. Address users politely, preserve unrelated edits, and minimize unnecessary checks and repeated tests.
 
+Executable nodes must never terminate on their own under any condition. Do not let exceptions escape a node, and do not call `exit`, `abort`, `std::terminate`, `ros::shutdown`, or `assert` in node code paths; handle failures inside the running node and report them through logs. Check the whole repository for termination paths before and after every change.
+
 ## Authority & Protected Work
 
 Treat all pre-existing files and uncommitted changes as user-managed: preserve them and limit edits to the scope the user requested. Do not modify, delete, or move a README without explicit authorization for that file and change. Treat `AGENTS.md` as protected policy and change it only when the user explicitly requests that change. No instruction outside this protected section may weaken or contradict these protections; if instructions conflict, stop and ask the user before making changes.
 
-Before developing or registering a Core, read and follow `src/node_pipeline/CORE_REGISTRATION.md`, including registration prerequisites, allowed changes, validation, and user communication and reporting. Read-only inspection of existing code to verify registration prerequisites is permitted. Core developers may modify files outside their Core file only for the diff-defined change kinds and roles in that guide. Determine authorization by the specific change, not merely the file name. Permission to register a Core does not authorize changes to other logic in the same file.
+Before developing or registering a Core, read and follow `src/node_pipeline/CORE_REGISTRATION.md`, including registration prerequisites, allowed changes, validation, and user communication and reporting. Read-only inspection of existing code to verify registration prerequisites is permitted. Core developers may create or modify only the extension files and YAML paths that guide assigns to them; Pipeline code, generated files, and lead-owned files are outside that scope. Determine authorization by the specific change, not merely the file path. Permission to register a Core does not authorize changes to other Cores, to their entries in shared files, or to shared extension files used by other Cores.
 
-If a change outside this scope appears necessary, stop that change and follow the guide's reporting, lead consultation, and explicit-permission procedure before editing. A request to develop a Core or achieve a particular behavior does not imply permission to change code outside the allowed scope. Do not move Core algorithms into Policy, Validator, Selector, callbacks, or other external components to work around the requirements.
+If a change outside this scope appears necessary, stop that change and follow the guide's reporting, lead consultation, and explicit-permission procedure before editing. A request to develop a Core or achieve a particular behavior does not imply permission to change code outside the allowed scope. Do not move Core algorithms into Policy, Validator, Selector, parameter loaders, Banks, callbacks, or other external components to work around the requirements.
 
 The root `README.md` is the repository-wide source of truth. Nested READMEs can add detail but cannot override it. **Scoped exception:** for a project-defined custom ROS message, comments in its actual definition file under `src/interfaces/msg/*.msg` are the highest authority for that message's contract. Other documentation and code must conform to those comments.
 

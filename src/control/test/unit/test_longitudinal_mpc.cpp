@@ -3,7 +3,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/controllers/longitudinal/mpc/longitudinal_mpc.hpp"
+#include "control/libraries/tracking/controllers/longitudinal/mpc/longitudinal_mpc.hpp"
 
 namespace control { namespace tracking {
 namespace {

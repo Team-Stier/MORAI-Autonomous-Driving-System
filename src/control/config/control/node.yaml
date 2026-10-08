@@ -1,0 +1,30 @@
+execution: {mode: on_input, trigger_input: path, queue_capacity: 8, max_health_checks: 10}
+section_topic: /section_annotation
+max_skew_sec: 0.1
+inputs:
+  path:
+    type: interfaces/Path
+    topic: /local_path/velocity_injected
+    frame: base_link
+    range: [0.0, 16.666666666666668]
+    stale_after_sec: 0.15
+    receive_timeout_sec: 0.15
+  ego:
+    type: nav_msgs/Odometry
+    topic: /localization/ego
+    frame: map
+    numbers: [pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, twist.twist.linear.y, twist.twist.angular.z]
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    frame: base_link
+    numbers: [velocity_x_mps]
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+stages:
+  - name: track
+    outputs:
+      - {name: command, type: morai_msgs/CtrlCmd}
+output: {topic: /control_cmd}

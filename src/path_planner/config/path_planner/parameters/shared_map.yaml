@@ -1,0 +1,2 @@
+map_file: ../map/kcity_lanelet2.osm
+checkpoints_file: ../map/checkpoints.csv

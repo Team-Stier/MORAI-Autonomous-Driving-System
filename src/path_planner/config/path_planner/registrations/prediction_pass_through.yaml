@@ -1,0 +1,6 @@
+stage: prediction
+inputs: [objects, route, ego]
+policy: remove_invalid.hpp
+allowed_issues:
+  objects: [Stale, ReceiveTimeout, Skew]
+  ego: [Stale, ReceiveTimeout, Skew]

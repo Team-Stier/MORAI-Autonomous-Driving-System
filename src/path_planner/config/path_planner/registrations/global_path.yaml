@@ -1,0 +1,7 @@
+stage: global
+inputs: [ego, objects, checkpoints]
+policy: remove_invalid.hpp
+allowed_issues:
+  ego: [Stale, ReceiveTimeout, Skew]
+  objects: [Stale, ReceiveTimeout, Skew]
+bank: shared_map.hpp

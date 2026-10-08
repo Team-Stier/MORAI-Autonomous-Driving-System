@@ -1,5 +1,5 @@
 #pragma once
-#include <path_planner/types.hpp>
+#include <path_planner/libraries/types.hpp>
 #include <cmath>
 
 namespace path_planner {

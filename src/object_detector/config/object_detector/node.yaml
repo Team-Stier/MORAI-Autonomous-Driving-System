@@ -1,0 +1,17 @@
+execution: {mode: on_input, trigger_input: cloud, queue_capacity: 8, max_health_checks: 10}
+section_topic: /section_annotation
+inputs:
+  cloud:
+    type: sensor_msgs/PointCloud2
+    topic: /velodyne_points/leveled
+    frame: base_link
+    stale_after_sec: 0.3
+    receive_timeout_sec: 0.3
+stages:
+  - name: detect
+    outputs:
+      - {name: objects, type: interfaces/Objects}
+  - name: track
+    outputs:
+      - {name: objects, type: interfaces/Objects}
+output: {topic: /objects, frame_id: base_link}

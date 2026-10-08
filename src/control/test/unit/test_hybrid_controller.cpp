@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "control/tracking/controllers/lateral/hybrid_controller.hpp"
+#include "control/libraries/tracking/controllers/lateral/hybrid_controller.hpp"
 
 namespace control { namespace tracking {
 namespace {

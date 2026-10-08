@@ -1,0 +1,4 @@
+stage: level
+inputs: [cloud, tf_static]
+policy: remove_invalid.hpp
+allowed_issues: {cloud: [Stale, ReceiveTimeout, Skew]}

@@ -1,0 +1,49 @@
+execution: {mode: periodic, frequency_hz: 20.0, queue_capacity: 8, max_health_checks: 10}
+section_topic: /section_annotation
+max_skew_sec: 0.1
+inputs:
+  ego:
+    type: nav_msgs/Odometry
+    topic: /localization/ego
+    frame: map
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    frame: base_link
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+  objects:
+    type: interfaces/Objects
+    topic: /objects
+    frame: base_link
+    stale_after_sec: 0.3
+    receive_timeout_sec: 0.3
+  tf:
+    type: tf2_msgs/TFMessage
+    topic: /tf
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+stages:
+  - name: checkpoint
+    outputs:
+      - {name: ego, from: ego}
+      - {name: competition, from: competition}
+      - {name: objects, from: objects}
+      - {name: tf, from: tf}
+      - {name: checkpoints, type: path_planner::Checkpoints, header: path_planner/libraries/types.hpp}
+  - name: global
+    outputs:
+      - {name: route, type: path_planner::Route, header: path_planner/libraries/types.hpp}
+      - {name: ego, from: ego}
+      - {name: objects, from: objects}
+  - name: prediction
+    outputs:
+      - {name: predictions, type: path_planner::PredictedObjects, header: path_planner/libraries/types.hpp}
+      - {name: route, from: route}
+      - {name: ego, from: ego}
+  - name: local
+    outputs:
+      - {name: path, type: interfaces/Path}
+output: {topic: /local_path, frame_id: map}
