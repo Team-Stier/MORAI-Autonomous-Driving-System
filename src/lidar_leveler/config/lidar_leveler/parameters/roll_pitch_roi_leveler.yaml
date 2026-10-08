@@ -1,0 +1,3 @@
+# base_link(수평화 Core는 수평 좌표) z 유지 범위, m.
+z_min_m: -0.5
+z_max_m: 4.5

@@ -1,0 +1,5 @@
+stage: level
+inputs: [cloud, competition, tf_static]
+validator: leveling_inputs.hpp
+policy: remove_invalid.hpp
+allowed_issues: {cloud: [Stale, ReceiveTimeout, Skew], competition: [Stale, ReceiveTimeout, Skew]}
