@@ -365,11 +365,8 @@ def check(package_dir, package, src_dir, include_dirs, use_ast=True):
             if not valid:
                 errors.append(f"config/{'/'.join(relative)}: unexpected configuration file")
 
+    # libraries/는 복사해 온 외부·원본 코드를 그대로 두므로 include·AST 검사 대상에서 제외한다.
     checked = {}
-    for path in glob.glob(os.path.join(package_dir, "include", package, "libraries", "**", "*"), recursive=True) + \
-            glob.glob(os.path.join(package_dir, "src", "libraries", "**", "*"), recursive=True):
-        if path.endswith(SOURCE_SUFFIXES):
-            checked[(path, "library")] = ("", "")
     for node in nodes:
         if not os.path.isfile(os.path.join(config_dir, node, "selection.yaml")):
             errors.append(f"config/{node}/selection.yaml is required")
