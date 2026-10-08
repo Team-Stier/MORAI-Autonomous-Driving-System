@@ -23,6 +23,12 @@ inputs:
     numbers: [velocity_x_mps]
     stale_after_sec: 0.06
     receive_timeout_sec: 0.06
+  imu:
+    type: sensor_msgs/Imu
+    topic: /sensors/imu/data
+    frame: imu_link
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
 stages:
   - name: track
     outputs:
