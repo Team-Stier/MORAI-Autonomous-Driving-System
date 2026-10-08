@@ -26,6 +26,12 @@ STD_HEADERS = {
 FORBIDDEN_STD = {"fstream", "thread", "future", "mutex", "shared_mutex", "condition_variable"}
 FORBIDDEN_INCLUDE_ROOTS = {"ros", "roscpp", "rosbag", "tf2_ros", "actionlib", "message_filters", "image_transport",
                            "nodelet", "pluginlib", "ros.h", "XmlRpc.h", "XmlRpcValue.h"}
+# 로그는 허용한다. ROS 헤더 중 <ros/console.h>만 include하고 ROS_* 매크로로만 사용한다.
+LOG_INCLUDE = "ros/console.h"
+LOG_MACRO_PREFIXES = ("ROS_", "ROSCONSOLE_")
+# ROS_* 매크로 본문이 스스로 만드는 위치 캐시 static 변수와 호출이다. 매크로 인자 안의 다른 호출은 계속 검사한다.
+LOG_MACRO_VARIABLE_PREFIX = "__ros"
+LOG_MACRO_SYMBOLS = ("ros::console", "ros::Time::now", "ros::WallTime::now")
 SYSTEM_DEPENDS = {"eigen": ("Eigen", "unsupported"), "pugixml-dev": ("pugixml.hpp",), "boost": ("boost",),
                   "yaml-cpp": ("yaml-cpp",), "libopencv-dev": ("opencv2",), "opencv": ("opencv2",)}
 FORBIDDEN_SYMBOLS = (
@@ -44,6 +50,8 @@ TRANSLATION_UNIT, NAMESPACE, LINKAGE_SPEC = 300, 22, 23
 STRUCT, UNION, CLASS, ENUM, CLASS_TEMPLATE, PARTIAL_SPECIALIZATION = 2, 3, 4, 5, 31, 32
 FUNCTION, METHOD, CONSTRUCTOR, DESTRUCTOR, CONVERSION, FUNCTION_TEMPLATE = 8, 21, 24, 25, 26, 30
 VAR = 9
+MACRO_EXPANSION = 502
+PARSE_DETAILED_PREPROCESSING_RECORD = 0x01
 REFERENCE_KINDS = {43, 45, 46, 47, 49, 50, 101, 102, 103}
 STORAGE_STATIC = 3
 ARRAY_TYPES = {112, 114, 115, 116}
@@ -64,6 +72,10 @@ class CXType(ctypes.Structure):
 
 class CXSourceLocation(ctypes.Structure):
     _fields_ = [("ptr_data", ctypes.c_void_p * 2), ("int_data", ctypes.c_uint)]
+
+
+class CXSourceRange(ctypes.Structure):
+    _fields_ = [("ptr_data", ctypes.c_void_p * 2), ("begin_int_data", ctypes.c_uint), ("end_int_data", ctypes.c_uint)]
 
 
 VISITOR = ctypes.CFUNCTYPE(ctypes.c_int, CXCursor, CXCursor, ctypes.c_void_p)
@@ -95,6 +107,9 @@ class Clang:
             "clang_getCString": ([CXString], ctypes.c_char_p),
             "clang_disposeString": ([CXString], None),
             "clang_getCursorLocation": ([CXCursor], CXSourceLocation),
+            "clang_getCursorExtent": ([CXCursor], CXSourceRange),
+            "clang_getRangeStart": ([CXSourceRange], CXSourceLocation),
+            "clang_getRangeEnd": ([CXSourceRange], CXSourceLocation),
             "clang_getExpansionLocation": ([CXSourceLocation, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_uint),
                                             ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)], None),
             "clang_getFileName": ([ctypes.c_void_p], CXString),
@@ -136,6 +151,16 @@ class Clang:
         self.lib.clang_getExpansionLocation(location, ctypes.byref(file_handle), None, None, None)
         return os.path.realpath(self.text(self.lib.clang_getFileName(file_handle))) if file_handle.value else ""
 
+    def offset_of(self, location):
+        offset = ctypes.c_uint()
+        self.lib.clang_getExpansionLocation(location, None, None, None, ctypes.byref(offset))
+        return offset.value
+
+    def extent_of(self, cursor):
+        extent = self.lib.clang_getCursorExtent(cursor)
+        return (self.offset_of(self.lib.clang_getRangeStart(extent)),
+                self.offset_of(self.lib.clang_getRangeEnd(extent)))
+
     def line_of(self, cursor):
         location = self.lib.clang_getCursorLocation(cursor)
         line = ctypes.c_uint()
@@ -174,7 +199,8 @@ def ast_errors(clang, path, role, own_core, cores_dir, arguments):
     encoded = [argument.encode() for argument in arguments]
     array = (ctypes.c_char_p * len(encoded))(*encoded)
     index = clang.lib.clang_createIndex(0, 0)
-    unit = clang.lib.clang_parseTranslationUnit(index, path.encode(), array, len(encoded), None, 0, 0)
+    unit = clang.lib.clang_parseTranslationUnit(index, path.encode(), array, len(encoded), None, 0,
+                                                PARSE_DETAILED_PREPROCESSING_RECORD)
     if not unit:
         clang.lib.clang_disposeIndex(index)
         return [f"{path}: libclang could not parse the file"]
@@ -190,11 +216,27 @@ def ast_errors(clang, path, role, own_core, cores_dir, arguments):
     def report(cursor, message):
         errors.append(f"{path}:{clang.line_of(cursor)}: {message}")
 
+    # ROS_* 로그 매크로가 펼친 static 위치 정보·ros::console 호출은 로그 허용 범위로 본다.
+    log_ranges = []
+
+    def collect_log_macros(cursor, _parent, _data):
+        if cursor.kind == MACRO_EXPANSION and clang.file_of(cursor) == target and \
+                clang.spelling(cursor).startswith(LOG_MACRO_PREFIXES):
+            log_ranges.append(clang.extent_of(cursor))
+        return CHILD_CONTINUE
+
+    def in_log_macro(cursor):
+        offset = clang.offset_of(clang.lib.clang_getCursorLocation(cursor))
+        return any(begin <= offset <= end for begin, end in log_ranges)
+
     def visit(cursor, _parent, _data):
         if clang.file_of(cursor) != target:
             return CHILD_CONTINUE
         kind = cursor.kind
-        if kind == VAR:
+        in_log = bool(log_ranges) and in_log_macro(cursor)
+        if kind == VAR and in_log and clang.spelling(cursor).startswith(LOG_MACRO_VARIABLE_PREFIX):
+            pass
+        elif kind == VAR:
             parent = clang.parent(cursor)
             constant = clang.is_const(cursor)
             if parent.kind in (TRANSLATION_UNIT, NAMESPACE, LINKAGE_SPEC) and not constant:
@@ -209,13 +251,16 @@ def ast_errors(clang, path, role, own_core, cores_dir, arguments):
             referenced = clang.lib.clang_getCursorReferenced(cursor)
             if not clang.is_null(referenced):
                 name = clang.qualified_name(referenced)
-                if forbidden_symbol(name):
+                log_symbol = in_log and any(name == symbol or name.startswith(symbol + "::") for symbol in LOG_MACRO_SYMBOLS)
+                if forbidden_symbol(name) and not log_symbol:
                     report(cursor, f"'{name}' is not allowed in extension files")
                 declared_in = clang.file_of(referenced)
                 if declared_in.startswith(cores_dir) and declared_in not in (target, own_core):
                     report(cursor, f"'{name}' belongs to another Core")
         return CHILD_RECURSE
 
+    collector = VISITOR(collect_log_macros)
+    clang.lib.clang_visitChildren(clang.lib.clang_getTranslationUnitCursor(unit), collector, None)
     callback = VISITOR(visit)
     clang.lib.clang_visitChildren(clang.lib.clang_getTranslationUnitCursor(unit), callback, None)
     clang.lib.clang_disposeTranslationUnit(unit)
@@ -231,6 +276,15 @@ def package_dependencies(package_dir):
     return names
 
 
+def declared_include_roots(package_dir):
+    """package.xml의 <export><node_pipeline include_roots="..."/>로 선언한 외부 include root다."""
+    root = ElementTree.parse(os.path.join(package_dir, "package.xml")).getroot()
+    roots = set()
+    for element in root.findall("export/node_pipeline"):
+        roots.update((element.get("include_roots") or "").split())
+    return roots
+
+
 def execution_packages(src_dir, own):
     packages = set()
     for config in glob.glob(os.path.join(src_dir, "*", "config", "*", "node.yaml")):
@@ -240,11 +294,11 @@ def execution_packages(src_dir, own):
     return packages
 
 
-def include_errors(path, role, stem, bank, package, dependencies, others):
+def include_errors(path, role, stem, bank, package, dependencies, others, include_roots=()):
     errors = []
     with open(path, encoding="utf-8") as stream:
         text = stream.read()
-    allowed_roots = set(dependencies)
+    allowed_roots = set(dependencies) | set(include_roots)
     for dependency in dependencies:
         allowed_roots.update(SYSTEM_DEPENDS.get(dependency, ()))
     for match in re.finditer(r'^\s*#\s*include\s*[<"]([^>"]+)[>"]', text, re.M):
@@ -255,6 +309,8 @@ def include_errors(path, role, stem, bank, package, dependencies, others):
         if include in STD_HEADERS:
             if include in FORBIDDEN_STD:
                 errors.append(f"{where} is not allowed in extension files")
+            continue
+        if include == LOG_INCLUDE:
             continue
         if root in FORBIDDEN_INCLUDE_ROOTS or include.startswith("XmlRpc"):
             errors.append(f"{where} is ROS communication and not allowed")
@@ -329,9 +385,10 @@ def check(package_dir, package, src_dir, include_dirs, use_ast=True):
             checked[(path, role)] = (core.stem, core.bank if role == "core" else "")
 
     dependencies = package_dependencies(package_dir)
+    include_roots = declared_include_roots(package_dir)
     others = execution_packages(src_dir, package)
     for (path, role), (stem, bank) in sorted(checked.items()):
-        errors += include_errors(path, role, stem, bank, package, dependencies, others)
+        errors += include_errors(path, role, stem, bank, package, dependencies, others, include_roots)
     if use_ast and checked:
         clang = Clang()
         arguments = ["-x", "c++", "-std=c++14", "-Wno-pragma-once-outside-header"] + \

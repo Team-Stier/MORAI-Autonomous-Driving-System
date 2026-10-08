@@ -108,6 +108,74 @@ class ContractCheckTest(unittest.TestCase):
         self.assertNotIn("<node_pipeline/extension.hpp>", errors)
         self.assertIn("couples execution packages", errors)
 
+    def test_package_xml_declares_external_include_roots(self):
+        write(self.package, "package.xml", """
+            <package format='2'><name>demo</name><depend>node_pipeline</depend><depend>libpcl-all-dev</depend>
+              <export><node_pipeline include_roots="pcl flann"/></export></package>
+            """)
+        path = os.path.join(self.package, "include/demo/cores/good.hpp")
+        write(self.package, "include/demo/cores/good.hpp", """
+            #include <pcl/point_types.h>
+            #include <flann/flann.hpp>
+            #include <onnxruntime_cxx_api.h>
+            """)
+        roots = np_check.declared_include_roots(self.package)
+        self.assertEqual({"pcl", "flann"}, roots)
+        errors = "\n".join(np_check.include_errors(
+            path, "core", "good", "", "demo", np_check.package_dependencies(self.package), set(), roots))
+        self.assertNotIn("<pcl/point_types.h>", errors)
+        self.assertNotIn("<flann/flann.hpp>", errors)
+        self.assertIn("#include <onnxruntime_cxx_api.h> is not a dependency declared in package.xml", errors)
+
+    def test_allows_ros_logging_macros_only(self):
+        fake_ros = os.path.join(self.src, "fake_ros")
+        write(fake_ros, "ros/console.h", """
+            #pragma once
+            namespace ros {
+            namespace console { struct LogLocation { bool initialized; }; inline void print(LogLocation*, const char*) {} }
+            struct Time { static Time now() { return Time(); } };
+            }
+            #define ROS_ERROR_THROTTLE(period, text) do { \\
+              static ::ros::console::LogLocation __rosconsole_define_location__loc = {false}; \\
+              static double __ros_log_throttle_last_hit__ = 0.0; \\
+              ::ros::Time __ros_log_throttle_now__ = ::ros::Time::now(); \\
+              static_cast<void>(__ros_log_throttle_now__); static_cast<void>(period); \\
+              __ros_log_throttle_last_hit__ += 1.0; \\
+              ::ros::console::print(&__rosconsole_define_location__loc, text); } while (false)
+            """)
+        write(self.package, "include/demo/cores/good.hpp", """
+            #pragma once
+            #include <ros/console.h>
+            namespace demo {
+            class Good {
+             public:
+              int process() { ROS_ERROR_THROTTLE(1.0, "gpu unavailable"); return 1; }
+            };
+            }
+            """)
+        include_dirs = [os.path.join(self.package, "include"), fake_ros]
+        self.assertEqual("", "\n".join(np_check.check(self.package, "demo", self.src, include_dirs)))
+        write(self.package, "include/demo/cores/good.hpp", """
+            #pragma once
+            #include <ros/console.h>
+            #include <cstdio>
+            namespace demo {
+            class Good {
+             public:
+              int process() {
+                static ::ros::console::LogLocation __ros_location = {false};
+                ::ros::console::print(&__ros_location, "direct");
+                ROS_ERROR_THROTTLE(1.0, std::fopen("/tmp/x", "r") ? "a" : "b");
+                return 1;
+              }
+            };
+            }
+            """)
+        errors = "\n".join(np_check.check(self.package, "demo", self.src, include_dirs))
+        self.assertIn("static mutable variable '__ros_location'", errors)
+        self.assertIn("'ros::console::print' is not allowed", errors)
+        self.assertIn("'fopen' is not allowed", errors)
+
 
 if __name__ == "__main__":
     unittest.main()

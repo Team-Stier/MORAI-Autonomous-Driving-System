@@ -233,6 +233,8 @@ template<class Message> struct RosIO {
     return text.empty() ? " ok" : text;
   }
   void report(const ProcessReport& report) const {
+    if (report.status == ProcessStatus::Failed)
+      ROS_ERROR_STREAM_THROTTLE(1.0, "pipeline Failed: " << report.reason);
     if (report.status == ProcessStatus::NoCore || report.status == ProcessStatus::Rejected)
       ROS_WARN_STREAM_THROTTLE(1.0, "pipeline " << (report.status == ProcessStatus::NoCore ? "NoCore" : "Rejected")
                                                 << ": " << report.reason);
@@ -245,23 +247,37 @@ template<class Message> struct RosHeaderInjector {
   void injectHeader(Message& message, const Context& context) const { Access::inject(message, context.stamp_ns, frame_id); }
 };
 
-// 구독 메시지를 원래 타입 그대로 PipelineNode에 전달한다.
+// 구독 메시지를 원래 타입 그대로 PipelineNode에 전달한다. callback 밖으로 예외를 내보내지 않는다.
 template<class Node> struct RosCallbacks {
   Node& node;
+  template<class Fn> static void guarded(Fn&& fn) {
+    try {
+      fn();
+    } catch (const std::exception& error) {
+      ROS_ERROR_STREAM_THROTTLE(1.0, "pipeline callback failed: " << error.what());
+    } catch (...) {
+      ROS_ERROR_STREAM_THROTTLE(1.0, "pipeline callback failed: unknown exception");
+    }
+  }
   template<class Message> std::shared_ptr<const Message> retainMessage(const boost::shared_ptr<const Message>& message) const {
     return std::shared_ptr<const Message>(message.get(), [message](const Message*) {});
   }
   void onSection(const interfaces::SectionAnnotation::ConstPtr& message) {
-    node.onSection(Section{true, message->state, static_cast<std::int64_t>(message->header.stamp.toNSec()), message->header.frame_id});
+    guarded([&] {
+      node.onSection(Section{true, message->state, static_cast<std::int64_t>(message->header.stamp.toNSec()),
+                             message->header.frame_id});
+    });
   }
   template<std::size_t Input, class Message> void onInput(const boost::shared_ptr<const Message>& message) {
-    const auto retained_message = retainMessage(message);
-    const std::integral_constant<std::size_t, Input> input_tag{};
-    node.onInput(input_tag, retained_message);
+    guarded([&] {
+      const auto retained_message = retainMessage(message);
+      const std::integral_constant<std::size_t, Input> input_tag{};
+      node.onInput(input_tag, retained_message);
+    });
   }
   void onPeriodic(const ros::SteadyTimerEvent& event) {
     static_cast<void>(event);
-    node.onPeriodic();
+    guarded([&] { node.onPeriodic(); });
   }
 };
 

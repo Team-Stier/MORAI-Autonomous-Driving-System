@@ -64,7 +64,7 @@ template<class CoreId> struct Selection {
   CoreId id{};
 };
 
-enum class ProcessStatus { Queued, Skipped, Rejected, NoCore, Published };
+enum class ProcessStatus { Queued, Skipped, Rejected, NoCore, Failed, Published };
 struct ProcessReport {
   ProcessStatus status = ProcessStatus::Queued;
   std::size_t health_checks = 0;

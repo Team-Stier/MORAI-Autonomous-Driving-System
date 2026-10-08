@@ -319,7 +319,7 @@ TEST(Pipeline, IssuesOfUndeclaredInputsDoNotBlockTheSelectedCore) {
   EXPECT_EQ(npd::ProcessStatus::Published, fixture.node->onInput(A{}, reading(3, 9900000000)).status);
 }
 
-TEST(Pipeline, AmbiguousHealthRulesAreConfigurationErrors) {
+TEST(Pipeline, ExceptionsDuringProcessingFailOnlyThatRound) {
   npd::HealthCoreRule<TestCoreId> first;
   first.when = {{1, np::Kind::Missing}};
   first.priority = 10;
@@ -327,7 +327,13 @@ TEST(Pipeline, AmbiguousHealthRulesAreConfigurationErrors) {
   auto second = first;
   second.core = TestCoreId::Sum;
   SingleFixture fixture(selector({{0, TestCoreId::Sum}}, {first, second}));
-  EXPECT_THROW(fixture.node->onInput(A{}, reading(3, 9900000000)), std::invalid_argument);
+  const auto report = fixture.node->onInput(A{}, reading(3, 9900000000));
+  EXPECT_EQ(npd::ProcessStatus::Failed, report.status);
+  EXPECT_EQ("ambiguous health_core_map priority", report.reason);
+  EXPECT_EQ(npd::ProcessStatus::Failed, fixture.io.reports->back().status);
+  fixture.node->onInput(B{}, reading(2, 9900000000));
+  EXPECT_EQ(npd::ProcessStatus::Published, fixture.node->onInput(A{}, reading(3, 9900000000)).status);
+  EXPECT_TRUE(fixture.io.published->size() == 1);
 }
 
 TEST(Pipeline, PeriodicRequireNewSnapshotSkipsRepeatedBundle) {

@@ -55,12 +55,31 @@ template<class Buffer, class Assembler, class Stages, class CoreSet, class Heade
   }
 
  private:
+  // 처리 한 회차의 예외는 Failed로 보고하고 노드는 계속 실행한다. 실패한 스냅샷도 시도한 것으로 기록한다.
   ProcessReport process(const Trigger& trigger) {
+    attempt_pending_ = false;
+    try {
+      return processSnapshot(trigger);
+    } catch (const std::exception& error) {
+      return fail(error.what());
+    } catch (...) {
+      return fail("unknown exception");
+    }
+  }
+
+  ProcessReport fail(const std::string& reason) {
+    if (attempt_pending_) assembler.markAttempted(attempt_token_);
+    return finish(ProcessStatus::Failed, 0, reason);
+  }
+
+  ProcessReport processSnapshot(const Trigger& trigger) {
     const auto assembled = assembler.assemble(buffer, trigger);
     Snapshot snapshot{StageData{}, assembled.context, assembled.token, assembled.is_new};
     snapshot.data.update(assembled.data);
     if ((trigger.mode == ExecutionMode::OnInput || execution.require_new_snapshot) && !snapshot.is_new)
       return finish(ProcessStatus::Skipped, 0, "bundle already attempted");
+    attempt_token_ = snapshot.token;
+    attempt_pending_ = true;
     const auto health_clocks = io.readClocks();
     std::size_t checks = 0;
     ProcessReport report;
@@ -123,6 +142,8 @@ template<class Buffer, class Assembler, class Stages, class CoreSet, class Heade
   CoreSet cores;
   HeaderInjector header_injector;
   IO io;
+  std::vector<std::uint64_t> attempt_token_;
+  bool attempt_pending_ = false;
 };
 }  // namespace detail
 }  // namespace node_pipeline

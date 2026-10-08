@@ -48,7 +48,7 @@ class EditableInput {
   std::type_index type_;
 };
 
-// 해당 Core의 파라미터 파일만 읽는다. 키가 없거나 타입이 다르면 예외로 종료한다.
+// 해당 Core의 파라미터 파일만 읽는다. 키가 없거나 타입이 다르면 예외를 던지며, 시작 단계 실패로 보고된다.
 class ParamReader {
  public:
   struct Impl;

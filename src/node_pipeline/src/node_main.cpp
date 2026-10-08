@@ -1,8 +1,18 @@
 // 모든 실행 노드가 공유하는 main이다. np_registry.hpp와 NP_NODE_CONFIG_DIR는 빌드 디렉터리에 생성된다.
+// 노드는 스스로 종료하지 않는다. 시작 실패는 로그로 보고하고 계산 없이 대기한다.
 #include "np_registry.hpp"
 #include <node_pipeline/detail/ros.hpp>
+#include <chrono>
 #include <exception>
 #include <iostream>
+#include <thread>
+
+namespace {
+// ROS 초기화 자체가 실패하면 ROS로 대기할 수 없으므로 프로세스만 유지한다.
+[[noreturn]] void waitWithoutRos() {
+  for (;;) std::this_thread::sleep_for(std::chrono::hours(1));
+}
+}  // namespace
 
 int main(int argc, char** argv) {
   namespace npd = node_pipeline::detail;
@@ -10,7 +20,13 @@ int main(int argc, char** argv) {
   using Output = Spec::Output;
   try {
     ros::init(argc, argv, std::string(Spec::node()) + "_node");
-    ros::NodeHandle nh;
+  } catch (const std::exception& error) {
+    std::cerr << "[node_pipeline] ros::init failed: " << error.what() << std::endl;
+    waitWithoutRos();
+  }
+  // 마지막 NodeHandle이 소멸하면 ROS가 종료되므로 대기용 핸들을 시작 시도 밖에 둔다.
+  ros::NodeHandle nh;
+  try {
     const npd::NodeParams params{Spec::package(), Spec::node(), NP_NODE_CONFIG_DIR, Spec::coreNames(), Spec::parameterLoaders()};
 
     std::vector<std::string> topics;
@@ -52,7 +68,10 @@ int main(int argc, char** argv) {
     ros::spin();
     return 0;
   } catch (const std::exception& error) {
-    std::cerr << "[node_pipeline] " << error.what() << std::endl;
-    return 1;
+    ROS_ERROR_STREAM("[node_pipeline] " << Spec::node() << " startup failed; waiting without processing: " << error.what());
+  } catch (...) {
+    ROS_ERROR_STREAM("[node_pipeline] " << Spec::node() << " startup failed; waiting without processing: unknown exception");
   }
+  ros::spin();
+  return 0;
 }
