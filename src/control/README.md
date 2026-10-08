@@ -10,6 +10,7 @@
 | 구독 | `/local_path/velocity_injected` | `interfaces/Path` | base_link 경로·주입된 목표속도·가속도 |
 | 구독 | `/localization/ego` | `nav_msgs/Odometry` | map pose, base_link 횡속도·yaw rate; 공분산 미사용 |
 | 구독 | `/vehicle/competition_status` | `interfaces/CompetitionVehicleStatus` | base_link 전방 속도 `velocity_x_mps` |
+| 구독 | `/sensors/imu/data` | `sensor_msgs/Imu` | `autoware_universe.hpp` 입력 |
 | 구독 | `/section_annotation` | `interfaces/SectionAnnotation` | section 선택 |
 | 발행 | `/control_cmd` | `morai_msgs/CtrlCmd` | 페달 [0,1], 최대 조향각으로 나눈 조향 [−1,1], longlCmdType=1 |
 
@@ -35,7 +36,9 @@ Velocity Planner, 최종 속도 제한과 Bridge 전달은 Speed Filter가 수�
 | Core | 입력 | 선택 |
 | --- | --- | --- |
 | `path_tracking.hpp` | path·ego·competition | UNKNOWN=0과 섹션 1~16 |
-| `safe_stop.hpp` | 없음 | path·ego·competition 중 하나가 Missing이면 health 매핑으로 교체 |
+| `safe_stop.hpp` | 없음 | path·ego·competition·imu 중 하나가 Missing이면 health 매핑으로 교체 |
+| `morai_mpc.hpp` | path·ego·competition | 등록만, 선택 매핑 없음 |
+| `autoware_universe.hpp` | path·ego·competition·imu | 등록만, 선택 매핑 없음 |
 
 공통 검사층이 frame·NaN/Inf·stamp·stale·수신 timeout·입력 시차를, Validator `tracking_inputs.hpp`가 경로점 수·형상·quaternion·point frame·목표속도 범위와 ego `child_frame_id`를 검사한다.
 목표속도 범위는 `config/control/node.yaml`의 path `range`다.

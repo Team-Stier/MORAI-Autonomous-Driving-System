@@ -1,0 +1,32 @@
+Autoware Universe control port
+
+Upstream: https://github.com/autowarefoundation/autoware_universe
+Commit: 5c750db97464a7f29c28d0d7857f7c44e9f70e97
+Sources: control/autoware_mpc_lateral_controller and
+         control/autoware_pid_longitudinal_controller
+Copyright The Autoware Foundation and TIER IV, Inc. (individual notices preserved).
+License: Apache License 2.0 (licenses/Apache-2.0.txt).
+
+Interpolation and selected trajectory geometry helpers:
+https://github.com/autowarefoundation/autoware_core
+Commit: ee8928e8b387fb28d44097579c460215810d4b9e
+common/autoware_interpolation; common/autoware_motion_utils
+Copyright TIER IV, Inc. License: Apache License 2.0.
+
+Changes: ROS 2 node/message/time/logger dependencies replaced by ROS 1 native
+geometry/time and plain calculation types; C++17 constructs adapted to C++14;
+node communications and debug markers removed; Pipeline owns input validation;
+last-valid-trajectory reuse and solver fallback removed; computation failures throw;
+base_link input paths transformed to map with the supplied ego pose;
+PID dt bounds and control output units adapted to this workspace's contracts.
+The default kinematics bicycle model with steering lag and OSQP solver is ported.
+Operation mode is autonomous when this Core is selected. Steering offset is zero.
+The moving/stopped/converged steering wrapper and next-cycle synchronization are retained.
+
+OSQP 0.6.3: https://github.com/osqp/osqp/releases/tag/v0.6.3
+Release source downloaded by CMake with a fixed SHA256; Apache License 2.0.
+The ROS 2 OSQP wrapper is replaced by the native 0.6 C API, retaining warm starts.
+
+TL expected 1.1.0 (include/control/universe/expected.hpp):
+https://github.com/TartanLlama/expected/tree/v1.1.0
+Copyright Sy Brand. CC0 public domain dedication (licenses/CC0-1.0.txt).

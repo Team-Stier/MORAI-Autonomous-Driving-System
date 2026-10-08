@@ -1,0 +1,74 @@
+# MOLIT2026-stier1 d71cadc7f1bb040ae026f95d0a19292d16ca8978 operating tuning.
+minimum_control_dt_sec: 0.005
+maximum_control_dt_sec: 0.10
+lateral:
+  ctrl_period: 0.03333333333333333
+  enable_path_smoothing: false
+  enable_yaw_recalculation: true
+  path_filter_moving_ave_num: 35
+  path_smoothing_times: 1
+  curvature_smoothing_num: 14
+  morai_yaw_smoothing_num: 14
+  traj_resample_dist: 0.25
+  vehicle_model_wheelbase: 3.0
+  steer_lim_deg: 40.0
+  morai_steer_rate_limit_deg: 60.0
+  mpc_prediction_horizon: 45
+  mpc_prediction_sampling_time: 0.1
+  mpc_weight_lat_error: 10.0
+  mpc_weight_heading_error: 3.0
+  mpc_weight_heading_error_squared_vel_coeff: 0.3
+  mpc_weight_steering_input: 1.0
+  mpc_weight_steering_input_squared_vel_coeff: 1.0
+  mpc_weight_lat_jerk: 1.0
+  mpc_weight_terminal_lat_error: 10.0
+  mpc_weight_terminal_heading_error: 0.1
+  mpc_zero_ff_steer_deg: 0.0
+  steering_lpf_cutoff_hz: 3.0
+  qpoases_max_iter: 500
+  morai_min_prediction_length_m: 20.0
+  morai_max_prediction_horizon: 90
+  morai_use_output_steering_filter: false
+  morai_straight_lat_weight_scale: 0.2
+  morai_curve_steer_weight_scale: 0.25
+  morai_weight_curvature_low: 0.005
+  morai_weight_curvature_high: 0.03
+  morai_weight_first_steer_change: 2.0
+  morai_weight_front_point_error: 0.0
+  morai_front_overhang_m: 0.845
+longitudinal:
+  solver: "osqp"
+  horizon_steps: 30
+  optimizer_iterations: 10
+  line_search_steps: 8
+  prediction_dt_sec: 0.10
+  gradient_epsilon: 0.01
+  gradient_step: 0.08
+  gradient_tolerance: 1.0e-5
+  coordinate_initial_step: 0.20
+  coordinate_minimum_step: 0.01
+  command_step_decay: 0.5
+  maximum_accel_command: 0.70
+  maximum_brake_command: 0.60
+  command_rate_limit_per_sec: 2.0
+  acceleration_gain_mps2: 3.0
+  braking_gain_mps2: 6.0
+  actuator_time_constant_sec: 0.25
+  physical_rollout: false
+  constant_drag_mps2: 0.0
+  quadratic_drag_per_m: 0.0
+  maximum_acceleration_mps2: 2.5
+  maximum_deceleration_mps2: 5.0
+  maximum_jerk_mps3: 3.0
+  acceleration_estimate_filter_time_constant_sec: 0.20
+  speed_weight: 8.0
+  acceleration_weight: 0.20
+  jerk_weight: 1.2
+  command_weight: 0.08
+  command_rate_weight: 2.5
+  terminal_speed_weight: 24.0
+# Shared actuator delay/tau/gain for prediction and the lateral vehicle model.
+steering_prediction:
+  delay_sec: 0.16666666666666666
+  time_constant_sec: 0.05
+  gain: 0.77

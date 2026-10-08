@@ -27,3 +27,6 @@ track:
     - when: [{input: competition, issue: Missing}]
       priority: 101
       core: safe_stop.hpp
+    - when: [{input: imu, issue: Missing}]
+      priority: 100
+      core: safe_stop.hpp
