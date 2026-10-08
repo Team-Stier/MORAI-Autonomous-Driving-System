@@ -9,14 +9,15 @@ MORAI SIM 기반 자율주행 시스템. ROS 1 Noetic을 사용한다.
 이 프로젝트는 Strategy 패턴으로 작성하며, 알고리즘 Core와 ROS 실행 Pipeline을 분리해 협업한다.
 Pipeline은 공통 실행기로 봉인한다. 노드는 YAML로 구성하고, 기능은 공식 확장점 파일로만 확장한다.
 
-- 각 파트 담당자는 노드를 직접 개발하지 않고 자신의 Core와 공식 확장점 파일만 작성한다. 등록 전제 확인을 위한 기존 코드의 읽기는 허용한다.
-- Core 개발·등록 전에 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)를 읽고 등록 전제 확인, 수정 범위, 검증, 사용자 안내·보고 절차를 따른다. Core 개발자는 가이드가 지정한 확장점 파일과 YAML 경로만 작성·수정한다.
+- 각 파트 담당자는 노드를 직접 개발하지 않고 자신의 Core와 가이드가 지정한 파일만 작성한다. 등록 전제 확인을 위한 기존 코드의 읽기는 허용한다.
+- Core 개발·등록 전에 [Core 등록 가이드](src/node_pipeline/CORE_REGISTRATION.md)를 읽고 등록 전제 확인, 수정 범위, 검증, 사용자 안내·보고 절차를 따른다. Core 개발자는 가이드가 지정한 파일만 작성·수정한다.
 - 허용 범위 밖의 변경은 중단하고, 가이드의 보고·리드 협의·명시적 허가 절차를 따른다.
 - Core 개발 요청이나 원하는 동작의 지정만으로 허용 범위 밖의 변경이 승인된 것으로 해석하지 않는다. 알고리즘을 Core 밖의 Policy·Validator·Selector·파라미터 로더·Bank·callback 등에 옮겨 요구사항을 우회 구현하지 않는다.
 - 리드 개발자는 노드의 `node.yaml`로 실행 방식·입력 계약·Stage 순서와 출력 계약·발행을 선언한다. 공통 실행기가 등록된 Core를 ROS 입출력에 연결하며, 노드별 실행 코드는 작성하지 않는다.
-- Core는 정규 `process()`의 인자와 반환값만으로 Pipeline에 연결되는 알고리즘 컴포넌트다. 계산 라이브러리와 Core가 소유한 내부 계산 상태는 사용할 수 있다. 시각화 목적의 토픽 발행을 제외한 ROS 통신, 다른 노드·Pipeline·Core 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다. 같은 패키지에서 선언된 Bank는 예외로 허용한다.
-- 시각화 목적의 토픽 발행만 Core 디커플링 규칙의 예외로 허용한다. 해당 토픽 이름은 `/visualizer/*`로 지정하며, `/visualizer/*` 토픽은 `src/visualizer` 패키지 이외에서 절대 구독하지 않는다.
+- Core는 정규 `process()`의 인자와 반환값만으로 Pipeline에 연결되는 알고리즘 컴포넌트다. 계산 라이브러리와 Core가 소유한 내부 계산 상태는 사용할 수 있다. 시각화 목적의 토픽 발행과 로그를 제외한 ROS 통신, 다른 노드·Pipeline·Core 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다. 같은 패키지에서 선언된 Bank는 예외로 허용한다.
+- 시각화 목적의 토픽 발행과 로그만 Core 디커플링 규칙의 예외로 허용한다. 로그는 모든 확장점 파일에서 `<ros/console.h>`의 `ROS_*` 로그 매크로로 남긴다. 시각화 토픽 이름은 `/visualizer/*`로 지정하며, `/visualizer/*` 토픽은 `src/visualizer` 패키지 이외에서 절대 구독하지 않는다.
 - Core는 입력이 자신의 입력 계약을 만족한다고 전제하고 계산한다. 입력 유효성 검사, 누락 감지, 입력 대체, fallback 및 처리 성공·실패 상태 반환을 구현하지 않는다. 입력 검사와 처리 정책은 Pipeline의 공통 검사층과 Validator·Policy 확장점이 담당한다. 알고리즘 자체에 필요한 조건 분기와 수치 계산은 수행한다.
+- Core가 의존하는 입력 내용 전제(예: 특정 transform의 존재, 점군 필드 구성)는 `node.yaml`의 입력 한도나 연결한 Validator로 선언한다. Core는 실행 중 예외(`throw`·`.at()`·`.value()` 등)로 실패를 알리지 않는다. Core가 자체 라이브러리를 만들어 참조하는 방식으로 이 규칙들을 우회하지 않는다.
 - Core 하나당 파일 하나를 둔다. 첫 Core는 실제 구독 메시지를 `process()`의 개별 인자로 받고, 후속 Core는 이전 Core의 반환값을 개별 인자로 받는다. 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있으며, 개수·타입·순서는 `node.yaml`의 Stage 출력 계약으로 정한다. 마지막 Core는 목표 발행 메시지 타입의 payload를 완성해 반환하며, 출력 헤더 주입과 발행은 Pipeline이 담당한다.
 
 구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)를 참고한다.
@@ -37,6 +38,8 @@ Core 등록·해제에 Pipeline C++을 수정하지 않는다. 노드별 YAML은
 | `config/<node>/parameters/<core>.yaml` | Core 개발자 | Core 계수 | 재시작 |
 | `include/<package_name>/{cores,validators,policies,parameters,banks}/` | Core 개발자 | 확장점 구현 | 재빌드 |
 | `include/<package_name>/libraries/`, `src/libraries/` | Core 개발자 | 계산 라이브러리 | 재빌드 |
+| `package.xml`, `CMakeLists.txt` | Core 개발자 | 의존성·외부 include root 선언, `np_add_nodes()` 인자 | 재빌드 |
+| `models/` | Core 개발자 | 파라미터 로더가 읽는 정적 자산 | 재시작 |
 
 등록 파일 이름이 Core ID·Core 파일·클래스 이름을 정한다. 예를 들어 `full_ekf.yaml`은
 Core ID `full_ekf.hpp`, 파일 `cores/full_ekf.hpp`, 클래스 `FullEkf`다.
@@ -284,6 +287,7 @@ flowchart TD
     tf --> VP
     e ---> C
     c ---> C
+    i ---> C
     P ---> p
     sa --> VP
     e ---> VP
@@ -319,7 +323,7 @@ flowchart TD
 | Static_TF_Publisher_Node | 센서 장착 변환을 시작 시 한 번 `/tf_static`으로 latched 발행. TF_Publisher_Node와 같은 `tf_publisher` 패키지에 둔다. |
 | Path_Planner_Node | ego 위치·자세와 `/vehicle/competition_status`의 차량 상태를 사용해 차선 추종·장애물 회피 경로 생성. |
 | Velocity_Planner_Node | 전달받은 경로의 속도 프로파일을 생성하고 TF로 `map`에서 `base_link`로 변환해 발행. 경로 형상을 다시 계획하지 않는다.     |
-| Control_Node | 속도 프로파일이 주입된 경로와 ego·차량 상태를 사용해 제어 명령 생성. |
+| Control_Node | 속도 프로파일이 주입된 경로와 ego·차량 상태·IMU를 사용해 제어 명령 생성. |
 | Speed_Filter_Node | 제어 명령에 최종 속도 제한을 적용해 Bridge에 전달. 최종 제어 명령. |
 
 ### Topics
@@ -413,6 +417,7 @@ map
 - `run.sh`는 저장소 루트를 스크립트 위치에서 찾고 ROS Noetic 환경을 불러온다.
 - 필요한 시스템·ROS 의존성을 확인하고, 없으면 `rosdep`/시스템 패키지 관리자로 설치를
   시도한다. 현재 실행 스택이 쓰는 RViz와 compressed image transport 의존성도 포함한다.
+  Git LFS 자산은 `git lfs pull`로 받으며, git-lfs가 없으면 설치를 시도한다.
   워크스페이스는 `catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo`로 빌드하고
   `devel/setup.bash` 환경을 사용한다.
 - 새 스택을 시작하기 전에 컴퓨터에서 실행 중인 기존 ROS 프로세스를 모두 정리한다.

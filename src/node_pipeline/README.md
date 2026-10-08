@@ -21,9 +21,10 @@
 
 ```text
 src/<package>/
-├── CMakeLists.txt                  # 리드: find_package()와 np_add_nodes(INCLUDE_DIRS … LIBRARIES …)만 둔다
-├── package.xml                     # 리드
+├── CMakeLists.txt                  # Core 개발자: find_package()와 np_add_nodes(INCLUDE_DIRS … LIBRARIES …)만 둔다
+├── package.xml                     # Core 개발자: 의존성과 <export><node_pipeline include_roots="…"/></export>
 ├── launch.sh                       # 리드
+├── models/                         # Core 개발자: 파라미터 로더가 asset()으로 읽는 정적 자산
 ├── config/<node>/
 │   ├── node.yaml                   # 리드
 │   ├── selection.yaml              # Core 개발자
@@ -58,7 +59,8 @@ C++ 소스는 위 경로와 `test/` 밖에 두지 않는다. `test/unit/test_*.c
 10. 첫 Stage의 Core 호출 직전에 Pipeline이 시도 token을 기록한다. Core ID별 case는 선언 입력의 존재를 다시 확인하고, Missing이면 `finish(NoCore, checks, "required core input missing")`로 종료한다. Core 반환값으로 `snapshot.data.inputs`만 교체하고 context·token·is_new는 이전 회차에서 이어받는다.
 11. Stage 출력 중 `from`으로 선언한 패스스루 값은 대응 입력 슬롯의 시간 메타데이터를 상속하고, 새 계산값은 시간 메타데이터를 비운다. 시간 정보가 없는 값에는 stamp·수신 timeout 검사를 적용하지 않고, skew는 양쪽 stamp가 있는 입력 쌍만 검사한다. 시간 정보의 부재와 입력값 Missing은 구분한다.
 12. 루프 밖에서 최종 메시지를 꺼내 헤더를 한 번 주입하고 출력 검사 없이 한 번 발행한다. `latched` 노드는 latch로 발행한다.
-13. 실행 중 예외를 잡아 재시도하거나 계속 실행하지 않는다. `on_input` 또는 `require_new_snapshot`이면 마지막으로 시도한 token과 같은 스냅샷의 재실행을 생략한다. `periodic`은 동일 입력으로도 계산·발행한다.
+13. 처리 회차 중 예외는 `finish(Failed, 0, 예외 내용)`으로 그 회차만 종료해 보고하고 노드는 계속 실행한다. 조립 이후 실패한 스냅샷은 시도한 것으로 기록한다. `on_input` 또는 `require_new_snapshot`이면 마지막으로 시도한 token과 같은 스냅샷의 재실행을 생략한다. `periodic`은 동일 입력으로도 계산·발행한다.
+14. 노드는 스스로 종료하지 않는다. 설정·파라미터 로더·Bank·Core 생성 등 시작 단계가 실패하면 ROS ERROR로 보고하고 구독 없이 대기한다. callback 밖으로 예외를 내보내지 않는다.
 
 ## Core 입출력 계약
 
@@ -97,7 +99,7 @@ Core 생성자는 연결한 것만 파라미터 값, Bank 참조 순서로 받�
 
 Pipeline은 선택된 Core의 선언 입력 issue 중 0 이상인 Policy priority의 최고 issue 하나를 골라 `correct()`를 호출한다. 음수 priority는 보정하지 않는다.
 동률은 input·issue 순회 순서다. 이미 Missing인 입력은 다시 보정하지 않는다. `EditableInput`은 해당 입력의 `remove()`와 같은 타입 복사본의 `modify<T>(fn)`만 제공한다.
-`ParamReader`는 해당 Core 파라미터의 `has(key)`·`number(key)`·`integer(key)`·`text(key)`·`flag(key)`·`numbers(key)`·`keys(key)`와, 파라미터로 지정한 정적 자산 파일의 내용을 읽는 `asset(key)`만 제공한다. 키 경로는 `a/b`로 쓰고, 자산의 상대 경로는 패키지 디렉터리 기준이다. 키가 없거나 타입이 다르면 예외로 종료한다.
+`ParamReader`는 해당 Core 파라미터의 `has(key)`·`number(key)`·`integer(key)`·`text(key)`·`flag(key)`·`numbers(key)`·`keys(key)`와, 파라미터로 지정한 정적 자산 파일의 내용을 읽는 `asset(key)`만 제공한다. 키 경로는 `a/b`로 쓰고, 자산의 상대 경로는 패키지 디렉터리 기준이다. 키가 없거나 타입이 다르면 예외를 던지며, 시작 단계 실패로 보고된다.
 
 ## YAML
 
@@ -202,8 +204,8 @@ issue 이름은 `Missing`·`InvalidStamp`·`FutureStamp`·`FrameMismatch`·`NaN`
 1. 경로 검사: C++ 소스와 설정 파일은 위 구성의 경로에만 둔다. 노드마다 `node.yaml`·`selection.yaml`이 필요하다.
 2. YAML 검사: 스키마·이름·Stage 입출력 대응·확장점 파일 존재를 검사한다. YAML은 C++ 표현식·함수 본문을 받지 않으며, 필드 경로는 식별자와 `.`만 허용한다.
 3. 생성·컴파일 검사: `process()`는 선언 입력 타입의 `const&`를 순서대로 받고 Stage `outputs`의 개수·타입·순서대로 반환한다. 같은 Stage의 후보 Core는 같은 출력 계약을 갖는다. Validator·Policy는 상태 없는 타입이다.
-4. include 검사: 확장점·라이브러리 파일은 표준 라이브러리, `package.xml`에 선언한 의존성의 헤더, `node_pipeline/extension.hpp`, 같은 패키지의 `libraries/` 헤더만 include한다. Core는 연결한 Bank 헤더를, 파라미터 로더는 자기 Core 또는 Bank 헤더를 추가로 include할 수 있다. ROS 통신 헤더, `<fstream>`·`<thread>`·`<future>`·`<mutex>`, 다른 실행 패키지의 헤더는 거부한다.
-5. AST 검사: 전역·정적 가변 상태, ROS 통신·시각 조회 API(`ros::NodeHandle`·`ros::Publisher`·`ros::Time::now` 등), 스레드·프로세스·네트워크, 파일 입출력, 다른 Core 타입의 소유·참조·호출, `main` 정의, Pipeline 내부 이름공간 참조를 거부한다. AST는 `libclang-dev`의 libclang으로 해석한다.
+4. include 검사: 확장점·라이브러리 파일은 표준 라이브러리, `package.xml`에 선언한 의존성의 헤더, `package.xml`의 `<export><node_pipeline include_roots="…"/></export>`에 선언한 외부 include root, 로그용 `<ros/console.h>`, `node_pipeline/extension.hpp`, 같은 패키지의 `libraries/` 헤더만 include한다. Core는 연결한 Bank 헤더를, 파라미터 로더는 자기 Core 또는 Bank 헤더를 추가로 include할 수 있다. ROS 통신 헤더, `<fstream>`·`<thread>`·`<future>`·`<mutex>`, 다른 실행 패키지의 헤더는 거부한다.
+5. AST 검사: 전역·정적 가변 상태, ROS 통신·시각 조회 API(`ros::NodeHandle`·`ros::Publisher`·`ros::Time::now` 등), 스레드·프로세스·네트워크, 파일 입출력, 다른 Core 타입의 소유·참조·호출, `main` 정의, Pipeline 내부 이름공간 참조를 거부한다. `ROS_*` 로그 매크로가 펼친 위치 캐시 static 변수와 `ros::console`·throttle 시각 조회는 허용한다. AST는 `libclang-dev`의 libclang으로 해석한다.
 6. 테스트 등록: `test/unit/test_*.cpp`를 gtest로, `test/unit/test_*.py`를 nosetests로 등록한다. 테스트에는 `NP_PACKAGE_DIR`이 정의된다.
 
 검사 대상은 `libraries/` 전체와, 등록 YAML이 연결한 Core·Validator·Policy·Bank와 그 파라미터 로더다. 등록하지 않은 Core 파일은 빌드하거나 검사하지 않는다.
@@ -236,8 +238,10 @@ sequenceDiagram
     M->>M: loadRosConfig(nh, params, topics, inputs)
     M->>M: loadStageConfig(stage_params, input_registry, core_profiles, selector)
     M->>M: makeStage(core_profiles, selector, dispatch)
-    alt config 형식·타입·이름·한도 오류 또는 Core별 입출력·Validator·Policy·필수 입력·허용 issue 연결 오류
+    alt config 형식·타입·이름·한도 오류 또는 Core별 입출력·Validator·Policy·필수 입력·허용 issue 연결 오류 또는 로더·Bank·Core 생성 예외
         M-->>M: throw std::invalid_argument
+        M->>M: ROS_ERROR(startup failed)
+        M->>M: ros::spin() 구독 없이 대기
     else 정상 설정
         M-->>M: settings
         M->>C: CoreSet{core objects}
@@ -245,6 +249,8 @@ sequenceDiagram
         M->>N: PipelineNode(execution, buffer, assembler, stages, cores, header_injector, io)
         alt stages 비어 있음 또는 helper 누락 또는 max_health_checks=0 또는 실행 모드 오류 또는 OnInput trigger 미등록
             N-->>M: throw std::invalid_argument
+            M->>M: ROS_ERROR(startup failed)
+            M->>M: ros::spin() 구독 없이 대기
         else 유효 실행 설정
             N-->>M: node
         end
@@ -275,6 +281,7 @@ sequenceDiagram
             N->>N: process(trigger)
         end
         opt process 호출됨
+            N->>N: processSnapshot(trigger)
             N->>A: assemble(buffer, trigger)
             A-->>N: assembled
             N->>N: snapshot.data.update(assembled.data)
@@ -282,6 +289,7 @@ sequenceDiagram
                 N->>N: finish(Skipped, 0, bundle already attempted)
                 N->>IO: report(report)
             else 새 스냅샷 또는 Periodic
+                Note over N: attempt_token=snapshot.token, attempt_pending=true
                 N->>IO: readClocks()
                 IO-->>N: health_clocks
                 loop stage_index=0부터 n-1까지
@@ -429,15 +437,22 @@ sequenceDiagram
                 N->>N: finish(Published, checks, empty reason)
                 N->>IO: report(report)
             end
+            opt processSnapshot 중 예외
+                opt attempt_pending=true
+                    N->>A: markAttempted(attempt_token)
+                end
+                N->>N: finish(Failed, 0, error.what())
+                N->>IO: report(report)
+            end
         end
     end
 ```
 
 | 객체·메서드 | 소유·책임 |
 | --- | --- |
-| 공통 `main` | `node.yaml`·등록 YAML·`selection.yaml`·파라미터를 읽어 실행기를 구성한다. 입력마다 구독을, `periodic`이면 timer를, `latched`면 `onStartup()`을 연결한다. |
-| `RosCallbacks` | 구독 메시지를 `retainMessage()` 후 `onInput()`에 전달하고 section은 `onSection()`으로 저장한다. |
-| `PipelineNode` | 최초 조립·중복 확인·시각 조회 후 n개 Stage를 순회한다. 중복·검사 한도·미선택·Missing은 `finish()`와 `IO::report()`로 이번 처리를 종료한다. |
+| 공통 `main` | `node.yaml`·등록 YAML·`selection.yaml`·파라미터를 읽어 실행기를 구성한다. 입력마다 구독을, `periodic`이면 timer를, `latched`면 `onStartup()`을 연결한다. 시작 실패는 ROS ERROR로 보고하고 구독 없이 대기한다. |
+| `RosCallbacks` | 구독 메시지를 `retainMessage()` 후 `onInput()`에 전달하고 section은 `onSection()`으로 저장한다. callback 밖으로 예외를 내보내지 않고 ROS ERROR로 보고한다. |
+| `PipelineNode` | 최초 조립·중복 확인·시각 조회 후 n개 Stage를 순회한다. 중복·검사 한도·미선택·Missing·예외는 `finish()`와 `IO::report()`로 이번 처리를 종료한다. |
 | `InputBuffer`·`SnapshotAssembler` | 원본 메시지와 수신 시각을 보존하고 최초 스냅샷·token을 조립한다. `markAttempted()`는 첫 Stage의 Core 호출 직전에 한 번 수행한다. |
 | `CoreSelector` | `selectSection()`은 section 유효성을 확인해 `section_core_map`으로 선택한다. `overrideHealth()`는 `health_core_map`으로 덮어쓴다. |
 | `stage.coreProfile(id)` | 등록 YAML에서 생성한 Core profile을 반환한다. profile은 입력 계약 검사, `required_inputs`, Validator, Policy, 허용 issue를 갖는다. |
@@ -447,4 +462,4 @@ sequenceDiagram
 | Core ID별 `case` | 생성 코드가 정의한다. 선언 입력의 존재를 확인하고 실제 개별 인자로 Core를 호출한 뒤 `wrapResult()`로 출력 선언의 `from`을 원본 대응으로 연결한다. |
 | `replaceInputs(snapshot, result)` | 반환값을 슬롯으로 감싸 `data.inputs`만 교체하고 나머지 스냅샷 정보를 보존한다. |
 | 각 Core | 슬롯에서 꺼낸 실제 메시지·중간 변수로 계산하며 내부 상태를 유지한다. 입력 검사·헤더 주입·스냅샷 생성·다음 Stage 실행은 수행하지 않는다. |
-| `RosHeaderInjector`·`RosIO` | 전체 루프가 끝난 뒤 최종 메시지에 context로 헤더만 주입하고 한 번 발행한다. 중간값에 헤더를 주입하거나 발행하지 않는다. `reportHealth()`는 DEBUG 로거 `health`에 입력별 issue를 남기고, `report()`는 NoCore·Rejected를 WARN으로 남긴다. |
+| `RosHeaderInjector`·`RosIO` | 전체 루프가 끝난 뒤 최종 메시지에 context로 헤더만 주입하고 한 번 발행한다. 중간값에 헤더를 주입하거나 발행하지 않는다. `reportHealth()`는 DEBUG 로거 `health`에 입력별 issue를 남기고, `report()`는 NoCore·Rejected를 WARN, Failed를 ERROR로 남긴다. |

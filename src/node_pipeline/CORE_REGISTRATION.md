@@ -15,6 +15,9 @@ Core 개발자는 계산과 아래 경로의 파일을 담당하고, 리드는 �
 | `include/<package>/parameters/<core 또는 bank>.hpp` | 파라미터 로더 |
 | `include/<package>/banks/<name>.hpp` | 같은 노드의 Core가 공유하는 계산 상태 |
 | `include/<package>/libraries/`, `src/libraries/` | 계산 라이브러리 |
+| `package.xml` | 의존성, 외부 include root(`<export><node_pipeline include_roots="…"/></export>`) |
+| `CMakeLists.txt` | `find_package()`와 `np_add_nodes(INCLUDE_DIRS … LIBRARIES …)` |
+| `models/` | 파라미터 로더가 `asset()`으로 읽는 정적 자산 |
 | `config/<node>/registrations/<core>.yaml` | Core 등록 |
 | `config/<node>/parameters/<core 또는 bank>.yaml` | Core·Bank 계수 |
 | `config/<node>/selection.yaml` | 해당 Core의 선택 매핑 |
@@ -30,6 +33,7 @@ Core 개발자는 계산과 아래 경로의 파일을 담당하고, 리드는 �
 - Core에 필요한 입력이 해당 Stage의 입력에 있다. 첫 Stage의 입력은 `inputs`, 이후 Stage의 입력은 이전 Stage의 `outputs`다.
 - `process()`의 반환이 해당 Stage `outputs`의 개수·타입·순서와 일치한다. 마지막 Stage는 발행 메시지 하나다.
 - Core 설정·정적 자산은 파라미터 로더로 주입할 수 있다.
+- Core가 의존하는 입력 내용 전제(특정 transform의 존재, 필드 구성 등)를 `node.yaml` 입력 한도나 연결할 Validator로 선언할 수 있다.
 
 전제가 부족하거나 문서·코드가 충돌하면 아래 보고 절차를 먼저 따른다.
 시작할 때 대상 Core·Stage·입출력 계약·작성할 파일을 사용자에게 짧게 안내한다.
@@ -116,7 +120,7 @@ Core 생성자는 연결한 것만 파라미터 값, Bank 참조 순서로 받�
 
 - 공통 Pipeline 라이브러리·생성기·계약 검사와 생성 파일.
 - `node.yaml`의 실행 방식·입력·한도·Stage 수·순서·출력 계약·발행.
-- `CMakeLists.txt`·`package.xml`·`launch.sh`와 새 의존성 추가.
+- `launch.sh`.
 - README·AGENTS.md·메시지 정의·서브모듈.
 - 다른 Core의 Core·등록·파라미터 파일.
 
