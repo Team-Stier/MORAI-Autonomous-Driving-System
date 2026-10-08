@@ -46,6 +46,12 @@ Validator `route_present.hpp`는 경로 탐색 결과가 없는 route를 Missing
 모든 Core는 Policy `remove_invalid.hpp`로 값·stamp·frame 오류 입력을 제거하며, 구독 입력에서 이어진 값의 Stale·ReceiveTimeout·Skew는 허용 issue다.
 `cores/prediction_core.hpp`는 등속 선회 예측 Core로 보존하며 등록하지 않았다.
 
+| 추가 등록 Core | Stage | 계산 |
+| --- | --- | --- |
+| `core_path_planner.hpp` | `local` | route 중심선·좌우 경계 corridor, ego, ego pose로 map에 옮긴 예측으로 `stier::PathGenerationCore` 경로를 계산해 map pose 경로로 반환. 결과가 없으면 빈 경로. 정지선 미사용. 파라미터 `config/path_planner/parameters/core_path_planner.yaml` |
+| `core_prediction.hpp` | `prediction` | 관측 `base_link` Objects를 `stier::PredictionCore` 등속 모델로 0.5~5.0초 전파. `velocity_available=false`는 정지 |
+| `ego_compensated_prediction.hpp` | `prediction` | ego 자세·각속도로 관측 시각 자세를 복원해 map 평면 등속 선회 예측. 위치·bbox·속도·가속도는 관측 `base_link` 기준 |
+
 ## 예측 배열 계약
 
 Prediction Core의 반환과 LocalPath Core의 입력은 **Objects 메시지를 원소로 갖는 길이 10의 외부 배열**이다. `Objects.objects` 안의 Object 목록을 10개로 제한하는 뜻이 아니다.
