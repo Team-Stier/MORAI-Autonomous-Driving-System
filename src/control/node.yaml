@@ -4,31 +4,43 @@ inputs:
     type: interfaces/Path
     topic: '/local_path/velocity_injected'
     limits:
+<<<<<<< Updated upstream
       stale_after_sec: 0.15
       receive_timeout_sec: 0.15
       max_sensor_skew_sec: 0.1
+=======
+>>>>>>> Stashed changes
       frame: base_link
   ego:
     type: nav_msgs/Odometry
     topic: '/localization/ego'
     limits:
+<<<<<<< Updated upstream
       stale_after_sec: 0.06
       receive_timeout_sec: 0.06
       max_sensor_skew_sec: 0.1
+=======
+>>>>>>> Stashed changes
       frame: map
   competition:
     type: interfaces/CompetitionVehicleStatus
     topic: '/vehicle/competition_status'
     limits:
+<<<<<<< Updated upstream
       stale_after_sec: 0.06
       receive_timeout_sec: 0.06
       max_sensor_skew_sec: 0.1
+=======
+>>>>>>> Stashed changes
       frame: base_link
   imu:
     type: sensor_msgs/Imu
     topic: '/sensors/imu/data'
     limits:
+<<<<<<< Updated upstream
       max_sensor_skew_sec: 0.1
+=======
+>>>>>>> Stashed changes
       frame: imu_link
       stale_after_sec: 0.06
       receive_timeout_sec: 0.06
@@ -57,10 +69,20 @@ stages:
     max_health_checks: 10
 output:
   source: stage1.command
+<<<<<<< Updated upstream
+=======
+  type: morai_msgs/CtrlCmd
+>>>>>>> Stashed changes
   topic: '/control_cmd'
   header: {}
 execution:
   mode: on_input
   trigger_input: path
+<<<<<<< Updated upstream
   queue_capacity: 8
+=======
+  frequency_hz: 50
+  queue_capacity: 8
+  max_health_checks: 10
+>>>>>>> Stashed changes
 section_topic: '/section_annotation'

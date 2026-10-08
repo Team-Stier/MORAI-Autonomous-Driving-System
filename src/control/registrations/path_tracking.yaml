@@ -6,6 +6,15 @@ outputs:
   -
     name: command
     type: morai_msgs/CtrlCmd
+<<<<<<< Updated upstream
 validator: validators/path_contract.hpp
 parameter_loader: parameters/path_tracking.hpp
+=======
+validator:
+  header: control/validators/path_contract.hpp
+  type: control::validators::PathContract
+parameter_loader:
+  header: control/parameters/path_tracking.hpp
+  type: control::parameters::PathTracking
+>>>>>>> Stashed changes
 parameter_namespace: tracking

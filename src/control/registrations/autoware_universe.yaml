@@ -6,6 +6,15 @@ outputs:
   -
     name: command
     type: morai_msgs/CtrlCmd
+<<<<<<< Updated upstream
 validator: validators/path_contract.hpp
 parameter_loader: parameters/autoware_universe.hpp
+=======
+validator:
+  header: control/validators/path_contract.hpp
+  type: control::validators::PathContract
+parameter_loader:
+  header: control/parameters/autoware_universe.hpp
+  type: control::parameters::AutowareUniverse
+>>>>>>> Stashed changes
 parameter_namespace: universe
