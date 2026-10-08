@@ -1,0 +1,19 @@
+MoraiMpc source port
+
+Source branch: origin/port-morai-mpc
+Original source: https://github.com/Team-Stier/MOLIT2026-stier1
+Commit: d71cadc7f1bb040ae026f95d0a19292d16ca8978
+Autoware AI mpc_follower: 48c67999823d66d297f9fd01dda5584604282135 (Apache-2.0)
+amathutils_lib: 202e492b88a89b58ca83f66cec089eaa27b440d4 (Apache-2.0)
+qpOASES: 51d3fbea30142d3acbf40cf7a1c519efc27ea67b (LGPL-2.1-or-later)
+
+Libraries here and src/libraries/morai_mpc contain the externally supplied
+Autoware AI numerical port, amathutils and qpOASES. Calculation bodies are copied
+from the source branch; only include paths are relocated. lane.hpp preserves the
+source port's original pose/twist reference types.
+
+Custom lateral adapter, longitudinal MPC, OSQP SQP adapter, parameter structures,
+steering predictor and prediction/curvature helpers are folded into
+cores/morai_mpc.hpp. Startup coefficient validation is in parameters/morai_mpc.hpp.
+OSQP 0.6.3 C API and Eigen are external dependencies, not copied custom libraries.
+Licenses are preserved in ../licenses/.
