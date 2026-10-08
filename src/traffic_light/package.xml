@@ -9,4 +9,8 @@
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
   <depend>sensor_msgs</depend>
+  <depend>libopencv-dev</depend>
+  <export>
+    <node_pipeline include_roots="onnxruntime_cxx_api.h"/>
+  </export>
 </package>
