@@ -4,7 +4,8 @@
 TEST(FullEkf, PublishesBodyTwistAndDoesNotFuseDuplicateSamples) {
   localization::EkfParameters parameters;
   parameters.yaw_offset_rad = 0;
-  localization::FullEkf core(parameters);
+  localization::StateBank bank;
+  localization::FullEkf core(parameters, bank);
   sensor_msgs::NavSatFix gps;
   gps.latitude = 37.0;
   gps.longitude = 127.0;
@@ -40,7 +41,8 @@ TEST(FullEkf, EstimatesLateralAndVerticalVelocityFromGpsMotion) {
   localization::EkfParameters parameters;
   parameters.yaw_offset_rad = 0;
   parameters.gps_position_noise = 0.01;
-  localization::FullEkf core(parameters);
+  localization::StateBank bank;
+  localization::FullEkf core(parameters, bank);
   sensor_msgs::NavSatFix gps;
   gps.latitude = 37.0;
   gps.longitude = 127.0;
