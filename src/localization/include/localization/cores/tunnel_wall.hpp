@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 namespace localization {
@@ -34,8 +35,10 @@ struct TunnelWallParameters {
 };
 class TunnelWall {
  public:
-  // bank는 FullEkf가 초기화한 상태를 이어받는다. 점군의 x·y·z·time(점군 stamp 기준 초) 필드는
-  // Validator timed_cloud.hpp가 선언한다. 측량한 터널 벽 평면과 축 방향은 map 좌표다.
+  // Contract: bank was initialized by FullEkf; cloud has finite little-endian
+  // FLOAT32 XYZ and point time (seconds from cloud stamp) in base_link.
+  // Wall consensus supplies lateral information.
+  // The surveyed wall planes and heading are in the repository map frame.
   TunnelWall(TunnelWallParameters parameters, StateBank& bank)
       : parameters_(parameters), bank_(bank),
         tangent_(std::cos(parameters.axis_yaw_rad), std::sin(parameters.axis_yaw_rad), 0),

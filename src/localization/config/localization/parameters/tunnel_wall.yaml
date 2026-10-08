@@ -1,11 +1,10 @@
-# 섹션 15 터널. 원점·축·벽은 map 좌표(m, rad)다.
 origin_x_m: -23.5
 origin_y_m: -519.2000122070312
 axis_yaw_rad: -2.6434409392630127
 left_wall_m: 5.995789344373857
 right_wall_m: -6.01444403868076
 wall_normal_z_ratio: 0.023916274752440667
-yaw_offset_rad: -0.023509        # GT heading→UTM 격자 heading
+yaw_offset_rad: -0.023509
 acceleration_noise_mps2: 0.3
 velocity_noise_mps: 0.01
 lateral_velocity_noise_mps: 0.05
