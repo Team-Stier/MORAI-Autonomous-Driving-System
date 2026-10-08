@@ -14,6 +14,7 @@
 - 섹션 11·12는 `plain_velocity100.hpp`, UNKNOWN=0과 나머지 섹션은 `plain_velocity60.hpp`를 선택한다.
 - Core는 경로 형상·점 순서를 유지하고 TF로 `base_link`에 변환한 뒤 각각 100/3.6, 60/3.6 m/s와 가속도 0 m/s²를 채운다.
 - 출력 path는 입력 path의 시간 메타데이터를 상속한다.
+- Validator `transform_present.hpp`는 `/tf` 메시지에 `map→base_link` 변환이 없으면 tf를 Missing으로 기록한다.
 - Policy `remove_invalid.hpp`는 값·stamp·frame 오류 입력을 제거한다. path·tf의 Stale·ReceiveTimeout·Skew는 허용 issue다.
 - `launch.sh`가 ROS·워크스페이스 환경을 준비하고 자기 노드만 실행한다.
 
