@@ -6,7 +6,7 @@
 #include <vector>
 
 namespace traffic_light {
-// Core가 전제하는 압축 영상을 실제로 BGR 영상으로 디코딩해 본다. 디코딩할 수 없으면 Missing이다.
+// 압축 영상을 디코딩할 수 없으면 Missing이다.
 struct DecodableImage {
   void operator()(const sensor_msgs::CompressedImage& image, const node_pipeline::HealthLimits&,
                   std::vector<node_pipeline::Kind>& issues) const {
