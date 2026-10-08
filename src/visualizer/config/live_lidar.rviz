@@ -1,0 +1,52 @@
+Panels:
+  - Class: rviz/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 20; 24; 30
+    Fixed Frame: base_link_level
+    Frame Rate: 30
+  Displays:
+    - Class: rviz/Grid
+      Name: Ground grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 40
+      Color: 70; 75; 85
+      Reference Frame: <Fixed Frame>
+    - Class: rviz/PointCloud2
+      Name: Leveled LiDAR
+      Enabled: true
+      Topic: /velodyne_points/leveled
+      Queue Size: 1
+      Style: Points
+      Size (Pixels): 2
+      Color Transformer: AxisColor
+      Position Transformer: XYZ
+      Axis: Z
+      Autocompute Intensity Bounds: true
+      Decay Time: 0
+    - Class: rviz/MarkerArray
+      Name: OBB + heading + center
+      Enabled: true
+      Marker Topic: /rviz/objects
+      Queue Size: 1
+    - Class: rviz/Marker
+      Name: Count and receive Hz
+      Enabled: true
+      Marker Topic: /rviz/perception_hud
+      Queue Size: 1
+  Views:
+    Current:
+      Class: rviz/Orbit
+      Distance: 28
+      Focal Point: {X: 8, Y: 0, Z: 0}
+      Pitch: 0.8
+      Yaw: 3.14
+      Target Frame: <Fixed Frame>
+Window Geometry:
+  Width: 950
+  Height: 950
+  X: 960
+  Y: 65

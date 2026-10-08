@@ -1,0 +1,10 @@
+<launch>
+  <!-- #PERCEPTION_VIEW: production 검출 설정과 제어 경로에는 관여하지 않는다. -->
+  <arg name="rviz" default="true"/>
+  <arg name="frame_log" default=""/>
+  <node pkg="visualizer" type="objects_rviz.py" name="objects_rviz" output="screen">
+    <param name="frame_log" value="$(arg frame_log)"/>
+  </node>
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="live_lidar_rviz"
+        args="-d $(find visualizer)/config/live_lidar.rviz" output="screen"/>
+</launch>
