@@ -417,7 +417,6 @@ map
 - `run.sh`는 저장소 루트를 스크립트 위치에서 찾고 ROS Noetic 환경을 불러온다.
 - 필요한 시스템·ROS 의존성을 확인하고, 없으면 `rosdep`/시스템 패키지 관리자로 설치를
   시도한다. 현재 실행 스택이 쓰는 RViz와 compressed image transport 의존성도 포함한다.
-  Git LFS 자산은 `git lfs pull`로 받으며, git-lfs가 없으면 설치를 시도한다.
   워크스페이스는 `catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo`로 빌드하고
   `devel/setup.bash` 환경을 사용한다.
 - 새 스택을 시작하기 전에 컴퓨터에서 실행 중인 기존 ROS 프로세스를 모두 정리한다.

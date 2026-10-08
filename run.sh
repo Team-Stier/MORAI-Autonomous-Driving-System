@@ -111,14 +111,6 @@ if [[ "$needs_install" == true ]]; then
         ros-noetic-rviz ros-noetic-compressed-image-transport
 fi
 
-pull_lfs_assets() {
-    if ! command -v git-lfs >/dev/null 2>&1; then
-        run_privileged apt-get install -y git-lfs || return $?
-    fi
-    git -C "$WORKSPACE" lfs install --local >/dev/null && git -C "$WORKSPACE" lfs pull
-}
-
-run_step "Fetch Git LFS assets" pull_lfs_assets
 run_step "Build catkin workspace" catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -j2
 if [[ -r devel/setup.bash ]]; then
     source devel/setup.bash || fail "source workspace overlay"
