@@ -1,0 +1,40 @@
+vehicle:
+  front_m: 3.845008
+  rear_m: 0.790
+  width_m: 2.160835
+horizon_m: 25.0
+min_horizon_m: 0.5
+road_boundary_step_m: 0.25
+dp_step_m: 5.0
+lateral_step_m: 0.5
+dp_slope_sample: 0.2
+output_step_m: 0.25
+corridor_half_width_m: 0.3
+obstacle_margin_m: 0.25
+road_margin_m: 0.05
+max_curvature_inv_m: 0.18
+max_lateral_accel_mps2: 2.0
+max_speed_mps: 20.0
+max_lateral_slope: 0.8
+max_initial_heading_error_rad: 0.5
+max_initial_distance_m: 5.0
+reference_weight: 0.2
+dp_tracking_weight: 3.0
+slope_weight: 2.0
+bending_weight: 20.0
+jerk_weight: 5.0
+previous_weight: 0.5
+qp_rho: 10.0
+qp_tolerance: 0.00001
+qp_max_iterations: 3000
+max_lateral_samples: 41
+max_acceleration_mps2: 2.0
+max_deceleration_mps2: 5.0
+max_longitudinal_jerk_mps3: 4.0
+speed_time_step_sec: 0.5
+trajectory_output_step_sec: 0.1
+speed_beam_width: 128
+speed_tracking_weight: 1.0
+acceleration_weight: 0.15
+longitudinal_jerk_weight: 0.05
+trajectory_horizon_m: 100.0
