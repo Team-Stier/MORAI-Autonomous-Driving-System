@@ -170,6 +170,7 @@ class YoloTrafficLight {
   DetectionState pushState(DetectionState state) {
     history.push_back(state);
     if (history.size() > parameters.detection.history_size) history.pop_front();
+    if (state == DetectionState::Unknown) return DetectionState::Unknown;
     std::array<std::size_t, 5> counts{{0, 0, 0, 0, 0}};
     for (const auto item : history) ++counts[static_cast<std::size_t>(item)];
     const std::size_t maximum = *std::max_element(counts.begin(), counts.end());

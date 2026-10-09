@@ -403,7 +403,7 @@ class CorePathPlanner {
         return false;
     }
     const double duration=predictions.step_sec*kPredictionSteps-(ego.stamp_sec-predictions.reference_stamp_sec);
-    if (ego.stamp_sec<predictions.reference_stamp_sec || path.back().time_sec>duration+1e-12 ||
+    if (path.back().time_sec>duration+1e-12 ||
         Geometry::norm(Geometry::sub(path.front().pose.position,ego.pose.position))>1e-6 ||
         std::abs(Geometry::wrap(path.front().pose.yaw_rad-ego.pose.yaw_rad))>1e-6 ||
         std::abs(path.front().speed_mps-ego.speed_mps)>1e-8 ||
