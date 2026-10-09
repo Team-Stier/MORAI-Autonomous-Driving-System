@@ -26,7 +26,7 @@ STD_HEADERS = {
 FORBIDDEN_STD = {"fstream", "thread", "future", "mutex", "shared_mutex", "condition_variable"}
 FORBIDDEN_INCLUDE_ROOTS = {"ros", "roscpp", "rosbag", "tf2_ros", "actionlib", "message_filters", "image_transport",
                            "nodelet", "pluginlib", "ros.h", "XmlRpc.h", "XmlRpcValue.h"}
-SYSTEM_DEPENDS = {"eigen": ("Eigen", "unsupported"), "pugixml-dev": ("pugixml.hpp",), "boost": ("boost",),
+SYSTEM_DEPENDS = {"libpcl-all-dev": ("pcl",), "eigen": ("Eigen", "unsupported"), "pugixml-dev": ("pugixml.hpp",), "boost": ("boost",),
                   "yaml-cpp": ("yaml-cpp",), "libopencv-dev": ("opencv2",), "opencv": ("opencv2",)}
 FORBIDDEN_SYMBOLS = (
     "ros::NodeHandle", "ros::Publisher", "ros::Subscriber", "ros::ServiceClient", "ros::ServiceServer", "ros::Timer",

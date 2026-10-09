@@ -1,7 +1,40 @@
-# 등록된 Core가 없다. 등록 후 Stage마다 UNKNOWN=0과 섹션 1~16을 Core 파일 이름에 매핑한다.
 detect:
-  section_core_map: {}
+  section_core_map:
+    "0": dbscan.hpp
+    "1": dbscan.hpp
+    "2": dbscan.hpp
+    "3": dbscan.hpp
+    "4": dbscan.hpp
+    "5": dbscan.hpp
+    "6": dbscan.hpp
+    "7": dbscan.hpp
+    "8": dbscan.hpp
+    "9": dbscan.hpp
+    "10": dbscan.hpp
+    "11": dbscan.hpp
+    "12": dbscan.hpp
+    "13": dbscan.hpp
+    "14": dbscan.hpp
+    "15": dbscan.hpp
+    "16": dbscan.hpp
   health_core_map: []
 track:
-  section_core_map: {}
+  section_core_map:
+    "0": objects_pass_through.hpp
+    "1": objects_pass_through.hpp
+    "2": objects_pass_through.hpp
+    "3": objects_pass_through.hpp
+    "4": objects_pass_through.hpp
+    "5": objects_pass_through.hpp
+    "6": objects_pass_through.hpp
+    "7": objects_pass_through.hpp
+    "8": objects_pass_through.hpp
+    "9": objects_pass_through.hpp
+    "10": objects_pass_through.hpp
+    "11": objects_pass_through.hpp
+    "12": objects_pass_through.hpp
+    "13": objects_pass_through.hpp
+    "14": objects_pass_through.hpp
+    "15": objects_pass_through.hpp
+    "16": objects_pass_through.hpp
   health_core_map: []

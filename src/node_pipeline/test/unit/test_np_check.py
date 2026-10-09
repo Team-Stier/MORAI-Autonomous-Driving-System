@@ -55,6 +55,14 @@ class ContractCheckTest(unittest.TestCase):
     def test_accepts_official_extension_files(self):
         self.assertEqual("", self.errors())
 
+    def test_pcl_headers_require_declared_system_dependency(self):
+        path = os.path.join(self.package, "include", "demo", "cores", "good.hpp")
+        write(self.package, "include/demo/cores/good.hpp", "#include <pcl/point_cloud.h>\n")
+        errors = np_check.include_errors(path, "core", "good", "", "demo", set(), set())
+        self.assertTrue(any("not a dependency declared" in error for error in errors))
+        self.assertEqual([], np_check.include_errors(
+            path, "core", "good", "", "demo", {"libpcl-all-dev"}, set()))
+
     def test_rejects_sources_and_configuration_outside_official_paths(self):
         write(self.package, "src/ros_node.cpp", "int main() { return 0; }\n")
         write(self.package, "config/demo.yaml", "execution_mode: periodic\n")

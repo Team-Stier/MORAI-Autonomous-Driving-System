@@ -4,7 +4,7 @@ inputs:
   cloud:
     type: sensor_msgs/PointCloud2
     topic: /velodyne_points/leveled
-    frame: base_link
+    frame: base_link_level
     stale_after_sec: 0.3
     receive_timeout_sec: 0.3
 stages:
@@ -14,4 +14,4 @@ stages:
   - name: track
     outputs:
       - {name: objects, type: interfaces/Objects}
-output: {topic: /objects, frame_id: base_link}
+output: {topic: /objects, frame_id: base_link_level}

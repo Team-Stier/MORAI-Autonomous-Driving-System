@@ -17,7 +17,7 @@ inputs:
   objects:
     type: interfaces/Objects
     topic: /objects
-    frame: base_link
+    frame: base_link_level
     stale_after_sec: 0.3
     receive_timeout_sec: 0.3
   tf:
