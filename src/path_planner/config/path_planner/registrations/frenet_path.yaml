@@ -1,0 +1,7 @@
+stage: local
+inputs: [ego, objects, route]
+validator: frenet_inputs.hpp
+policy: remove_invalid.hpp
+bank: shared_map.hpp
+allowed_issues:
+  ego: [Stale, ReceiveTimeout, Skew]

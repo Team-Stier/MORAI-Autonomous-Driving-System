@@ -1,6 +1,6 @@
-execution: {mode: on_input, trigger_input: path, queue_capacity: 8, max_health_checks: 10}
+execution: {mode: periodic, frequency_hz: 20.0, queue_capacity: 8, max_health_checks: 10}
 section_topic: /section_annotation
-max_skew_sec: 0.1
+max_skew_sec: 0.5
 inputs:
   path:
     type: interfaces/Path

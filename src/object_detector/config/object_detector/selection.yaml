@@ -1,7 +1,60 @@
-# 등록된 Core가 없다. 등록 후 Stage마다 UNKNOWN=0과 섹션 1~16을 Core 파일 이름에 매핑한다.
+roi:
+  section_core_map:
+    "0": z_roi.hpp
+    "1": z_roi.hpp
+    "2": z_roi.hpp
+    "3": z_roi.hpp
+    "4": z_roi.hpp
+    "5": z_roi.hpp
+    "6": z_roi.hpp
+    "7": z_roi.hpp
+    "8": z_roi.hpp
+    "9": z_roi.hpp
+    "10": z_roi.hpp
+    "11": z_roi.hpp
+    "12": z_roi.hpp
+    "13": z_roi.hpp
+    "14": z_roi.hpp
+    "15": z_roi.hpp
+    "16": z_roi.hpp
+  health_core_map: []
 detect:
-  section_core_map: {}
+  section_core_map:
+    "0": dbscan.hpp
+    "1": dbscan.hpp
+    "2": dbscan.hpp
+    "3": dbscan.hpp
+    "4": dbscan.hpp
+    "5": dbscan.hpp
+    "6": dbscan.hpp
+    "7": dbscan.hpp
+    "8": dbscan.hpp
+    "9": dbscan.hpp
+    "10": dbscan.hpp
+    "11": dbscan.hpp
+    "12": dbscan.hpp
+    "13": dbscan.hpp
+    "14": dbscan.hpp
+    "15": dbscan.hpp
+    "16": dbscan.hpp
   health_core_map: []
 track:
-  section_core_map: {}
+  section_core_map:
+    "0": tracking.hpp
+    "1": tracking.hpp
+    "2": tracking.hpp
+    "3": tracking.hpp
+    "4": tracking.hpp
+    "5": tracking.hpp
+    "6": tracking.hpp
+    "7": tracking.hpp
+    "8": tracking.hpp
+    "9": tracking.hpp
+    "10": tracking.hpp
+    "11": tracking.hpp
+    "12": tracking.hpp
+    "13": tracking.hpp
+    "14": tracking.hpp
+    "15": tracking.hpp
+    "16": tracking.hpp
   health_core_map: []

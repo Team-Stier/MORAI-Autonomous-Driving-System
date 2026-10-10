@@ -1,4 +1,20 @@
-# 등록된 Core가 없다. 등록 후 UNKNOWN=0과 섹션 1~16을 Core 파일 이름에 매핑한다.
 recognize:
-  section_core_map: {}
+  section_core_map:
+    "0": yolo_traffic_light_mac.hpp
+    "1": yolo_traffic_light_mac.hpp
+    "2": yolo_traffic_light_mac.hpp
+    "3": yolo_traffic_light_mac.hpp
+    "4": yolo_traffic_light_mac.hpp
+    "5": yolo_traffic_light_mac.hpp
+    "6": yolo_traffic_light_mac.hpp
+    "7": yolo_traffic_light_mac.hpp
+    "8": yolo_traffic_light_mac.hpp
+    "9": yolo_traffic_light_mac.hpp
+    "10": yolo_traffic_light_mac.hpp
+    "11": yolo_traffic_light_mac.hpp
+    "12": yolo_traffic_light_mac.hpp
+    "13": yolo_traffic_light_mac.hpp
+    "14": yolo_traffic_light_mac.hpp
+    "15": yolo_traffic_light_mac.hpp
+    "16": yolo_traffic_light_mac.hpp
   health_core_map: []

@@ -1,6 +1,8 @@
 #pragma once
+#include <sensor_msgs/Imu.h>
 #include <path_planner/libraries/types.hpp>
 #include <cmath>
+#include <tuple>
 
 namespace path_planner {
 struct EgoCompensatedPredictionParameters {
@@ -9,15 +11,17 @@ struct EgoCompensatedPredictionParameters {
 
 class EgoCompensatedPrediction {
  public:
-  using Result = PredictedObjects;
+  using Result = std::tuple<nav_msgs::Odometry, interfaces::CompetitionVehicleStatus,
+                            interfaces::Objects, tf2_msgs::TFMessage, sensor_msgs::Imu, Route, PredictedObjects>;
 
   explicit EgoCompensatedPrediction(EgoCompensatedPredictionParameters parameters = {}) : parameters_(parameters) {}
 
   // Uniform map-plane turn; geometry stays in the observation's fixed base_link.
   // Available map vectors supply the motion; tangential acceleration is ignored.
-  Result process(const interfaces::Objects& objects,
-                 const interfaces::CompetitionVehicleStatus& status, const Route&) const {
-    Result predictions;
+  Result process(const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus& status,
+                 const interfaces::Objects& objects, const tf2_msgs::TFMessage& tf,
+                 const sensor_msgs::Imu& imu, const Route& route) const {
+    PredictedObjects predictions;
     predictions.fill(objects);
     const double yaw_rad = status.yaw_rad + parameters_.yaw_offset_rad;
     const double sin_yaw = std::sin(yaw_rad), cos_yaw = std::cos(yaw_rad);
@@ -98,7 +102,7 @@ class EgoCompensatedPrediction {
         predicted_q.w = cos_half_angle * q.w - turn_x * q.x - turn_y * q.y - turn_z * q.z;
       }
     }
-    return predictions;
+    return std::make_tuple(ego, status, objects, tf, imu, route, predictions);
   }
 
  private:

@@ -70,7 +70,7 @@ template<class Schema, class CoreSet> struct Stage {
   using DataType = typename Schema::DataType;
   using CoreId = typename Schema::CoreId;
   using Profile = CoreProfile<Schema>;
-  using Dispatch = bool (*)(CoreSet&, CoreId, const StageData&, CoreResult&);
+  using Dispatch = bool (*)(CoreSet&, CoreId, const StageData&, const std::int64_t&, CoreResult&);
   std::vector<Profile> core_profiles;
   CoreSelector<CoreId> selector;
   Dispatch process = nullptr;
@@ -97,7 +97,8 @@ template<class Schema, class CoreSet> struct Stage {
 };
 template<class Schema, class CoreSet>
 Stage<Schema, CoreSet> makeStage(std::vector<CoreProfile<Schema>> core_profiles, CoreSelector<typename Schema::CoreId> selector,
-                                 bool (*dispatch)(CoreSet&, typename Schema::CoreId, const StageData&, CoreResult&)) {
+                                 bool (*dispatch)(CoreSet&, typename Schema::CoreId, const StageData&,
+                                                  const std::int64_t&, CoreResult&)) {
   Stage<Schema, CoreSet> stage;
   stage.core_profiles = std::move(core_profiles);
   stage.selector = std::move(selector);
@@ -106,12 +107,14 @@ Stage<Schema, CoreSet> makeStage(std::vector<CoreProfile<Schema>> core_profiles,
 }
 
 template<class Schema, class Validator, class Policy>
-CoreProfile<Schema> makeProfile(typename Schema::CoreId id, std::string name, std::vector<std::size_t> required_inputs,
+CoreProfile<Schema> makeProfile(typename Schema::CoreId id, std::string name, std::vector<std::size_t> argument_inputs,
                                 std::string validator_name, std::string policy_name) {
   CoreProfile<Schema> profile;
   profile.id = id;
   profile.name = std::move(name);
-  profile.required_inputs = std::move(required_inputs);
+  profile.argument_inputs = std::move(argument_inputs);
+  for (const auto input : profile.argument_inputs)
+    if (input != kStampInput) profile.required_inputs.push_back(input);
   profile.allowed_issues.assign(Schema::DataType::count, {});
   profile.validator_name = std::move(validator_name);
   profile.policy_name = std::move(policy_name);
@@ -137,16 +140,18 @@ makeContractCheck(std::shared_ptr<const HealthChecker<Schema>> checker, std::vec
   };
 }
 
-// process()가 선언 입력의 const&를 순서대로 받고 Stage 출력 계약대로 반환하는지 컴파일 시 확인한다.
+// process()가 선언 입력·stamp의 const&를 순서대로 받고 Stage 출력 계약대로 반환하는지 컴파일 시 확인한다.
 template<class F> struct MemberFunction;
 template<class C, class R, class... A> struct MemberFunction<R (C::*)(A...)> {
   using Result = R;
   using Arguments = Types<A...>;
 };
 template<class C, class R, class... A> struct MemberFunction<R (C::*)(A...) const> : MemberFunction<R (C::*)(A...)> {};
+template<class Inputs, std::size_t I> struct ExpectedArgument { using type = const AtT<I, Inputs>&; };
+template<class Inputs> struct ExpectedArgument<Inputs, kStampInput> { using type = const ros::Time&; };
 template<class Inputs, class Indices> struct ExpectedArguments;
 template<class Inputs, std::size_t... I> struct ExpectedArguments<Inputs, std::index_sequence<I...>> {
-  using type = Types<const AtT<I, Inputs>&...>;
+  using type = Types<typename ExpectedArgument<Inputs, I>::type...>;
 };
 template<class Outputs> struct ExpectedResult;
 template<class T> struct ExpectedResult<Types<T>> { using type = T; };

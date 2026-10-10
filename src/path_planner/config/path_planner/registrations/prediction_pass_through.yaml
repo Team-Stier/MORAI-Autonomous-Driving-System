@@ -1,5 +1,5 @@
 stage: prediction
-inputs: [objects, route, ego]
+inputs: [ego, competition, objects, tf, imu, route]
 policy: remove_invalid.hpp
 allowed_issues:
   objects: [Stale, ReceiveTimeout, Skew]

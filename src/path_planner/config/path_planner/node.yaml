@@ -1,30 +1,36 @@
 execution: {mode: periodic, frequency_hz: 20.0, queue_capacity: 8, max_health_checks: 10}
 section_topic: /section_annotation
-max_skew_sec: 0.1
+max_skew_sec: 0.5
 inputs:
   ego:
     type: nav_msgs/Odometry
     topic: /localization/ego
     frame: map
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   competition:
     type: interfaces/CompetitionVehicleStatus
     topic: /vehicle/competition_status
     frame: base_link
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   objects:
     type: interfaces/Objects
     topic: /objects
     frame: base_link
-    stale_after_sec: 0.3
-    receive_timeout_sec: 0.3
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   tf:
     type: tf2_msgs/TFMessage
     topic: /tf
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
+  imu:
+    type: sensor_msgs/Imu
+    topic: /sensors/imu/data
+    frame: imu_link
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
 stages:
   - name: checkpoint
     outputs:
@@ -32,17 +38,25 @@ stages:
       - {name: competition, from: competition}
       - {name: objects, from: objects}
       - {name: tf, from: tf}
+      - {name: imu, from: imu}
       - {name: checkpoints, type: path_planner::Checkpoints, header: path_planner/libraries/types.hpp}
   - name: global
     outputs:
-      - {name: route, type: path_planner::Route, header: path_planner/libraries/types.hpp}
       - {name: ego, from: ego}
+      - {name: competition, from: competition}
       - {name: objects, from: objects}
+      - {name: tf, from: tf}
+      - {name: imu, from: imu}
+      - {name: route, type: path_planner::Route, header: path_planner/libraries/types.hpp}
   - name: prediction
     outputs:
-      - {name: predictions, type: path_planner::PredictedObjects, header: path_planner/libraries/types.hpp}
-      - {name: route, from: route}
       - {name: ego, from: ego}
+      - {name: competition, from: competition}
+      - {name: objects, from: objects}
+      - {name: tf, from: tf}
+      - {name: imu, from: imu}
+      - {name: route, from: route}
+      - {name: predictions, type: path_planner::PredictedObjects, header: path_planner/libraries/types.hpp}
   - name: local
     outputs:
       - {name: path, type: interfaces/Path}

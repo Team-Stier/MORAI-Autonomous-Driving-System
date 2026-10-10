@@ -17,7 +17,7 @@
 #include "control/libraries/morai_mpc/autoware/vehicle_model/vehicle_model_bicycle_kinematics.h"
 #include <stdexcept>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 KinematicsBicycleModel::KinematicsBicycleModel(const double &wheelbase, const double &steer_lim, const double &steer_tau, double steer_gain)
     : VehicleModelInterface(/* dim_x */ 3, /* dim_u */ 1, /* dim_y */ 2)
@@ -70,4 +70,4 @@ void KinematicsBicycleModel::calculateReferenceInput(Eigen::MatrixXd &Uref)
     Uref(0, 0) = std::atan(wheelbase_ * curvature_) / steer_gain_;
 }
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

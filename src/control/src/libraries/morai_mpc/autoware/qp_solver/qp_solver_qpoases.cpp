@@ -16,7 +16,7 @@
 
 #include "control/libraries/morai_mpc/autoware/qp_solver/qp_solver_qpoases.h"
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 QPSolverQpoasesHotstart::QPSolverQpoasesHotstart(const int max_iter)
   : is_solver_initialized_(false), max_iter_(max_iter){};
@@ -59,4 +59,4 @@ bool QPSolverQpoasesHotstart::solve(const Eigen::MatrixXd& Hmat, const Eigen::Ma
       (constrained.array()>=lbA.array()-tolerance).all() && (constrained.array()<=ubA.array()+tolerance).all();
 };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

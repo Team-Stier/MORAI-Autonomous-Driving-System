@@ -9,11 +9,14 @@
 
 #include <Eigen/Cholesky>
 #include <Eigen/Core>
+#include <Eigen/Geometry>
 #include <Eigen/LU>
 #include <initializer_list>
 #include <limits>
 #include <map>
 #include <tuple>
+#include <sensor_msgs/Imu.h>
+#include <path_planner/libraries/types.hpp>
 
 #ifndef STIER_PLANNING_COMMON_TYPES_HPP
 #define STIER_PLANNING_COMMON_TYPES_HPP
@@ -159,7 +162,21 @@ struct PathParameters {
 
 }  // namespace stier
 
-namespace stier {
+namespace path_planner {
+using stier::Vec2;
+using stier::Pose2;
+using stier::ObjectKind;
+using stier::MotionModel;
+using stier::PredictedObject;
+using stier::Predictions;
+using stier::ReferencePoint;
+using stier::EgoState;
+using stier::VehicleShape;
+using stier::ProgressTime;
+using stier::PathPoint;
+using stier::PlanningConstraints;
+using stier::PathParameters;
+using stier::kPredictionSteps;
 
 // Forward, road-reference-based DP + constrained finite-difference QP.
 // Geometry DP/QP plus bounded arc-time speed search. No ROS, mission decisions,
@@ -313,11 +330,131 @@ class CorePathPlanner {
  public:
   explicit CorePathPlanner(PathParameters parameters = {}) : p_(parameters) {}
 
+  Message process(const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus&,
+                  const interfaces::Objects& objects, const tf2_msgs::TFMessage&,
+                  const sensor_msgs::Imu& imu, const Route& route, const PredictedObjects& predictions) {
+    const auto& orientation = ego.pose.pose.orientation;
+    const Eigen::Quaterniond map_from_base(orientation.w, orientation.x, orientation.y, orientation.z);
+    const auto& position = ego.pose.pose.position;
+    const Eigen::Vector3d origin(position.x, position.y, position.z);
+    EgoState state;
+    state.pose.position = {position.x, position.y};
+    state.pose.yaw_rad = std::atan2(2 * (orientation.w*orientation.z + orientation.x*orientation.y),
+                                  1 - 2 * (orientation.y*orientation.y + orientation.z*orientation.z));
+    state.stamp_sec = ego.header.stamp.toSec();
+    state.speed_mps = ego.twist.twist.linear.x;
+    const double stationary_specific_force_x_mps2 =
+      (map_from_base.conjugate() * Eigen::Vector3d(0, 0, 9.81)).x();
+    state.acceleration_mps2 = imu.linear_acceleration.x - stationary_specific_force_x_mps2;
+    constexpr double kStandstillSpeedMps = 1e-4;
+    constexpr double kStandstillAccelerationMps2 = 1e-3;
+    const double yaw_rate_radps = ego.twist.twist.angular.z;
+    // Resolve stationary sensor rounding before yaw/v and the jerk-limited stop calculation.
+    if (std::abs(state.speed_mps) <= kStandstillSpeedMps &&
+        std::abs(yaw_rate_radps) <= p_.max_curvature_inv_m * kStandstillSpeedMps) {
+      state.speed_mps = 0;
+      if (std::abs(state.acceleration_mps2) <= kStandstillAccelerationMps2)
+        state.acceleration_mps2 = 0;
+    }
+    state.curvature_inv_m = state.speed_mps == 0 ? 0 : yaw_rate_radps / state.speed_mps;
+
+    Predictions native_predictions;
+    native_predictions.reference_stamp_sec = objects.header.stamp.toSec();
+    const auto convert = [&](const interfaces::Objects& sample, std::vector<PredictedObject>& output) {
+      output.reserve(sample.objects.size());
+      for (const auto& object : sample.objects) {
+        const Eigen::Vector3d point = origin + map_from_base *
+          Eigen::Vector3d(object.position.x, object.position.y, object.position.z);
+        const Eigen::Vector3d velocity = map_from_base *
+          Eigen::Vector3d(object.velocity.x, object.velocity.y, object.velocity.z);
+        const auto& q = object.bbox_pose.orientation;
+        const Eigen::Quaterniond rotation = map_from_base * Eigen::Quaterniond(q.w, q.x, q.y, q.z);
+        PredictedObject converted;
+        converted.id = object.id;
+        converted.kind = object.label == "vehicle" ? ObjectKind::Vehicle : ObjectKind::Unknown;
+        converted.pose.position = {point.x(), point.y()};
+        converted.pose.yaw_rad = std::atan2(2 * (rotation.w()*rotation.z() + rotation.x()*rotation.y()),
+                                         1 - 2 * (rotation.y()*rotation.y() + rotation.z()*rotation.z()));
+        converted.velocity_mps = {velocity.x(), velocity.y()};
+        converted.length_m = object.bbox_size.x;
+        converted.width_m = object.bbox_size.y;
+        converted.source_stamp_sec = objects.header.stamp.toSec();
+        output.push_back(converted);
+      }
+    };
+    convert(objects, native_predictions.current);
+    for (std::size_t i = 0; i < predictions.size(); ++i)
+      convert(predictions[i], native_predictions.future[i]);
+
+    std::vector<ReferencePoint> reference;
+    std::vector<Eigen::Vector3d> centerline;
+    for (const auto& lane : *route) {
+      const auto line = lane.centerline3d().basicLineString();
+      for (std::size_t i = 0; i < line.size(); ++i) {
+        const Vec2 point{line[i].x(), line[i].y()};
+        if (!reference.empty() && Geometry::norm(Geometry::sub(point, reference.back().position)) < 1e-9)
+          continue;
+        const auto direction = line[std::min(i + 1, line.size() - 1)] - line[i == 0 ? 0 : i - 1];
+        const double length = std::hypot(direction.x(), direction.y());
+        const Vec2 normal{-direction.y()/length, direction.x()/length};
+        reference.push_back({point, boundaryOffset(lane.rightBound3d().basicLineString(), point, normal),
+                                    boundaryOffset(lane.leftBound3d().basicLineString(), point, normal)});
+        centerline.push_back(line[i]);
+      }
+    }
+    previous_path_ = plan(state, reference, native_predictions, PlanningConstraints{}, previous_path_);
+    Message message;
+    for (const auto& point : previous_path_) {
+      interfaces::PathPoint output;
+      output.pose.pose.position.x = point.pose.position.x;
+      output.pose.pose.position.y = point.pose.position.y;
+      output.pose.pose.position.z = centerlineHeight(centerline, point.pose.position);
+      output.pose.pose.orientation.z = std::sin(point.pose.yaw_rad/2);
+      output.pose.pose.orientation.w = std::cos(point.pose.yaw_rad/2);
+      output.velocity = point.speed_mps;
+      output.acceleration = point.acceleration_mps2;
+      message.points.push_back(output);
+    }
+    return message;
+  }
+
+ private:
+  static double boundaryOffset(const lanelet::BasicLineString3d& line, Vec2 point, Vec2 normal) {
+    double closest = std::numeric_limits<double>::infinity();
+    double offset = 0;
+    for (std::size_t i = 1; i < line.size(); ++i) {
+      const Vec2 a{line[i - 1].x(), line[i - 1].y()}, b{line[i].x(), line[i].y()};
+      const auto delta = Geometry::sub(b, a);
+      const double squared = Geometry::dot(delta, delta);
+      const double u = squared == 0 ? 0 : Geometry::clamp(Geometry::dot(Geometry::sub(point, a), delta)/squared, 0, 1);
+      const auto projection = Geometry::add(a, Geometry::mul(delta, u));
+      const auto difference = Geometry::sub(projection, point);
+      const double distance = Geometry::dot(difference, difference);
+      if (distance < closest) { closest = distance; offset = Geometry::dot(difference, normal); }
+    }
+    return offset;
+  }
+
+  static double centerlineHeight(const std::vector<Eigen::Vector3d>& line, Vec2 point) {
+    double closest = std::numeric_limits<double>::infinity();
+    double height = 0;
+    for (std::size_t i = 1; i < line.size(); ++i) {
+      const Vec2 a{line[i - 1].x(), line[i - 1].y()}, b{line[i].x(), line[i].y()};
+      const auto delta = Geometry::sub(b, a);
+      const double squared = Geometry::dot(delta, delta);
+      const double u = squared == 0 ? 0 : Geometry::clamp(Geometry::dot(Geometry::sub(point, a), delta)/squared, 0, 1);
+      const auto difference = Geometry::sub(Geometry::add(a, Geometry::mul(delta, u)), point);
+      const double distance = Geometry::dot(difference, difference);
+      if (distance < closest) { closest = distance; height = line[i - 1].z() + u*(line[i].z() - line[i - 1].z()); }
+    }
+    return height;
+  }
+
   // Planned v/a are ground speed and tangential acceleration along the actual
   // rear-axle path. Reference progress is only for correspondence with the map.
   // Every result spans the available prediction interval; blocked motion is
   // represented by a physically reachable stop/wait, never a truncated prefix.
-  std::vector<PathPoint> process(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
+  std::vector<PathPoint> plan(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
                                 const Predictions& predictions, const PlanningConstraints& limits,
                                 const std::vector<PathPoint>& previous = {}) const {
     const double offset=ego.stamp_sec-predictions.reference_stamp_sec;
@@ -442,22 +579,6 @@ class CorePathPlanner {
     }
     return sampledGeometryClear(path,true);
   }
- public:
-  // Retain source compatibility for legacy braced schedules, including {}.
-  std::vector<PathPoint> process(const EgoState& ego, const std::vector<ReferencePoint>& reference,
-                                const Predictions& predictions, std::initializer_list<ProgressTime> schedule,
-                                const std::vector<PathPoint>& previous = {}) const {
-    return process(ego,reference,predictions,std::vector<ProgressTime>(schedule),previous);
-  }
-
-  // Empty means this finite search produced no usable point sequence. It is
-  // neither a brake command nor proof that every possible maneuver is blocked.
-  std::vector<PathPoint> process(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
-                     const Predictions& predictions_map, const std::vector<ProgressTime>& schedule,
-                     const std::vector<PathPoint>& previous_path_map = {}) const {
-    return generatePath(ego,reference_map,predictions_map,schedule,previous_path_map,false);
-  }
-
  private:
   // Samples a valid prediction within its horizon, with no extrapolation.
   // Current state is retained so [0, dt] is covered too.
@@ -628,6 +749,7 @@ class CorePathPlanner {
 
  private:
   PathParameters p_;
+  std::vector<PathPoint> previous_path_;
   struct RoadSample {
     Vec2 position; double yaw; double lower; double upper;
     double metric=1.0;  // |dr/ds|; chord station is not exact Hermite arc length.
@@ -1710,4 +1832,4 @@ class CorePathPlanner {
     return false;
   }
 };
-}  // namespace stier
+}  // namespace path_planner

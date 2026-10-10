@@ -27,7 +27,7 @@
 #include <algorithm>
 #include <iostream>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 /** 
  * @class 2nd-order Butterworth Filter
@@ -124,4 +124,4 @@ public:
    */
   static bool filt_vector(const int num, std::vector<double> &u);
 };
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

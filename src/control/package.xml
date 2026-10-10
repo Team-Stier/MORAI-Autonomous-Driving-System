@@ -10,6 +10,17 @@
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
   <depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf</depend>
+  <depend>tf2</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <depend>eigen</depend>
+  <depend>boost</depend>
+  <depend>fmt</depend>
+  <depend>osqp_vendor</depend>
+  <depend>qpoases_vendor</depend>
+  <export><node_pipeline include_roots="osqp.h fmt experimental qpOASES"/></export>
   <exec_depend>python3-matplotlib</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
   <test_depend>gtest</test_depend>

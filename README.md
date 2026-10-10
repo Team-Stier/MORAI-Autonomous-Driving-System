@@ -15,6 +15,7 @@ Pipeline은 공통 실행기로 봉인한다. 노드는 YAML로 구성하고, �
 - Core 개발 요청이나 원하는 동작의 지정만으로 허용 범위 밖의 변경이 승인된 것으로 해석하지 않는다. 알고리즘을 Core 밖의 Policy·Validator·Selector·파라미터 로더·Bank·callback 등에 옮겨 요구사항을 우회 구현하지 않는다.
 - 리드 개발자는 노드의 `node.yaml`로 실행 방식·입력 계약·Stage 순서와 출력 계약·발행을 선언한다. 공통 실행기가 등록된 Core를 ROS 입출력에 연결하며, 노드별 실행 코드는 작성하지 않는다.
 - Core는 정규 `process()`의 인자와 반환값만으로 Pipeline에 연결되는 알고리즘 컴포넌트다. 실행 중 외부와 상호작용하는 경로는 시각화 전용 토픽 발행, 로그 출력, `process()` 인자로 입력 받기, `process()` 반환의 네 가지뿐이다. Core가 소유한 내부 계산 상태는 유지할 수 있으며, 다른 노드·Pipeline·Core 객체 접근, 외부 공유 상태 및 별도 입출력 경로를 만들지 않는다.
+- `traffic_light`의 `yolo_traffic_light_mac.hpp`는 현재 Mac·Docker 환경에서 ONNX 추론 텐서만 macOS의 CoreML `CPUAndGPU` 서버로 전달하는 HTTP 통신을 허용한다. 전처리·후처리·신호 판정은 Core가 수행하며 `process(image) → TrafficLight` 계약을 유지한다.
 - 시각화 목적의 토픽 발행과 로그만 Core 디커플링 규칙의 예외로 허용한다. 로그는 모든 확장점 파일에서 `<ros/console.h>`의 `ROS_*` 로그 매크로로 남긴다. 시각화 토픽 이름은 `/visualizer/*`로 지정하며, `/visualizer/*` 토픽은 `src/visualizer` 패키지 이외에서 절대 구독하지 않는다.
 - Core는 입력이 자신의 입력 계약을 만족한다고 전제하고 계산한다. 입력 유효성 검사, 누락 감지, 입력 대체, fallback 및 처리 성공·실패 상태 반환을 구현하지 않는다. 입력 검사와 처리 정책은 Pipeline의 공통 검사층과 Validator·Policy 확장점이 담당한다. 알고리즘 자체에 필요한 조건 분기와 수치 계산은 수행한다.
 - Core가 의존하는 입력 내용 전제(예: 특정 transform의 존재, 점군 필드 구성)는 `node.yaml`의 입력 한도나 연결한 Validator로 선언한다. Core는 실행 중 예외(`throw`·`.at()`·`.value()` 등)로 실패를 알리지 않는다.
@@ -49,8 +50,11 @@ Core ID `full_ekf.hpp`, 파일 `cores/full_ekf.hpp`, 클래스 `FullEkf`다.
 확장자를 포함한 Core 파일 이름이다. 이후 `selection.yaml`의 매핑을 변경해
 등록한 Core를 바꿔 끼우며 개발한다.
 
-Core 내부에는 입력 valid 처리를 두지 않는다. 등록 YAML의 `inputs`는 `process()` 인자 순서이며
-모두 필수 입력이다. `process()` 인자의 개수·타입은 컴파일 시 고정하며, Pipeline은 선언된 입력이
+Core 내부에는 입력 valid 처리를 두지 않는다. 등록 YAML의 `inputs`는 `process()` 인자 순서다.
+예약 입력 `stamp`는 원하는 위치에 선택적으로 선언하며 `const ros::Time&`로 받는다. 첫 Stage와 후속
+Stage 모두 출력 헤더에 주입하는 `snapshot.context.stamp_ns`와 같은 계산 기준 시각을 받는다.
+`stamp`는 구독 입력·Stage 출력 이름으로 사용할 수 없으며 payload 슬롯·`required_inputs`·health·Policy 대상이 아니다.
+`stamp` 외의 선언 입력은 모두 필수다. `process()` 인자의 개수·타입은 컴파일 시 고정하며, Pipeline은 필수 입력이
 하나라도 Missing이면 해당 Core 호출과 발행을 거부한다. 선언된 입력의 Missing은 허용 issue로
 면제하지 않는다. 필수 입력 외의 추가 메시지는 허용한다.
 업스트림 메시지 환경에 대응하도록 사용할 입력 조합과 인자 개수별로 Core를 마련하고,

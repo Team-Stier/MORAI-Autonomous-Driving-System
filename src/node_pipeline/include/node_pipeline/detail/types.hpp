@@ -1,9 +1,11 @@
 #pragma once
 // 공통 실행기 내부 타입이다. 확장점 파일은 include하지 않는다.
 #include <node_pipeline/extension.hpp>
+#include <ros/time.h>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -12,6 +14,8 @@
 
 namespace node_pipeline {
 namespace detail {
+
+constexpr std::size_t kStampInput = std::numeric_limits<std::size_t>::max();
 
 template<class... Ts> struct Types { static constexpr std::size_t size = sizeof...(Ts); };
 template<std::size_t I, class List> struct At;
@@ -77,7 +81,7 @@ struct Section {
   std::int64_t stamp_ns = 0;
   std::string frame;
 };
-// 조립 기준 메타데이터다. Core에 전달하지 않는다.
+// 조립 기준 메타데이터다. stamp만 선언한 Core 인자로 전달한다.
 struct Context {
   std::int64_t stamp_ns = 0;
   Section section;

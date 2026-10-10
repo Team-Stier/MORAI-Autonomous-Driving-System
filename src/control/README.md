@@ -1,6 +1,6 @@
 # control
 
-`path_tracking.hpp` Core로 경로 추종 제어 명령을 만든다. 입력에 문제가 있으면 `safe_stop.hpp` Core로 교체해 안전 정지 명령을 발행한다.
+기본 `morai_mpc.hpp` Core로 경로 추종 제어 명령을 만든다. 입력에 문제가 있으면 `safe_stop.hpp` Core로 교체해 안전 정지 명령을 발행한다.
 노드 구성은 `config/control/`, 확장점은 `include/control/`에 둔다.
 
 ## 입출력
@@ -20,24 +20,27 @@ CtrlCmd를 반환한다. Core는 ROS 통신·입력 검사·fallback·발행을 
 차량 기준점에 가장 가까운 경로점의 `velocity`를 종방향 목표속도로 사용한다.
 전진 목표속도만 지원한다. 경로 형상은 재계획하지 않는다. 목표속도 계획은
 Velocity Planner, 최종 속도 제한과 Bridge 전달은 Speed Filter가 수행한다.
-기존 MPC의 모델 속도 제약과 페달·조향 제약은 계산 라이브러리에 유지한다.
+MPC의 모델 속도 제약과 페달·조향 제약은 Core 계산에 적용한다.
 
 ## 실행과 설정
 
 `launch.sh`는 ROS·워크스페이스 환경을 준비하고 이 노드만 실행한다.
 전체 bringup은 루트 `run.sh`를 사용한다. `/local_path/velocity_injected` 입력마다 계산한다.
-계산 파라미터는 `config/control/parameters/path_tracking.yaml`에서 설정하고 노드를 재시작해 반영한다.
-기본 횡·종방향은 MPC이며 횡방향은 Hybrid·Stanley·Pure Pursuit, 종방향은 PID로 선택할 수 있다.
-계산 라이브러리는 `include/control/libraries/tracking/`과 `src/libraries/`에 둔다.
-계산 간격은 경로 stamp 차이이며 첫 호출은 `nominal_dt_sec`를 사용하고,
+기본 Core의 파라미터는 `config/control/parameters/morai_mpc.yaml`에서 설정하고 노드를 재시작해 반영한다.
+횡방향은 qpOASES 기반 MPC, 종방향은 OSQP 기반 MPC를 사용한다.
+계산 간격은 경로 stamp 차이이며 첫 호출은 `lateral.ctrl_period`를 사용하고,
 적분 간격은 `minimum_control_dt_sec`~`maximum_control_dt_sec`로 제한한다.
+등록 후보 `path_tracking.hpp`는 `parameters/path_tracking.yaml`로 MPC·Hybrid·Stanley·Pure Pursuit 및 PID를 설정한다.
+`autoware_universe.hpp`도 등록 후보이며 `parameters/autoware_universe.yaml`을 사용한다.
 
 | Core | 입력 | 선택 |
 | --- | --- | --- |
-| `path_tracking.hpp` | path·ego·competition | UNKNOWN=0과 섹션 1~16 |
+| `morai_mpc.hpp` | path·ego·competition | UNKNOWN=0과 섹션 1~16 |
+| `path_tracking.hpp` | path·ego·competition | 등록 후보 |
+| `autoware_universe.hpp` | path·ego·competition·imu | 등록 후보 |
 | `safe_stop.hpp` | 없음 | path·ego·competition 중 하나가 Missing이면 health 매핑으로 교체 |
 
-공통 검사층이 frame·NaN/Inf·stamp·stale·수신 timeout·입력 시차를, Validator `tracking_inputs.hpp`가 경로점 수·형상·quaternion·point frame·목표속도 범위와 ego `child_frame_id`를 검사한다.
+공통 검사층이 frame·NaN/Inf·stamp·stale·수신 timeout·입력 시차를, 기본 Core의 Validator `mpc_inputs.hpp`가 경로점 수·형상·quaternion·point frame·목표속도 범위와 ego `child_frame_id`를 검사한다.
 목표속도 범위는 `config/control/node.yaml`의 path `range`다.
 Policy `remove_all.hpp`는 issue가 있는 입력을 제거해 Missing으로 만들고, 이어서 `safe_stop.hpp`가 선택된다.
 `safe_stop.hpp`는 accel=0·steering=0·설정 brake(`config/control/parameters/safe_stop.yaml`)의 CtrlCmd를 반환한다.

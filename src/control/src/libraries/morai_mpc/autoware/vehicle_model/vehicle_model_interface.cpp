@@ -16,7 +16,7 @@
 
 #include "control/libraries/morai_mpc/autoware/vehicle_model/vehicle_model_interface.h"
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 VehicleModelInterface::VehicleModelInterface(int dim_x, int dim_u, int dim_y) : dim_x_(dim_x), dim_u_(dim_u), dim_y_(dim_y) {};
 int VehicleModelInterface::getDimX() { return dim_x_; };
@@ -25,4 +25,4 @@ int VehicleModelInterface::getDimY() { return dim_y_; };
 void VehicleModelInterface::setVelocity(const double &velocity) { velocity_ = velocity; };
 void VehicleModelInterface::setCurvature(const double &curvature) { curvature_ = curvature; };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

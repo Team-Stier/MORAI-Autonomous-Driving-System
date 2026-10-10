@@ -7,6 +7,7 @@
   <depend>geometry_msgs</depend>
   <depend>interfaces</depend>
   <depend>node_pipeline</depend>
+  <depend>pugixml-dev</depend>
   <depend>roscpp</depend>
   <depend>tf2</depend>
   <depend>tf2_geometry_msgs</depend>

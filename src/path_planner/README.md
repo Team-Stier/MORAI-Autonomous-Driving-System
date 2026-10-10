@@ -6,7 +6,7 @@ Checkpoint → GlobalPath → Prediction → LocalPath의 네 Stage 파이프라
 | 항목 | 내용 |
 | --- | --- |
 | 노드 | `path_planner_node` |
-| 구독 | `/localization/ego`, `/vehicle/competition_status`, `/objects`, `/tf`, `/section_annotation` |
+| 구독 | `/localization/ego`, `/vehicle/competition_status`, `/objects`, `/tf`, `/sensors/imu/data`, `/section_annotation` |
 | 발행 | `/local_path` (`map`, 입력 조립 기준 stamp; 각 point pose header 포함) |
 | 실행 | 20 Hz 주기 |
 
@@ -14,37 +14,37 @@ Checkpoint → GlobalPath → Prediction → LocalPath의 네 Stage 파이프라
 
 ## Stage 입출력
 
-| Stage | 입력 | 출력 | 등록 Core |
+| Stage | 입력 | 출력 | 기본 Core |
 | --- | --- | --- | --- |
-| `checkpoint` | ego·competition·objects·tf | ego·competition·objects·tf(패스스루), checkpoints(`path_planner::Checkpoints`) | `checkpoint_00.hpp`~`checkpoint_16.hpp` |
-| `global` | ego·competition·objects·tf·checkpoints | route(`path_planner::Route`), ego(패스스루), objects(패스스루) | `global_path.hpp` |
-| `prediction` | route·ego·objects | predictions(`path_planner::PredictedObjects`), route(패스스루), ego(패스스루) | `prediction_pass_through.hpp` |
-| `local` | predictions·route·ego | path(`interfaces/Path`) | `local_path.hpp` |
+| `checkpoint` | ego·competition·objects·tf·imu | ego·competition·objects·tf·imu(패스스루), checkpoints(`path_planner::Checkpoints`) | `checkpoint_00.hpp`~`checkpoint_16.hpp` |
+| `global` | ego·competition·objects·tf·imu·checkpoints | ego·competition·objects·tf·imu(패스스루), route(`path_planner::Route`) | `global_path.hpp` |
+| `prediction` | ego·competition·objects·tf·imu·route | ego·competition·objects·tf·imu·route(패스스루), predictions(`path_planner::PredictedObjects`) | `core_prediction.hpp` |
+| `local` | ego·competition·objects·tf·imu·route·predictions | path(`interfaces/Path`) | `core_path_planner.hpp` |
 
 `path_planner::Checkpoints`는 `std::vector<Checkpoint>`, `path_planner::Route`는 `lanelet::Optional<lanelet::routing::LaneletPath>`, `path_planner::PredictedObjects`는 `std::array<interfaces::Objects, 10>`이며 `libraries/types.hpp`에 정의한다.
 패스스루 출력은 입력의 시간 메타데이터를 상속하고, checkpoints·route·predictions는 새 계산값이므로 시간 메타데이터가 없다.
 
 ## 체크포인트 Stage
 
-섹션 k(0~16)는 `checkpoint_k.hpp`에 매핑한다. `checkpoint_k.hpp`는 구독 입력 네 개를 그대로 반환하고, `checkpoints.csv`에서 아직 경유하지 않은 체크포인트 k+1~16을 순서대로 담은 배열을 함께 반환한다.
+섹션 k(0~16)는 `checkpoint_k.hpp`에 매핑한다. `checkpoint_k.hpp`는 구독 입력 다섯 개를 그대로 반환하고, `checkpoints.csv`에서 아직 경유하지 않은 체크포인트 k+1~16을 순서대로 담은 배열을 함께 반환한다.
 섹션 0은 체크포인트 1~16 전체, 섹션 16은 빈 배열이다. `/section_annotation`이 바뀌면 Core가 교체되어 global Stage에 전달되는 체크포인트가 바뀐다.
-공통 계산은 `libraries/checkpoint_route.hpp`에 두고, 각 Core는 자기 섹션 번호만 갖는다. 체크포인트 파일은 `config/path_planner/parameters/checkpoint_k.yaml`의 `checkpoints_file`로 지정한다.
+남은 체크포인트 선택·저장과 입력 전달은 각 Core 파일 안에서 수행한다. 체크포인트 파일은 `config/path_planner/parameters/checkpoint_k.yaml`의 `checkpoints_file`로 지정한다.
 
 ## GlobalPath
 
-Bank `shared_map.hpp`는 `config/path_planner/parameters/shared_map.yaml`의 `map_file` 지도를 노드당 한 번 읽어 GlobalPath와 LocalPath에 같은 인스턴스로 주입한다. 로더는 `checkpoints_file`의 모든 lanelet_id가 지도에 있는지 시작 시 확인한다.
+Bank `shared_map.hpp`는 `config/path_planner/parameters/shared_map.yaml`의 `map_file` 지도를 노드당 한 번 읽어 GlobalPath와 등록된 대체 Core LocalPath에 같은 인스턴스로 주입한다. 로더는 `checkpoints_file`의 모든 lanelet_id가 지도에 있는지 시작 시 확인한다.
 
-`global_path.hpp`는 ego로 현재 lanelet을 찾고, 전달받은 체크포인트 중 마지막을 목적지, 나머지를 경유지로 `shortestPathVia`를 계산한다. 체크포인트가 비어 있으면 현재 lanelet만 경로로 반환한다.
+`global_path.hpp`는 ego로 현재 lanelet을 찾고, 전달받은 체크포인트 중 마지막을 목적지, 나머지를 경유지로 `shortestPathVia`를 계산한다. 반환 경로 앞에는 차선 변경을 제외한 현재 lanelet의 predecessor 중 첫 번째를 포함한다. 체크포인트가 비어 있으면 predecessor와 현재 lanelet을 반환하며, predecessor가 없으면 현재 lanelet부터 반환한다.
 현재 lanelet이나 체크포인트 lanelet_id 목록이 바뀔 때만 경로를 다시 계산한다. 경로 중심선은 `/visualizer/global_path`로 발행한다.
 
 ## Prediction·LocalPath
 
-`prediction_pass_through.hpp`의 `process(objects, route, ego)`는 관측 Objects를 10개 예측 시점에 그대로 복사하고 route·ego를 넘긴다. 위치·속도·가속도를 외삽하지 않는다.
-`local_path.hpp`의 `process(ego, route, predictions)`는 route 중심선을 ego 투영점부터 `local_path_length_m`만큼 잘라 경로를 만든다. 지도는 `shared_map.hpp`에서 받고, 경로 길이는 `config/path_planner/parameters/local_path.yaml`에서 읽는다.
+기본 `core_prediction.hpp`는 ego로 객체를 map 좌표계로 옮겨 예측한다. 차량은 관측 속도·가속도로 구한 등속 선회율을, 나머지 객체는 등속 직선 모델을 사용한다. 0.5초 간격의 10개 결과를 관측 시점 base_link 좌표계로 반환한다. 예측 간격은 `config/path_planner/parameters/core_prediction.yaml`의 `step_sec`로 지정하며 0.5초로 고정한다.
+기본 `core_path_planner.hpp`는 route 중심선·차선 경계와 객체 예측, ego 운동 상태·IMU 가속도로 DP/QP 기반 경로를 계산한다. 차량 치수·계획 길이·도로/장애물 여유·곡률·가감속 한도는 `config/path_planner/parameters/core_path_planner.yaml`에 둔다.
 Validator `route_present.hpp`는 경로 탐색 결과가 없는 route를 Missing으로 기록하며, 이때 local Stage는 Core를 호출하지 않는다.
 
-모든 Core는 Policy `remove_invalid.hpp`로 값·stamp·frame 오류 입력을 제거하며, 구독 입력에서 이어진 값의 Stale·ReceiveTimeout·Skew는 허용 issue다.
-`cores/prediction_core.hpp`는 등속 선회 예측 Core로 보존하며 등록하지 않았다.
+모든 Core는 Policy `remove_invalid.hpp`로 값·stamp·frame 오류 입력을 제거한다. 허용 issue는 각 `registrations/*.yaml`에 선언한 입력·issue에 한정한다.
+`prediction_pass_through.hpp`는 관측 Objects를 10개 예측 시점에 그대로 복사하는 등록된 대체 Core이며, `prediction_core.hpp`는 등속 선회 예측 대체 Core다. `local_path.hpp`는 route 중심선을 ego 투영점부터 잘라 경로를 만드는 등록된 대체 Core이며, 경로 길이는 `config/path_planner/parameters/local_path.yaml`의 `local_path_length_m`로 지정한다.
 
 ## 예측 배열 계약
 

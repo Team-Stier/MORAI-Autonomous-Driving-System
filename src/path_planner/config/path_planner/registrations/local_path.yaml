@@ -1,5 +1,5 @@
 stage: local
-inputs: [ego, route, predictions]
+inputs: [ego, competition, objects, tf, imu, route, predictions]
 validator: route_present.hpp
 policy: remove_invalid.hpp
 allowed_issues:

@@ -5,10 +5,10 @@
 #include <geometry_msgs/TwistStamped.h>
 
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 // Kept separate from the source PID header: no PID controller is imported.
 enum class LongitudinalState { kAccel, kCoast, kBrake };
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 
 #include <limits>
@@ -16,7 +16,7 @@ enum class LongitudinalState { kAccel, kCoast, kBrake };
 #include <vector>
 
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 
 struct LongitudinalMpcConfig {
   std::string solver{"osqp"};
@@ -91,10 +91,10 @@ class LongitudinalMpc {
   double previous_signed_command_{0.0};
 };
 
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 // Operating values from MOLIT2026-stier1, including launch overrides.
 // The supported lateral model/solver are kinematics + qpoases_hotstart.
 struct LateralParameters {
@@ -152,14 +152,14 @@ struct Parameters {
 constexpr double kPi = 3.14159265358979323846;
 // The Bridge contract is fixed independently of a lower optimizer steering limit.
 constexpr double kBridgeSteeringLimitRad = 40.0 * kPi / 180.0;
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 
 #include <functional>
 #include <string>
 #include <vector>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 
 struct OsqpSqpConfig {
   int sqp_iterations{2};
@@ -183,12 +183,12 @@ OsqpSqpResult solveWithOsqpSqp(
     const std::vector<double>& constraint_matrix, int constraint_rows,
     const std::vector<double>& lower_bounds,
     const std::vector<double>& upper_bounds, const OsqpSqpConfig& config);
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 #include <deque>
 #include <utility>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 // A command-history estimate, never a measured wheel-angle report.
 class SteeringPrediction {
  public:
@@ -204,7 +204,7 @@ class SteeringPrediction {
   double command_rad_ = 0.0;
   std::deque<std::pair<double, double>> events_;
 };
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 #include <control/libraries/morai_mpc/autoware/mpc_trajectory.h>
 #include <control/libraries/morai_mpc/autoware/lowpass_filter.h>
@@ -214,16 +214,16 @@ class SteeringPrediction {
 #include <deque>
 #include <memory>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 class AutowareLateral {
  public:
   AutowareLateral(const LateralParameters& parameters,
                  const SteeringPredictionParameters& steering);
-  double calculate(const control::morai_mpc::autoware::Lane& path, double speed_mps,
+  double calculate(const control::autoware_ai_mpc::autoware::Lane& path, double speed_mps,
                    double modeled_steering_rad, double previous_steering_rad);
 
  private:
-  void prepareTrajectory(const control::morai_mpc::autoware::Lane& path, double speed_mps);
+  void prepareTrajectory(const control::autoware_ai_mpc::autoware::Lane& path, double speed_mps);
   LateralParameters p_;
   SteeringPredictionParameters steering_;
   autoware::MPCTrajectory ref_traj_;
@@ -233,12 +233,12 @@ class AutowareLateral {
   std::deque<double> input_buffer_;
   Eigen::Matrix2d front_point_weight_;
 };
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 #include <algorithm>
 #include <cmath>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 inline int moraiPredictionSteps(int base, int maximum, double dt, double speed, double metres) {
   if (metres==0.) return base;
@@ -247,12 +247,12 @@ inline int moraiPredictionSteps(int base, int maximum, double dt, double speed, 
   return std::max(base,static_cast<int>(std::min(double(maximum),5.*std::ceil(needed/5.))));
 }
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware
 
 #include <algorithm>
 #include <cmath>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 // A continuous transition avoids an abrupt controller switch near a threshold.
 inline double moraiCurvatureWeightBlend(double curvature, double low, double high) {
@@ -260,7 +260,7 @@ inline double moraiCurvatureWeightBlend(double curvature, double low, double hig
   return t*t*(3.-2.*t);
 }
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware
 
 
 #include <algorithm>
@@ -270,7 +270,7 @@ inline double moraiCurvatureWeightBlend(double curvature, double low, double hig
 
 #include <osqp.h>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 namespace {
 
 struct CscStorage {
@@ -404,13 +404,13 @@ inline OsqpSqpResult solveWithOsqpSqp(
   return result;
 }
 
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 
 #include <algorithm>
 #include <cmath>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 namespace {
 
 inline double clamp(double value, double lower, double upper) {
@@ -663,11 +663,11 @@ inline void LongitudinalMpc::reset() {
   previous_signed_command_ = 0.0;
 }
 
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 #include <cmath>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 inline SteeringPrediction::SteeringPrediction(double delay_sec, double time_constant_sec)
     : delay_sec_(delay_sec), time_constant_sec_(time_constant_sec) {
 }
@@ -691,7 +691,7 @@ inline void SteeringPrediction::sent(double time_sec, double effective_steering_
   advance(time_sec);
   events_.emplace_back(time_sec + delay_sec_, effective_steering_rad);
 }
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 #include <control/libraries/morai_mpc/autoware/mpc_utils.h>
 /*
@@ -714,7 +714,7 @@ inline void SteeringPrediction::sent(double time_sec, double effective_steering_
 #include <algorithm>
 #include <cmath>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 using namespace autoware;
 
 inline AutowareLateral::AutowareLateral(const LateralParameters& parameters,
@@ -729,10 +729,10 @@ inline AutowareLateral::AutowareLateral(const LateralParameters& parameters,
   lpf_steering_cmd_.initialize(p_.ctrl_period, p_.steering_lpf_cutoff_hz);
 }
 
-inline void AutowareLateral::prepareTrajectory(const control::morai_mpc::autoware::Lane& path, double speed_mps) {
+inline void AutowareLateral::prepareTrajectory(const control::autoware_ai_mpc::autoware::Lane& path, double speed_mps) {
   // Coincident vertices describe the same geometry; omit zero-length segments
   // before distance interpolation to avoid division by zero.
-  control::morai_mpc::autoware::Lane distinct;
+  control::autoware_ai_mpc::autoware::Lane distinct;
   for (const auto& point : path.waypoints) {
     if (!distinct.waypoints.empty()) {
       const auto& previous = distinct.waypoints.back().pose.pose.position;
@@ -787,7 +787,7 @@ inline void AutowareLateral::prepareTrajectory(const control::morai_mpc::autowar
   ref_traj_ = std::move(traj);
 }
 
-inline double AutowareLateral::calculate(const control::morai_mpc::autoware::Lane& path, double speed_mps,
+inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autoware::Lane& path, double speed_mps,
                                 double modeled_steering_rad, double previous_steering_rad) {
   prepareTrajectory(path, speed_mps);
   // Input path is already expressed at the rear-axle base_link origin.
@@ -1030,7 +1030,7 @@ inline double AutowareLateral::calculate(const control::morai_mpc::autoware::Lan
   return u_filtered;
 }
 
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 #include <interfaces/Path.h>
 #include <interfaces/CompetitionVehicleStatus.h>
@@ -1044,7 +1044,7 @@ inline double AutowareLateral::calculate(const control::morai_mpc::autoware::Lan
 namespace control {
 class MoraiMpc {
  public:
-  explicit MoraiMpc(morai_mpc::Parameters parameters = {})
+  explicit MoraiMpc(autoware_ai_mpc::Parameters parameters = {})
       : parameters_(std::move(parameters)),
         lateral_(parameters_.lateral, parameters_.steering_prediction),
         longitudinal_(parameters_.longitudinal),
@@ -1073,19 +1073,19 @@ class MoraiMpc {
     // lateral reference. The injected future velocity/acceleration profile is
     // not a longitudinal horizon reference for this controller.
     const double speed_mps = ego.twist.twist.linear.x;
-    control::morai_mpc::autoware::Lane waypoints;
+    control::autoware_ai_mpc::autoware::Lane waypoints;
     waypoints.waypoints.reserve(path.points.size());
     for (const auto& point : path.points) {
-      control::morai_mpc::autoware::Waypoint waypoint;
+      control::autoware_ai_mpc::autoware::Waypoint waypoint;
       waypoint.pose = point.pose;
       waypoint.twist.twist.linear.x = std::max(0.5, std::abs(speed_mps));
       waypoints.waypoints.push_back(waypoint);
     }
     const double requested = lateral_.calculate(waypoints, speed_mps,
         steering_.advance(time_sec), previous_steering_rad_);
-    const double limit = parameters_.lateral.steer_lim_deg * morai_mpc::kPi / 180.0;
+    const double limit = parameters_.lateral.steer_lim_deg * autoware_ai_mpc::kPi / 180.0;
     const double step = parameters_.lateral.morai_steer_rate_limit_deg *
-                        morai_mpc::kPi / 180.0 * dt;
+                        autoware_ai_mpc::kPi / 180.0 * dt;
     double angle = std::max(-limit, std::min(limit, requested));
     angle = std::max(previous_steering_rad_ - step,
                      std::min(previous_steering_rad_ + step, angle));
@@ -1095,17 +1095,17 @@ class MoraiMpc {
     steering_.sent(time_sec, angle * parameters_.steering_prediction.gain);
     morai_msgs::CtrlCmd command;
     command.longlCmdType = 1;
-    command.steering = angle / morai_mpc::kBridgeSteeringLimitRad;
+    command.steering = angle / autoware_ai_mpc::kBridgeSteeringLimitRad;
     command.accel = pedals.accel;
     command.brake = pedals.brake;
     return command;
   }
 
  private:
-  morai_mpc::Parameters parameters_;
-  morai_mpc::AutowareLateral lateral_;
-  morai_mpc::LongitudinalMpc longitudinal_;
-  morai_mpc::SteeringPrediction steering_;
+  autoware_ai_mpc::Parameters parameters_;
+  autoware_ai_mpc::AutowareLateral lateral_;
+  autoware_ai_mpc::LongitudinalMpc longitudinal_;
+  autoware_ai_mpc::SteeringPrediction steering_;
   std::uint64_t previous_stamp_ = 0;
   bool has_previous_stamp_ = false;
   double previous_steering_rad_ = 0.0;

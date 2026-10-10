@@ -236,6 +236,8 @@ def load_node(package_dir, package, node):
         at = f"{where}: inputs.{name}"
         if not isinstance(name, str) or not IDENT.match(name):
             raise ConfigError(f"{at}: input names must be lower snake_case")
+        if name == "stamp":
+            raise ConfigError(f"{at}: stamp is reserved for the execution stamp")
         check_keys(decl, {"type", "topic", "frame", "numbers", "range", "stale_after_sec", "receive_timeout_sec",
                           "check_stamp", "check_receive_timeout", "check_skew"}, {"type", "topic"}, at)
         if not isinstance(decl["topic"], str) or not TOPIC.match(decl["topic"]):
@@ -310,6 +312,8 @@ def load_node(package_dir, package, node):
             if not isinstance(output["name"], str) or not IDENT.match(output["name"]) or \
                     output["name"] in [slot.name for slot in next_slots]:
                 raise ConfigError(f"{out_at}.name: output names must be unique lower snake_case")
+            if output["name"] == "stamp":
+                raise ConfigError(f"{out_at}.name: stamp is reserved for the execution stamp")
             if ("type" in output) == ("from" in output):
                 raise ConfigError(f"{out_at}: declare exactly one of type or from")
             if "from" in output:
@@ -378,10 +382,10 @@ def load_registrations(package_dir, package, node, model):
         stage = stages[data["stage"]]
         slot_names = [slot.name for slot in stage.slots]
         inputs = data["inputs"]
-        if not isinstance(inputs, list) or len(set(inputs)) != len(inputs) or not all(i in slot_names for i in inputs):
-            raise ConfigError(f"{path}: inputs must be distinct inputs of stage '{stage.name}': {slot_names}")
+        if not isinstance(inputs, list) or len(set(inputs)) != len(inputs) or not all(i in slot_names or i == "stamp" for i in inputs):
+            raise ConfigError(f"{path}: inputs must be distinct inputs of stage '{stage.name}' or stamp: {slot_names}")
         core = Core(stem)
-        core.args = [slot_names.index(name) for name in inputs]
+        core.args = [-1 if name == "stamp" else slot_names.index(name) for name in inputs]
         for kind, attribute in (("validators", "validator"), ("policies", "policy"), ("banks", "bank")):
             if attribute in data:
                 setattr(core, attribute, extension_stem(data[attribute], kind, package_dir, package, f"{path}: {attribute}"))
@@ -389,6 +393,8 @@ def load_registrations(package_dir, package, node, model):
         if not isinstance(allowed, dict):
             raise ConfigError(f"{path}: allowed_issues must be a map of input to issue list")
         for name, issues in allowed.items():
+            if name == "stamp":
+                raise ConfigError(f"{path}: stamp has no health issues")
             if name not in inputs:
                 raise ConfigError(f"{path}: allowed_issues input '{name}' is not a core input")
             if not isinstance(issues, list) or not all(issue in KINDS and issue != "Missing" for issue in issues):
@@ -490,7 +496,8 @@ def generate(model):
             f"  static std::map<std::string, std::size_t> inputRegistry() {{ return {{{registry}}}; }}",
             f"  static std::vector<int> origins() {{ return {cpp_list(stage.origins)}; }}",
             f"  static std::vector<npd::CoreProfile<Stage_{s}>> coreProfiles();",
-            "  static bool processCore(CoreSet& cores, CoreId id, const npd::StageData& data, npd::CoreResult& result);",
+            "  static bool processCore(CoreSet& cores, CoreId id, const npd::StageData& data, "
+            "const std::int64_t& stamp_ns, npd::CoreResult& result);",
             "};",
             "",
         ]
@@ -503,29 +510,36 @@ def generate(model):
             validator_name = f"{core.validator}.hpp" if core.validator else ""
             policy_name = f"{core.policy}.hpp" if core.policy else ""
             profiles.append(f"      npd::makeProfile<Stage_{s}, {validator}, {policy}>(CoreId::{pascal(core.stem)}, "
-                            f"{cpp_string(core.name)}, {cpp_list(core.args)}, {cpp_string(validator_name)}, "
+                            f"{cpp_string(core.name)}, {cpp_list('npd::kStampInput' if arg < 0 else arg for arg in core.args)}, "
+                            f"{cpp_string(validator_name)}, "
                             f"{cpp_string(policy_name)}),")
         lines += [f"inline std::vector<npd::CoreProfile<Stage_{s}>> Stage_{s}::coreProfiles() {{", "  return {"]
         lines += profiles
         lines += ["  };", "}", ""]
         if stage.cores:
+            stamp_parameter = "const std::int64_t& stamp_ns" if any(-1 in core.args for core in stage.cores) else "const std::int64_t&"
             lines.append(f"inline bool Stage_{s}::processCore(CoreSet& cores, CoreId id, const npd::StageData& data, "
-                         "npd::CoreResult& result) {")
+                         f"{stamp_parameter}, npd::CoreResult& result) {{")
             lines.append(f"  const std::vector<int> origins = Stage_{s}::origins();")
         else:
-            lines.append(f"inline bool Stage_{s}::processCore(CoreSet&, CoreId id, const npd::StageData&, npd::CoreResult&) {{")
+            lines.append(f"inline bool Stage_{s}::processCore(CoreSet&, CoreId id, const npd::StageData&, "
+                         "const std::int64_t&, npd::CoreResult&) {")
         lines.append("  switch (id) {")
         for core in stage.cores:
-            arguments = ", ".join(f"data.message<{stage.slots[arg].type.cpp}>({arg})" for arg in core.args)
+            arguments = ", ".join("stamp" if arg < 0 else f"data.message<{stage.slots[arg].type.cpp}>({arg})" for arg in core.args)
+            indices = ", ".join("npd::kStampInput" if arg < 0 else str(arg) for arg in core.args)
             lines += [
                 f"    case CoreId::{pascal(core.stem)}: {{",
                 f"      static_assert(npd::requireProcessContract<::{package}::{pascal(core.stem)}, Stage_{s}, "
-                f"std::index_sequence<{', '.join(str(arg) for arg in core.args)}>>(), \"process() contract\");",
-                f"      const std::vector<std::size_t> required_{core.stem}{cpp_list(core.args)};",
+                f"std::index_sequence<{indices}>>(), \"process() contract\");",
+                f"      const std::vector<std::size_t> required_{core.stem}{cpp_list(arg for arg in core.args if arg >= 0)};",
                 f"      const bool present = data.hasInputs(required_{core.stem});",
                 "      if (!present) return false;",
                 f"      auto& core = cores.{core.stem};",
-                f"      auto value = core.process({arguments});",
+            ]
+            if -1 in core.args:
+                lines += ["      ros::Time stamp;", "      stamp.fromNSec(static_cast<std::uint64_t>(stamp_ns));"]
+            lines += [f"      auto value = core.process({arguments});",
                 "      result = npd::wrapResult(std::move(value), origins);",
                 "      break;",
                 "    }",

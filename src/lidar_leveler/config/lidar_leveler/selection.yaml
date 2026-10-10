@@ -1,4 +1,20 @@
 level:
   section_core_map:
-    "0": pass_through.hpp
+    "0": roll_pitch_leveler.hpp
+    "1": roll_pitch_leveler.hpp
+    "2": roll_pitch_leveler.hpp
+    "3": roll_pitch_leveler.hpp
+    "4": roll_pitch_leveler.hpp
+    "5": roll_pitch_leveler.hpp
+    "6": roll_pitch_leveler.hpp
+    "7": roll_pitch_leveler.hpp
+    "8": roll_pitch_leveler.hpp
+    "9": roll_pitch_leveler.hpp
+    "10": roll_pitch_leveler.hpp
+    "11": roll_pitch_leveler.hpp
+    "12": roll_pitch_leveler.hpp
+    "13": roll_pitch_leveler.hpp
+    "14": roll_pitch_leveler.hpp
+    "15": roll_pitch_leveler.hpp
+    "16": roll_pitch_leveler.hpp
   health_core_map: []

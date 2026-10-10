@@ -1,5 +1,7 @@
 #include <path_planner/libraries/map_parameters.hpp>
 #include <path_planner/cores/global_path.hpp>
+#include <path_planner/cores/core_path_planner.hpp>
+#include <path_planner/cores/ego_compensated_prediction.hpp>
 #include <path_planner/cores/local_path.hpp>
 #include <path_planner/cores/prediction_pass_through.hpp>
 #include <path_planner/parameters/local_path.hpp>
@@ -39,7 +41,7 @@ void expectPayload(const interfaces::Path& path) {
     EXPECT_TRUE(std::isfinite(point.pose.pose.position.z));
     EXPECT_TRUE(point.pose.header.stamp.isZero());
     EXPECT_TRUE(point.pose.header.frame_id.empty());
-    EXPECT_DOUBLE_EQ(point.velocity, 0.0);
+    EXPECT_TRUE(std::isnan(point.velocity));
     EXPECT_DOUBLE_EQ(point.acceleration, 0.0);
   }
 }
@@ -94,7 +96,8 @@ TEST(PredictionPassThrough, CopiesAllTenSamplesWithoutChangingObservation) {
     objects.objects.push_back(object);
   }
   pp::PredictionPassThrough core;
-  auto samples = std::get<0>(core.process(objects, pp::Route{}, nav_msgs::Odometry{}));
+  auto samples = std::get<6>(core.process(nav_msgs::Odometry{}, interfaces::CompetitionVehicleStatus{},
+      objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
   ASSERT_EQ(samples.size(), 10u);
   for (const auto& sample : samples) {
     ASSERT_EQ(sample.objects.size(), 12u);
@@ -109,7 +112,8 @@ TEST(PredictionPassThrough, PreservesEmptyObjectLists) {
   interfaces::Objects objects;
   objects.header.frame_id = "base_link";
   pp::PredictionPassThrough core;
-  const auto samples = std::get<0>(core.process(objects, pp::Route{}, nav_msgs::Odometry{}));
+  const auto samples = std::get<6>(core.process(nav_msgs::Odometry{}, interfaces::CompetitionVehicleStatus{},
+      objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
   for (const auto& sample : samples) EXPECT_EQ(sample, objects);
 }
 
@@ -125,14 +129,24 @@ TEST(PathCores, ReturnsRouteWithPassThroughAndExtendsShortRoute) {
   ego.pose.pose.orientation.w = 1;
   interfaces::Objects objects;
   objects.header.frame_id = "base_link";
+  interfaces::CompetitionVehicleStatus competition;
+  competition.gear = 4;
+  tf2_msgs::TFMessage tf;
+  tf.transforms.resize(1);
+  tf.transforms.front().child_frame_id = "base_link";
+  sensor_msgs::Imu imu;
+  imu.linear_acceleration.x = 0.3;
   for (std::size_t completed : {0, 1, 1, 16, 0}) {
-    const auto result = global.process(ego, objects, remaining(checkpoints, completed));
-    EXPECT_EQ(std::get<1>(result), ego);
+    const auto result = global.process(ego, competition, objects, tf, imu, remaining(checkpoints, completed));
+    EXPECT_EQ(std::get<0>(result), ego);
+    EXPECT_EQ(std::get<1>(result), competition);
     EXPECT_EQ(std::get<2>(result), objects);
-    const auto& route = std::get<0>(result);
+    EXPECT_EQ(std::get<3>(result), tf);
+    EXPECT_EQ(std::get<4>(result), imu);
+    const auto& route = std::get<5>(result);
     ASSERT_TRUE(static_cast<bool>(route));
     ASSERT_EQ(route->size(), 1u);
-    const auto path = local.process(ego, route, pp::PredictedObjects{});
+    const auto path = local.process(ego, competition, objects, tf, imu, route, pp::PredictedObjects{});
     ASSERT_GE(path.points.size(), 2u);
     expectPayload(path);
     EXPECT_NEAR(path.points.front().pose.pose.position.x, 2.0, 1e-9);
@@ -152,7 +166,7 @@ TEST(PathCores, UsesPinnedLaneletInsteadOfRematchingCheckpointCoordinates) {
   nav_msgs::Odometry ego;
   ego.pose.pose.position.x = 2;
   ego.pose.pose.orientation.w = 1;
-  const auto route = std::get<0>(global.process(ego, interfaces::Objects{}, checkpoints));
+  const auto route = std::get<5>(global.process(ego, interfaces::CompetitionVehicleStatus{}, interfaces::Objects{}, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, checkpoints));
   ASSERT_TRUE(static_cast<bool>(route));
   ASSERT_EQ(route->size(), 2u);
   EXPECT_EQ(route->back().id(), 301);
@@ -185,12 +199,12 @@ TEST(PathCores, CoresFollowRemainingMapCheckpoints) {
   ego->pose.pose.orientation.z = std::sin(checkpoints.front().yaw_rad / 2);
   ego->pose.pose.orientation.w = std::cos(checkpoints.front().yaw_rad / 2);
   const auto run = [&] {
-    const auto route = std::get<0>(global.process(*ego, *objects, remaining(checkpoints, completed)));
-    const auto predictions = std::get<0>(prediction.process(*objects, route, *ego));
+    const auto route = std::get<5>(global.process(*ego, interfaces::CompetitionVehicleStatus{}, *objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, remaining(checkpoints, completed)));
+    const auto predictions = std::get<6>(prediction.process(*ego, interfaces::CompetitionVehicleStatus{}, *objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, route));
     for (const auto& sample : predictions) EXPECT_EQ(sample, *objects);
-    return local.process(*ego, route, predictions);
+    return local.process(*ego, interfaces::CompetitionVehicleStatus{}, *objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, route, predictions);
   };
-  const auto route = std::get<0>(global.process(*ego, *objects, remaining(checkpoints, 0)));
+  const auto route = std::get<5>(global.process(*ego, interfaces::CompetitionVehicleStatus{}, *objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, remaining(checkpoints, 0)));
   ASSERT_TRUE(static_cast<bool>(route));
   lanelet::Ids route_ids;
   for (const auto& lane : *route) route_ids.push_back(lane.id());
@@ -209,20 +223,167 @@ TEST(PathCores, CoresFollowRemainingMapCheckpoints) {
     completed = i + 1;
     const auto path = run();
     expectPayload(path);
-    EXPECT_EQ(run(), path);
+    const auto repeated_path = run();
+    EXPECT_EQ(repeated_path.header, path.header);
+    ASSERT_EQ(repeated_path.points.size(), path.points.size());
+    for (std::size_t j = 0; j < path.points.size(); ++j) {
+      EXPECT_EQ(repeated_path.points[j].pose, path.points[j].pose);
+      EXPECT_TRUE(std::isnan(repeated_path.points[j].velocity));
+      EXPECT_TRUE(std::isnan(path.points[j].velocity));
+      EXPECT_DOUBLE_EQ(repeated_path.points[j].acceleration, path.points[j].acceleration);
+    }
   }
 }
 
-TEST(PredictionPassThrough, PassesRouteAndEgoToTheLocalStage) {
+TEST(PredictionPassThrough, PassesAllInputsToTheLocalStage) {
   auto shared = shortMap();
   pp::GlobalPath global(shared);
   nav_msgs::Odometry ego;
   ego.pose.pose.position.x = 2;
   ego.pose.pose.orientation.w = 1;
-  const auto route = std::get<0>(global.process(ego, interfaces::Objects{}, shortCheckpoints()));
-  const auto result = pp::PredictionPassThrough{}.process(interfaces::Objects{}, route, ego);
-  EXPECT_EQ(std::get<1>(result), route);
-  EXPECT_EQ(std::get<2>(result), ego);
+  interfaces::CompetitionVehicleStatus competition;
+  competition.velocity_x_mps = 2;
+  interfaces::Objects objects;
+  objects.objects.resize(1);
+  tf2_msgs::TFMessage tf;
+  tf.transforms.resize(1);
+  sensor_msgs::Imu imu;
+  imu.linear_acceleration.x = 0.3;
+  const auto route = std::get<5>(global.process(ego, competition, objects, tf, imu, shortCheckpoints()));
+  const auto result = pp::PredictionPassThrough{}.process(ego, competition, objects, tf, imu, route);
+  EXPECT_EQ(std::get<5>(result), route);
+  EXPECT_EQ(std::get<0>(result), ego);
+  EXPECT_EQ(std::get<1>(result), competition);
+  EXPECT_EQ(std::get<2>(result), objects);
+  EXPECT_EQ(std::get<3>(result), tf);
+  EXPECT_EQ(std::get<4>(result), imu);
+}
+
+TEST(EgoCompensatedPrediction, PassesAllInputsWithoutChangingTheObservation) {
+  nav_msgs::Odometry ego;
+  ego.pose.pose.orientation.w = 1;
+  interfaces::CompetitionVehicleStatus competition;
+  competition.velocity_x_mps = 2;
+  interfaces::Objects objects;
+  objects.objects.resize(1);
+  objects.objects.front().bbox_pose.orientation.w = 1;
+  tf2_msgs::TFMessage tf;
+  sensor_msgs::Imu imu;
+  imu.linear_acceleration.x = 0.3;
+  pp::Route route;
+  const auto result = pp::EgoCompensatedPrediction{}.process(ego, competition, objects, tf, imu, route);
+  EXPECT_EQ(std::get<0>(result), ego);
+  EXPECT_EQ(std::get<1>(result), competition);
+  EXPECT_EQ(std::get<2>(result), objects);
+  EXPECT_EQ(std::get<3>(result), tf);
+  EXPECT_EQ(std::get<4>(result), imu);
+  EXPECT_EQ(std::get<5>(result), route);
+  for (const auto& sample : std::get<6>(result)) EXPECT_EQ(sample, objects);
+}
+
+TEST(CorePathPlanner, UsesImuAccelerationAndReturnsMapPathPayload) {
+  lanelet::Lanelet lane(1,
+    lanelet::LineString3d(2, {lanelet::Point3d(4, -10, 5, 10), lanelet::Point3d(5, 100, 5, 10)}),
+    lanelet::LineString3d(3, {lanelet::Point3d(6, -10, -5, 10), lanelet::Point3d(7, 100, -5, 10)}));
+  pp::Route route = lanelet::routing::LaneletPath({lane});
+  nav_msgs::Odometry ego;
+  ego.pose.pose.orientation.w = 1;
+  ego.header.stamp.fromSec(10.0);
+  ego.twist.twist.linear.x = 2.0;
+  interfaces::Objects objects;
+  objects.header.stamp = ego.header.stamp;
+  pp::PredictedObjects predictions;
+  predictions.fill(objects);
+  sensor_msgs::Imu imu;
+  imu.linear_acceleration.x = 0.3;
+  pp::PathParameters parameters;
+  parameters.trajectory_horizon_m = 25.0;
+  parameters.speed_beam_width = 16;
+  parameters.speed_time_step_sec = 1.0;
+  pp::CorePathPlanner core(parameters);
+  const auto path = core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
+                                tf2_msgs::TFMessage{}, imu, route, predictions);
+  ASSERT_GE(path.points.size(), 2u);
+  EXPECT_DOUBLE_EQ(path.points.front().velocity, 2.0);
+  EXPECT_DOUBLE_EQ(path.points.front().acceleration, 0.3);
+  EXPECT_TRUE(path.header.stamp.isZero());
+  EXPECT_TRUE(path.header.frame_id.empty());
+  for (const auto& point : path.points) {
+    EXPECT_NEAR(point.pose.pose.position.z, 10.0, 1e-9);
+    EXPECT_TRUE(point.pose.header.frame_id.empty());
+    EXPECT_TRUE(point.pose.header.stamp.isZero());
+  }
+}
+
+TEST(CorePathPlanner, PitchedStandstillSensorRoundingStillProducesPath) {
+  lanelet::Lanelet lane(1,
+    lanelet::LineString3d(2, {lanelet::Point3d(4, -10, 5, 10), lanelet::Point3d(5, 100, 5, 10)}),
+    lanelet::LineString3d(3, {lanelet::Point3d(6, -10, -5, 10), lanelet::Point3d(7, 100, -5, 10)}));
+  const pp::Route route = lanelet::routing::LaneletPath({lane});
+  nav_msgs::Odometry ego;
+  const double pitch_rad = std::asin(0.032220431 / 9.81);
+  ego.pose.pose.orientation.y = std::sin(pitch_rad / 2);
+  ego.pose.pose.orientation.w = std::cos(pitch_rad / 2);
+  ego.header.stamp.fromSec(10.0);
+  interfaces::Objects objects;
+  objects.header.stamp = ego.header.stamp;
+  pp::PredictedObjects predictions;
+  predictions.fill(objects);
+  sensor_msgs::Imu imu;
+  imu.linear_acceleration.x = -0.032220431 - 0.00002;
+  imu.linear_acceleration.z = 9.81 * std::cos(pitch_rad);
+  pp::PathParameters parameters;
+  parameters.trajectory_horizon_m = 25.0;
+  parameters.speed_beam_width = 16;
+  parameters.speed_time_step_sec = 1.0;
+  for (double speed_mps : {-0.00000314, 0.0, 0.00000314}) {
+    SCOPED_TRACE(speed_mps);
+    ego.twist.twist.linear.x = speed_mps;
+    ego.twist.twist.angular.z = 0.0000005652157;
+    pp::CorePathPlanner core(parameters);
+    const auto path = core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
+                                  tf2_msgs::TFMessage{}, imu, route, predictions);
+    ASSERT_GE(path.points.size(), 2u);
+    EXPECT_DOUBLE_EQ(path.points.front().velocity, 0.0);
+    EXPECT_DOUBLE_EQ(path.points.front().acceleration, 0.0);
+    EXPECT_GT(lengthM(path), 0.0);
+  }
+}
+
+TEST(CorePathPlanner, GravityCompensationPreservesMovingDecelerationAndInfeasibleStop) {
+  lanelet::Lanelet lane(1,
+    lanelet::LineString3d(2, {lanelet::Point3d(4, -10, 5, 10), lanelet::Point3d(5, 100, 5, 10)}),
+    lanelet::LineString3d(3, {lanelet::Point3d(6, -10, -5, 10), lanelet::Point3d(7, 100, -5, 10)}));
+  const pp::Route route = lanelet::routing::LaneletPath({lane});
+  nav_msgs::Odometry ego;
+  const double pitch_rad = 0.03;
+  ego.pose.pose.orientation.y = std::sin(pitch_rad / 2);
+  ego.pose.pose.orientation.w = std::cos(pitch_rad / 2);
+  ego.header.stamp.fromSec(10.0);
+  interfaces::Objects objects;
+  objects.header.stamp = ego.header.stamp;
+  pp::PredictedObjects predictions;
+  predictions.fill(objects);
+  sensor_msgs::Imu imu;
+  pp::PathParameters parameters;
+  parameters.trajectory_horizon_m = 25.0;
+  parameters.speed_beam_width = 16;
+  parameters.speed_time_step_sec = 1.0;
+  ego.twist.twist.linear.x = 2.0;
+  imu.linear_acceleration.x = -0.3 - 9.81 * std::sin(pitch_rad);
+  pp::CorePathPlanner core(parameters);
+  const auto path = core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
+                                tf2_msgs::TFMessage{}, imu, route, predictions);
+  ASSERT_GE(path.points.size(), 2u);
+  EXPECT_DOUBLE_EQ(path.points.front().velocity, 2.0);
+  EXPECT_NEAR(path.points.front().acceleration, -0.3, 1e-12);
+  for (const auto& state : {std::pair<double, double>{0.01, -1.0}, {2.0, -6.0}, {0.00000314, -0.01}}) {
+    SCOPED_TRACE(state.first);
+    ego.twist.twist.linear.x = state.first;
+    imu.linear_acceleration.x = state.second - 9.81 * std::sin(pitch_rad);
+    EXPECT_TRUE(core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
+                            tf2_msgs::TFMessage{}, imu, route, predictions).points.empty());
+  }
 }
 
 TEST(LocalPathStage, RoutePresentMarksEmptyRouteMissing) {
@@ -235,7 +396,7 @@ TEST(LocalPathStage, RoutePresentMarksEmptyRouteMissing) {
   pp::GlobalPath global(shared);
   nav_msgs::Odometry ego;
   ego.pose.pose.orientation.w = 1;
-  validator(std::get<0>(global.process(ego, interfaces::Objects{}, shortCheckpoints())), node_pipeline::HealthLimits{}, issues);
+  validator(std::get<5>(global.process(ego, interfaces::CompetitionVehicleStatus{}, interfaces::Objects{}, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, shortCheckpoints())), node_pipeline::HealthLimits{}, issues);
   EXPECT_TRUE(issues.empty());
 }
 

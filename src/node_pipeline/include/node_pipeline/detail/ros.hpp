@@ -73,7 +73,7 @@ RosSettings loadRosConfig(ros::NodeHandle& nh, const NodeParams& params, std::ve
                           const std::map<std::string, std::size_t>& inputs);
 // 등록 YAML을 생성된 Core profile과 대조하고 허용 issue를 읽는다.
 void loadRegistration(const ConfigNode& registration, const StageParams& stage_params,
-                      const std::map<std::string, std::size_t>& input_registry, const std::vector<std::size_t>& required_inputs,
+                      const std::map<std::string, std::size_t>& input_registry, const std::vector<std::size_t>& argument_inputs,
                       const std::string& validator_name, const std::string& policy_name,
                       std::vector<std::vector<Kind>>& allowed_issues);
 std::uint8_t sectionKey(const std::string& key, const std::string& stage);
@@ -113,7 +113,7 @@ void loadStageConfig(const StageParams& stage_params, const std::map<std::string
     const auto registration = stage_params.registrations.find(profile.name);
     if (registration == stage_params.registrations.end())
       throw std::invalid_argument("registration does not match the build: " + profile.name);
-    loadRegistration(registration->second, stage_params, input_registry, profile.required_inputs, profile.validator_name,
+    loadRegistration(registration->second, stage_params, input_registry, profile.argument_inputs, profile.validator_name,
                      profile.policy_name, profile.allowed_issues);
     core_ids[profile.name] = profile.id;
   }

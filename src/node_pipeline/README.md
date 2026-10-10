@@ -49,7 +49,7 @@ C++ 소스는 위 경로와 `test/` 밖에 두지 않는다. `test/unit/test_*.c
 
 1. 공통 callback은 구독 메시지를 원래 타입 그대로 큐에 저장한다. sample ID와 실제 수신 steady 시각을 별도로 기록한다. ROS 구독 큐는 1이고 조립 큐 용량은 `node.yaml`로 지정한다.
 2. 실행 방식은 `on_input`·`periodic`·`latched`다. `on_input`은 지정 입력의 callback, `periodic`은 timer, `latched`는 시작 시 한 번 `process()`를 실행한다. 나머지 callback은 적재만 한다. callback은 직렬 실행한다.
-3. Assembler는 누락·오래됨·invalid 여부와 무관하게 항상 스냅샷을 반환하며 원본 stamp를 새로 만들지 않는다. 조립 기준은 `on_input`이면 방금 수신한 sample, `periodic`이면 `reference_input`의 최신 샘플이며, `reference_input`이 없으면 전체 입력 중 최신 stamp 샘플이다. 나머지 입력은 기준 stamp에 가장 가까운 샘플을 고르고, 동률이면 수신 ID가 큰 것을 고른다. context stamp는 기준 샘플의 stamp다. `latched`는 기준 샘플이 없어 context stamp가 0이다.
+3. Assembler는 누락·오래됨·invalid 여부와 무관하게 항상 스냅샷을 반환하며 원본 stamp를 새로 만들지 않는다. 조립 기준은 `on_input`이면 방금 수신한 sample, `periodic`이면 `reference_input`의 최신 stamp 샘플이며, `reference_input`이 생략되거나 지정 큐가 비어 있으면 전체 입력 중 최신 stamp 샘플이다. 나머지 입력은 기준 stamp에 가장 가까운 샘플을 고르고, 동률이면 수신 ID가 큰 것을 고른다. context stamp는 기준 샘플의 stamp다. `latched`는 기준 샘플이 없어 context stamp가 0이다.
 4. `readClocks()`로 `health_clocks`를 한 번 읽은 뒤 Stage 루프에 진입한다. 모든 Stage와 그 안의 재검사는 같은 시각을 사용한다. 큐 전체는 최초 Assembler만 읽는다.
 5. Stage마다 `section_core_map`으로 Core를 선택한다. section이 미수신이거나 `frame_id≠map`·`stamp≤0`·미래 stamp이면 UNKNOWN(0)을 사용한다. 매핑된 Core가 없으면 `finish(NoCore, checks, "no compatible core")`로 종료한다.
 6. 검사 회차마다 선택된 Core의 profile로 입력 계약을 확인하고 health를 생성한다. Core 선언 입력의 슬롯이 부족하거나 존재하는 payload의 타입이 다르면 예외를 발생시키며, Failed로 보고하고 해당 처리 회차만 종료한다. 공통 검사층이 Missing·frame·선언 수치 필드의 NaN·Inf·범위·stamp·수신 timeout·skew를 검사한 뒤, 선택된 Core의 Validator가 도메인 고유 검사를 추가한다. timestamp 나이는 ROS 시각, 수신 경과는 steady 시각으로 검사한다. 최초 Stage의 구독 입력이 Missing이면 수신 대기는 노드 시작 시각 기준이다. Health는 input별 모든 오류를 보관한다.
@@ -65,6 +65,9 @@ C++ 소스는 위 경로와 `test/` 밖에 두지 않는다. `test/unit/test_*.c
 ## Core 입출력 계약
 
 첫 Stage의 Core는 구독 메시지를 실제 타입 그대로 받는다. 후속 Stage의 Core는 이전 Stage의 출력을 개별 인자로 받는다.
+모든 Stage의 Core는 예약 입력 `stamp`를 선택적으로 선언해 계산 기준 시각을 `const ros::Time&`로 받는다.
+값은 발행 직전 출력 헤더에 주입하는 `snapshot.context.stamp_ns`와 같으며 Stage가 바뀌어도 유지된다.
+`stamp`는 payload 슬롯·`required_inputs`·health·Policy 대상이 아니다. 선언하지 않은 Core의 인자는 바뀌지 않는다.
 
 ```cpp
 nav_msgs::Odometry process(const sensor_msgs::NavSatFix& gps,
@@ -109,7 +112,7 @@ Pipeline은 선택된 Core의 선언 입력 issue 중 0 이상인 Policy priorit
 execution:
   mode: periodic              # on_input | periodic | latched
   frequency_hz: 50.0          # periodic
-  reference_input: imu        # periodic 조립 기준. 생략하면 전체 입력 중 최신 stamp
+  reference_input: imu        # periodic 조립 기준. 생략하거나 큐가 비면 전체 입력 중 최신 stamp
   # trigger_input: imu        # on_input 계산 시작 입력
   queue_capacity: 8
   max_health_checks: 10
@@ -152,6 +155,7 @@ output:
 | `output` | 발행 토픽과 헤더 `frame_id`. 마지막 Stage의 출력은 하나이며 그 타입이 발행 타입이다. |
 
 첫 Stage의 입력은 `inputs`, 이후 Stage의 입력은 이전 Stage의 `outputs`다.
+`stamp`는 예약 이름이므로 구독 입력과 Stage 출력 이름으로 사용할 수 없다.
 헤더 주입 대상은 발행 메시지 타입별로 공통 실행기가 정한다. `header`가 있으면 `header`, `interfaces/Path`는 각 point의 pose header까지,
 `tf2_msgs/TFMessage`는 각 transform의 header에 context stamp와 `output.frame_id`를 주입한다. header가 없는 메시지에는 주입하지 않는다.
 
@@ -170,7 +174,7 @@ allowed_issues: {}
 | 키 | 내용 |
 | --- | --- |
 | `stage` | 등록할 Stage 이름 |
-| `inputs` | `process()` 인자 순서의 입력 이름. 모두 필수 입력이다. |
+| `inputs` | `process()` 인자 순서의 입력 이름. 예약 입력 `stamp`는 원하는 위치에 선택적으로 선언하며 `const ros::Time&`로 받는다. 나머지는 모두 필수 payload 입력이다. |
 | `validator`·`policy`·`bank` | 선택. 확장점 파일 이름. `policy`를 생략하면 보정하지 않는다. |
 | `allowed_issues` | 선택. `{입력 이름: [issue, ...]}`. Missing은 넣을 수 없다. |
 
@@ -203,7 +207,7 @@ issue 이름은 `Missing`·`InvalidStamp`·`FutureStamp`·`FrameMismatch`·`NaN`
 
 1. 경로 검사: C++ 소스와 설정 파일은 위 구성의 경로에만 둔다. 노드마다 `node.yaml`·`selection.yaml`이 필요하다.
 2. YAML 검사: 스키마·이름·Stage 입출력 대응·확장점 파일 존재를 검사한다. YAML은 C++ 표현식·함수 본문을 받지 않으며, 필드 경로는 식별자와 `.`만 허용한다.
-3. 생성·컴파일 검사: `process()`는 선언 입력 타입의 `const&`를 순서대로 받고 Stage `outputs`의 개수·타입·순서대로 반환한다. 같은 Stage의 후보 Core는 같은 출력 계약을 갖는다. Validator·Policy는 상태 없는 타입이다.
+3. 생성·컴파일 검사: `process()`는 선언 입력 타입의 `const&`를 순서대로 받고 예약 입력 `stamp`의 타입은 `const ros::Time&`다. Stage `outputs`의 개수·타입·순서대로 반환한다. 같은 Stage의 후보 Core는 같은 출력 계약을 갖는다. Validator·Policy는 상태 없는 타입이다.
 4. include 검사: 확장점·라이브러리 파일은 표준 라이브러리, `package.xml`에 선언한 의존성의 헤더, `package.xml`의 `<export><node_pipeline include_roots="…"/></export>`에 선언한 외부 include root, 로그용 `<ros/console.h>`, `node_pipeline/extension.hpp`, 같은 패키지의 `libraries/` 헤더만 include한다. Core는 연결한 Bank 헤더를, 파라미터 로더는 자기 Core 또는 Bank 헤더를 추가로 include할 수 있다. ROS 통신 헤더, `<fstream>`·`<thread>`·`<future>`·`<mutex>`, 다른 실행 패키지의 헤더는 거부한다.
 5. AST 검사: 전역·정적 가변 상태, ROS 통신·시각 조회 API(`ros::NodeHandle`·`ros::Publisher`·`ros::Time::now` 등), 스레드·프로세스·네트워크, 파일 입출력, 다른 Core 타입의 소유·참조·호출, `main` 정의, Pipeline 내부 이름공간 참조를 거부한다. `ROS_*` 로그 매크로가 펼친 위치 캐시 static 변수와 `ros::console`·throttle 시각 조회는 허용한다. AST는 `libclang-dev`의 libclang으로 해석한다.
 6. 테스트 등록: `test/unit/test_*.cpp`를 gtest로, `test/unit/test_*.py`를 nosetests로 등록한다. 테스트에는 `NP_PACKAGE_DIR`이 정의된다.
@@ -385,7 +389,7 @@ sequenceDiagram
                     opt stage_index=0
                         N->>A: markAttempted(snapshot.token)
                     end
-                    N->>D: stage.process(cores, selection.id, snapshot.data, result)
+                    N->>D: stage.process(cores, selection.id, snapshot.data, snapshot.context.stamp_ns, result)
                     alt case CoreId::Primary
                         D->>D: data.hasInputs(required_primary)
                         D-->>D: present
@@ -459,7 +463,7 @@ sequenceDiagram
 | `HealthChecker`·Validator | 공통 검사 후 profile의 Validator를 호출한다. 모든 재검사의 시각은 `health_clocks`다. |
 | `stage.acceptsIssues(id, health)` | 선택된 Core의 선언 입력 issue가 모두 허용 issue인지 판정한다. |
 | `CoreSet` | 생성 코드가 정의하며 Core와 Bank 객체를 생성·소유한다. 실행 순회·검사·선택·계산을 수행하지 않는다. |
-| Core ID별 `case` | 생성 코드가 정의한다. 선언 입력의 존재를 확인하고 실제 개별 인자로 Core를 호출한 뒤 `wrapResult()`로 출력 선언의 `from`을 원본 대응으로 연결한다. |
+| Core ID별 `case` | 생성 코드가 정의한다. 필수 payload 입력의 존재를 확인하고 실제 개별 인자로 Core를 호출한다. `stamp`를 선언한 Core는 `stamp_ns`를 `ros::Time`으로 복원해 선언 위치에 전달한다. `wrapResult()`로 출력 선언의 `from`을 원본 대응으로 연결한다. |
 | `replaceInputs(snapshot, result)` | 반환값을 슬롯으로 감싸 `data.inputs`만 교체하고 나머지 스냅샷 정보를 보존한다. |
 | 각 Core | 슬롯에서 꺼낸 실제 메시지·중간 변수로 계산하며 내부 상태를 유지한다. 입력 검사·헤더 주입·스냅샷 생성·다음 Stage 실행은 수행하지 않는다. |
 | `RosHeaderInjector`·`RosIO` | 전체 루프가 끝난 뒤 최종 메시지에 context로 헤더만 주입하고 한 번 발행한다. 중간값에 헤더를 주입하거나 발행하지 않는다. `reportHealth()`는 DEBUG 로거 `health`에 입력별 issue를 남기고, `report()`는 NoCore·Rejected를 WARN, Failed를 ERROR로 남긴다. |

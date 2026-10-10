@@ -30,7 +30,7 @@
 
 #include "control/libraries/morai_mpc/autoware/mpc_trajectory.h"
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 namespace MPCUtils
 {
@@ -86,7 +86,7 @@ void calcTrajectoryCurvature(MPCTrajectory &traj, int curvature_smoothing_num);
  * @param [in] path input waypoints
  * @param [out] mpc_traj converted traj
  */
-void convertWaypointsToMPCTraj(const control::morai_mpc::autoware::Lane &path, MPCTrajectory &mpc_traj);
+void convertWaypointsToMPCTraj(const control::autoware_ai_mpc::autoware::Lane &path, MPCTrajectory &mpc_traj);
 
 /**
  * @brief convert waypoints to MPCTraj with interpolation
@@ -96,7 +96,7 @@ void convertWaypointsToMPCTraj(const control::morai_mpc::autoware::Lane &path, M
  * @param [in] d_ref_index constant distance of reference index
  * @param [out] ref_traj converted reference trajectory
  */
-void convertWaypointsToMPCTrajWithResample(const control::morai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
+void convertWaypointsToMPCTrajWithResample(const control::autoware_ai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
                                            const std::vector<double> &ref_index, const double &d_ref_index, MPCTrajectory &ref_traj);
 
 /**
@@ -106,7 +106,7 @@ void convertWaypointsToMPCTrajWithResample(const control::morai_mpc::autoware::L
  * @param [in] dl distance of interpolated path
  * @param [out] ref_traj converted reference trajectory
  */
-void convertWaypointsToMPCTrajWithDistanceResample(const control::morai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
+void convertWaypointsToMPCTrajWithDistanceResample(const control::autoware_ai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
                                                    const double &dl, MPCTrajectory &ref_traj);
 
 /**
@@ -116,7 +116,7 @@ void convertWaypointsToMPCTrajWithDistanceResample(const control::morai_mpc::aut
  * @param [in] dt time span of interpolated path
  * @param [out] ref_traj converted reference trajectory
  */
-void convertWaypointsToMPCTrajWithTimeResample(const control::morai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
+void convertWaypointsToMPCTrajWithTimeResample(const control::autoware_ai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
                                                const double &dt, MPCTrajectory &ref_traj_);
 
 /**
@@ -124,7 +124,7 @@ void convertWaypointsToMPCTrajWithTimeResample(const control::morai_mpc::autowar
  * @param [in] path object waypoints
  * @param [out] path_time calculated waypoints time vector
  */
-void calcPathRelativeTime(const control::morai_mpc::autoware::Lane &path, std::vector<double> &path_time);
+void calcPathRelativeTime(const control::autoware_ai_mpc::autoware::Lane &path, std::vector<double> &path_time);
 
 /**
  * @brief calculate nearest pose on MPCTrajectory
@@ -156,4 +156,4 @@ bool calcNearestPoseInterp(const MPCTrajectory &traj, const geometry_msgs::Pose 
 
 }; // namespace MPCUtils
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

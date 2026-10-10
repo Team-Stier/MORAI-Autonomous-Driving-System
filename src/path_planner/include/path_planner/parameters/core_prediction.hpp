@@ -4,12 +4,12 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace stier {
+namespace path_planner {
 inline PredictionParameters loadCorePredictionParameters(const node_pipeline::ParamReader& params) {
   PredictionParameters parameters;
   if (params.has("step_sec")) parameters.step_sec = params.number("step_sec");
-  if (!std::isfinite(parameters.step_sec) || parameters.step_sec <= 0.0 || parameters.step_sec > 2.0)
+  if (parameters.step_sec != 0.5)
     throw std::invalid_argument("invalid prediction parameters");
   return parameters;
 }
-}  // namespace stier
+}  // namespace path_planner

@@ -4,7 +4,7 @@
 #include <geometry_msgs/TwistStamped.h>
 #include <vector>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 // Internal reference geometry for the numerical helpers; no ROS message or I/O.
 struct Waypoint {
@@ -16,4 +16,4 @@ struct Lane {
   std::vector<Waypoint> waypoints;
 };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

@@ -27,7 +27,7 @@
 #include <tf2/utils.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
-namespace control { namespace morai_mpc { namespace amathutils
+namespace control { namespace autoware_ai_mpc { namespace amathutils
 {
 
 #define G_MPSS 9.80665  // m/s^2
@@ -111,6 +111,6 @@ double calcPosesAngleDiffRaw(const geometry_msgs::Pose &p_from, const geometry_m
 double calcPosesAngleDiffDeg(const geometry_msgs::Pose &_p_from, const geometry_msgs::Pose &_p_to);
 double calcPosesAngleDiffRad(const geometry_msgs::Pose &_p_from, const geometry_msgs::Pose &_p_to);
 
-}}}  // namespace control::morai_mpc::amathutils
+}}}  // namespace control::autoware_ai_mpc::amathutils
 
 #endif  // CONTROL_MORAI_MPC_VENDOR_AMATHUTILS_HPP

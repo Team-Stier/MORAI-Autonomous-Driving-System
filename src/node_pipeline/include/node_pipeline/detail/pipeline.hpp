@@ -115,7 +115,7 @@ template<class Buffer, class Assembler, class Stages, class CoreSet, class Heade
       }
       if (stage_index == 0) assembler.markAttempted(snapshot.token);
       CoreResult result;
-      if (!stage.process(cores, selection.id, snapshot.data, result)) {
+      if (!stage.process(cores, selection.id, snapshot.data, snapshot.context.stamp_ns, result)) {
         report = finish(ProcessStatus::NoCore, checks, "required core input missing");
         return false;
       }

@@ -18,7 +18,7 @@
 #include <vector>
 #include <iostream>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 /** 
  * @class trajectory class for mpc follower
@@ -53,4 +53,4 @@ public:
   unsigned int size() const;
 };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

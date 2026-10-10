@@ -55,6 +55,27 @@ class ContractCheckTest(unittest.TestCase):
     def test_accepts_official_extension_files(self):
         self.assertEqual("", self.errors())
 
+    def test_excludes_external_library_internals(self):
+        write(self.package, "include/demo/libraries/vendor.hpp", """
+            #pragma once
+            #include <fstream>
+            namespace third_party {
+            inline int read() {
+              static int calls = 0;
+              std::ifstream file("/tmp/x");
+              return ++calls;
+            }
+            }
+            """)
+        write(self.package, "src/libraries/vendor.cpp", """
+            #include <demo/libraries/vendor.hpp>
+            namespace third_party { int counter = 0; }
+            """)
+        write(self.package, "include/demo/cores/good.hpp", GOOD_CORE.replace(
+            "#include <vector>", "#include <vector>\n#include <demo/libraries/vendor.hpp>").replace(
+            "return static_cast<int>(history_.size());", "return third_party::read();"))
+        self.assertEqual("", self.errors())
+
     def test_rejects_sources_and_configuration_outside_official_paths(self):
         write(self.package, "src/ros_node.cpp", "int main() { return 0; }\n")
         write(self.package, "config/demo.yaml", "execution_mode: periodic\n")

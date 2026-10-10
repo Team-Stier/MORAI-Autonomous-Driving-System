@@ -4,7 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace stier {
+namespace path_planner {
 inline PathParameters loadCorePathPlannerParameters(const node_pipeline::ParamReader& params) {
   PathParameters p;
   if (params.has("vehicle/front_m")) p.vehicle.front_m = params.number("vehicle/front_m");
@@ -81,4 +81,4 @@ inline PathParameters loadCorePathPlannerParameters(const node_pipeline::ParamRe
     throw std::invalid_argument("unbounded integrated planner discretization");
   return p;
 }
-}  // namespace stier
+}  // namespace path_planner

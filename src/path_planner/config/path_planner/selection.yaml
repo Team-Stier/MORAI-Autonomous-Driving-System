@@ -40,23 +40,23 @@ global:
   health_core_map: []
 prediction:
   section_core_map:
-    "0": prediction_pass_through.hpp
-    "1": prediction_pass_through.hpp
-    "2": prediction_pass_through.hpp
-    "3": prediction_pass_through.hpp
-    "4": prediction_pass_through.hpp
-    "5": prediction_pass_through.hpp
-    "6": prediction_pass_through.hpp
-    "7": prediction_pass_through.hpp
-    "8": prediction_pass_through.hpp
-    "9": prediction_pass_through.hpp
-    "10": prediction_pass_through.hpp
-    "11": prediction_pass_through.hpp
-    "12": prediction_pass_through.hpp
-    "13": prediction_pass_through.hpp
-    "14": prediction_pass_through.hpp
-    "15": prediction_pass_through.hpp
-    "16": prediction_pass_through.hpp
+    "0": core_prediction.hpp
+    "1": core_prediction.hpp
+    "2": core_prediction.hpp
+    "3": core_prediction.hpp
+    "4": core_prediction.hpp
+    "5": core_prediction.hpp
+    "6": core_prediction.hpp
+    "7": core_prediction.hpp
+    "8": core_prediction.hpp
+    "9": npc_history_prediction.hpp
+    "10": core_prediction.hpp
+    "11": core_prediction.hpp
+    "12": core_prediction.hpp
+    "13": core_prediction.hpp
+    "14": core_prediction.hpp
+    "15": core_prediction.hpp
+    "16": core_prediction.hpp
   health_core_map: []
 local:
   section_core_map:

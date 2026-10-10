@@ -1,0 +1,4 @@
+stage: level
+inputs: [cloud, tf_static]
+validator: level_inputs.hpp
+policy: remove_invalid.hpp

@@ -1,4 +1,5 @@
 #pragma once
+#include <sensor_msgs/Imu.h>
 
 #include <algorithm>
 #include <array>
@@ -6,6 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <vector>
+#include <tuple>
+#include <Eigen/Geometry>
+#include <path_planner/libraries/types.hpp>
 
 #ifndef STIER_PLANNING_COMMON_TYPES_HPP
 #define STIER_PLANNING_COMMON_TYPES_HPP
@@ -57,7 +61,7 @@ struct TrackedObject {
   double stamp_sec = 0.0;  // State epoch, never receipt wall-clock time.
   double length_m = 0.0;
   double width_m = 0.0;
-  // Vehicle turn rate is supplied upstream; no estimation in this core.
+  // Native motion-model input; the ROS adapter derives it from velocity/acceleration.
   bool turn_rate_available = false;
   double turn_rate_radps = 0.0;
   // Engineering error bounds supplied by caller, NOT calibrated confidence.
@@ -69,6 +73,19 @@ struct TrackedObject {
 struct PredictionParameters {
   double step_sec = 0.5;
 };
+
+}  // namespace stier
+
+namespace path_planner {
+using stier::Vec2;
+using stier::Pose2;
+using stier::ObjectKind;
+using stier::MotionModel;
+using stier::PredictedObject;
+using stier::Predictions;
+using stier::TrackedObject;
+using stier::PredictionParameters;
+using stier::kPredictionSteps;
 
 // Motion-model propagation only; no tracker, velocity estimator, map snapping,
 // ROS, filesystem, wall-clock dependence, or global-path dependence.
@@ -101,9 +118,82 @@ class CorePrediction {
   };
 
  public:
+  using Result = std::tuple<nav_msgs::Odometry, interfaces::CompetitionVehicleStatus,
+                            interfaces::Objects, tf2_msgs::TFMessage, sensor_msgs::Imu, Route, PredictedObjects>;
+
   explicit CorePrediction(PredictionParameters parameters = {}) : parameters_(parameters) {}
 
-  Predictions process(const std::vector<TrackedObject>& objects_map, double reference_stamp_sec) const {
+  Result process(const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus& competition,
+                 const interfaces::Objects& objects, const tf2_msgs::TFMessage& tf,
+                 const sensor_msgs::Imu& imu, const Route& route) const {
+    const auto& q = ego.pose.pose.orientation;
+    const Eigen::Quaterniond map_from_base(q.w, q.x, q.y, q.z);
+    const auto& position = ego.pose.pose.position;
+    const Eigen::Vector3d origin(position.x, position.y, position.z);
+    std::vector<TrackedObject> tracked;
+    tracked.reserve(objects.objects.size());
+    for (const auto& object : objects.objects) {
+      const Eigen::Vector3d point = origin + map_from_base *
+        Eigen::Vector3d(object.position.x, object.position.y, object.position.z);
+      const Eigen::Vector3d velocity = map_from_base *
+        Eigen::Vector3d(object.velocity.x, object.velocity.y, object.velocity.z);
+      const Eigen::Vector3d acceleration = map_from_base *
+        Eigen::Vector3d(object.acceleration.x, object.acceleration.y, object.acceleration.z);
+      const auto& bbox_q = object.bbox_pose.orientation;
+      const Eigen::Quaterniond orientation = map_from_base *
+        Eigen::Quaterniond(bbox_q.w, bbox_q.x, bbox_q.y, bbox_q.z);
+      TrackedObject input;
+      input.id = object.id;
+      input.kind = object.label == "vehicle" ? ObjectKind::Vehicle : ObjectKind::Unknown;
+      input.pose.position = {point.x(), point.y()};
+      input.pose.yaw_rad = std::atan2(2 * (orientation.w()*orientation.z() + orientation.x()*orientation.y()),
+                                    1 - 2 * (orientation.y()*orientation.y() + orientation.z()*orientation.z()));
+      input.velocity_mps = {velocity.x(), velocity.y()};
+      input.stamp_sec = objects.header.stamp.toSec();
+      input.length_m = object.bbox_size.x;
+      input.width_m = object.bbox_size.y;
+      const double speed_squared = velocity.x()*velocity.x() + velocity.y()*velocity.y();
+      input.turn_rate_radps = speed_squared == 0 ? 0 :
+        (velocity.x()*acceleration.y() - velocity.y()*acceleration.x()) / speed_squared;
+      tracked.push_back(input);
+    }
+    const auto calculated = predict(tracked, objects.header.stamp.toSec());
+    PredictedObjects predictions;
+    predictions.fill(objects);
+    for (std::size_t k = 0; k < predictions.size(); ++k) {
+      const double dt = parameters_.step_sec * (k + 1);
+      for (std::size_t i = 0; i < objects.objects.size(); ++i) {
+        const auto& input = objects.objects[i];
+        const auto& predicted = calculated.future[k][i];
+        const Eigen::Vector3d source = origin + map_from_base *
+          Eigen::Vector3d(input.position.x, input.position.y, input.position.z);
+        const Eigen::Vector3d velocity = map_from_base *
+          Eigen::Vector3d(input.velocity.x, input.velocity.y, input.velocity.z);
+        const Eigen::Vector3d point = map_from_base.conjugate() *
+          (Eigen::Vector3d(predicted.pose.position.x, predicted.pose.position.y,
+                          source.z() + velocity.z()*dt) - origin);
+        const Eigen::Vector3d predicted_velocity = map_from_base.conjugate() *
+          Eigen::Vector3d(predicted.velocity_mps.x, predicted.velocity_mps.y, velocity.z());
+        auto& output = predictions[k].objects[i];
+        output.position.x = point.x(); output.position.y = point.y(); output.position.z = point.z();
+        output.velocity.x = predicted_velocity.x(); output.velocity.y = predicted_velocity.y();
+        output.velocity.z = predicted_velocity.z();
+        output.bbox_pose.position = output.position;
+        const auto& bbox_q = input.bbox_pose.orientation;
+        const Eigen::Quaterniond orientation = map_from_base.conjugate() *
+          Eigen::Quaterniond(Eigen::AngleAxisd((tracked[i].kind == ObjectKind::Vehicle ?
+                                               tracked[i].turn_rate_radps : 0)*dt,
+                                              Eigen::Vector3d::UnitZ())) * map_from_base *
+          Eigen::Quaterniond(bbox_q.w, bbox_q.x, bbox_q.y, bbox_q.z);
+        output.bbox_pose.orientation.x = orientation.x(); output.bbox_pose.orientation.y = orientation.y();
+        output.bbox_pose.orientation.z = orientation.z(); output.bbox_pose.orientation.w = orientation.w();
+      }
+    }
+    return std::make_tuple(ego, competition, objects, tf, imu, route, predictions);
+  }
+
+ private:
+  Predictions predict(const std::vector<TrackedObject>& objects_map, double reference_stamp_sec) const {
     Predictions result;
     result.reference_stamp_sec = reference_stamp_sec;
     result.step_sec = parameters_.step_sec;
@@ -162,4 +252,4 @@ class CorePrediction {
     return p;
   }
 };
-}  // namespace stier
+}  // namespace path_planner

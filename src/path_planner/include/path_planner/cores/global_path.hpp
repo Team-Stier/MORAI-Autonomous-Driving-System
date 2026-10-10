@@ -1,4 +1,5 @@
 #pragma once
+#include <sensor_msgs/Imu.h>
 #include <path_planner/banks/shared_map.hpp>
 #include <path_planner/libraries/types.hpp>
 #include <nav_msgs/Path.h>
@@ -24,8 +25,11 @@ class GlobalPath {
         graph_(lanelet::routing::RoutingGraph::build(*map_, *rules_)),
         visualizer_("global_path") {}
 
-  std::tuple<Route, nav_msgs::Odometry, interfaces::Objects> process(
-      const nav_msgs::Odometry& ego, const interfaces::Objects& objects, const Checkpoints& checkpoints) {
+  std::tuple<nav_msgs::Odometry, interfaces::CompetitionVehicleStatus, interfaces::Objects,
+             tf2_msgs::TFMessage, sensor_msgs::Imu, Route> process(
+      const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus& competition,
+      const interfaces::Objects& objects, const tf2_msgs::TFMessage& tf,
+      const sensor_msgs::Imu& imu, const Checkpoints& checkpoints) {
     const auto& position = ego.pose.pose.position;
     const auto& q = ego.pose.pose.orientation;
     const double yaw_rad = std::atan2(2 * (q.w * q.z + q.x * q.y),
@@ -46,10 +50,18 @@ class GlobalPath {
       }
     }
 
+    auto route = route_;
     nav_msgs::Path path;
     path.header = ego.header;
-    if (route_) {
-      for (const auto& lane : *route_) {
+    if (route) {
+      const auto predecessors = graph_->previous(start, false);
+      if (!predecessors.empty()) {
+        // shortcut: use the first predecessor at merges; track the incoming lane when ambiguity matters.
+        lanelet::ConstLanelets lanes{predecessors.front()};
+        lanes.insert(lanes.end(), route->begin(), route->end());
+        route = lanelet::routing::LaneletPath(std::move(lanes));
+      }
+      for (const auto& lane : *route) {
         for (const auto& point : lane.centerline3d()) {
           geometry_msgs::PoseStamped pose;
           pose.header = path.header;
@@ -62,7 +74,7 @@ class GlobalPath {
       }
     }
     visualizer_.publish(path);
-    return std::make_tuple(route_, ego, objects);
+    return std::make_tuple(ego, competition, objects, tf, imu, std::move(route));
   }
 
  private:

@@ -1,30 +1,27 @@
 #pragma once
+#include <interfaces/CompetitionVehicleStatus.h>
 #include <interfaces/Path.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+#include <interfaces/TrafficLight.h>
 #include <tf2_msgs/TFMessage.h>
-#include <algorithm>
+#include <cmath>
+#include <tuple>
+#include <utility>
 
 namespace velocity_planner {
 class PlainVelocity100 {
  public:
-  interfaces::Path process(const interfaces::Path& path, const tf2_msgs::TFMessage& tf) {
-    const auto match = std::find_if(tf.transforms.begin(), tf.transforms.end(),
-      [](const geometry_msgs::TransformStamped& transform) {
-        return transform.header.frame_id == "map" && transform.child_frame_id == "base_link";
-      });
-    tf2::Transform map_from_base;
-    tf2::fromMsg(tf.transforms.at(match - tf.transforms.begin()).transform, map_from_base);
-    const auto base_from_map = map_from_base.inverse();
-    interfaces::Path message;
-    message.points = path.points;
+  std::tuple<interfaces::Path, interfaces::TrafficLight,
+             interfaces::CompetitionVehicleStatus, tf2_msgs::TFMessage> process(
+      const interfaces::Path& path, const interfaces::TrafficLight& light,
+      const interfaces::CompetitionVehicleStatus& competition, const tf2_msgs::TFMessage& tf) {
+    interfaces::Path message = path;
     for (auto& point : message.points) {
-      tf2::Transform pose;
-      tf2::fromMsg(point.pose.pose, pose);
-      tf2::toMsg(base_from_map * pose, point.pose.pose);
-      point.velocity = 100.0 / 3.6;
-      point.acceleration = 0.0;
+      if (std::isnan(point.velocity)) {
+        point.velocity = 100.0 / 3.6;
+        point.acceleration = 0.0;
+      }
     }
-    return message;
+    return {std::move(message), light, competition, tf};
   }
 };
 }  // namespace velocity_planner

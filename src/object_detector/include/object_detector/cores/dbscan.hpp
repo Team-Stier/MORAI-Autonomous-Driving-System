@@ -1,5 +1,7 @@
 #pragma once
 #include <interfaces/Objects.h>
+#include <interfaces/CompetitionVehicleStatus.h>
+#include <tuple>
 #include <sensor_msgs/PointCloud2.h>
 #include <algorithm>
 #include <cmath>
@@ -15,12 +17,6 @@
 namespace object_detector {
 struct DbscanParameters {
   // Synthetic starting values; competition tuning is supplied separately.
-  double roi_x_min = 0.0;
-  double roi_x_max = 20.0;
-  double roi_y_min = -5.0;
-  double roi_y_max = 5.0;
-  double roi_z_min = 0.2;
-  double roi_z_max = 2.0;
   double voxel_leaf_size = 0.04;
   double dbscan_eps = 0.18;
   int dbscan_min_points = 4;
@@ -191,36 +187,26 @@ class Dbscan {
  public:
   explicit Dbscan(DbscanParameters parameters) : parameters_(parameters) {}
 
-  interfaces::Objects process(const sensor_msgs::PointCloud2& cloud) {
-    Cloud xyz;
-    pcl::fromROSMsg(cloud, xyz);
-    const auto filtered = downsample(cropRoi(xyz));
+  std::tuple<interfaces::Objects, interfaces::CompetitionVehicleStatus> process(
+      const sensor_msgs::PointCloud2& cloud, const interfaces::CompetitionVehicleStatus& competition) {
+    Cloud::Ptr xyz(new Cloud);
+    pcl::fromROSMsg(cloud, *xyz);
+    const auto filtered = downsample(xyz);
     interfaces::Objects output;
-    if (filtered->empty()) return output;
+    if (filtered->empty()) return std::make_tuple(std::move(output), competition);
 
     for (const auto& cluster : findClusters(filtered)) {
       const auto size = static_cast<int>(cluster.size());
       if (size >= parameters_.min_cluster_size && size <= parameters_.max_cluster_size)
         output.objects.push_back(bbox::makeObb(*filtered, cluster));
     }
-    return output;
+    return std::make_tuple(std::move(output), competition);
   }
 
  private:
   using Cloud = pcl::PointCloud<pcl::PointXYZ>;
   using Tree = pcl::KdTreeFLANN<pcl::PointXYZ>;
   enum class PointState { Unvisited, Noise, Assigned };
-
-  Cloud::Ptr cropRoi(const Cloud& cloud) const {
-    Cloud::Ptr cropped(new Cloud);
-    for (const auto& point : cloud) {
-      if (point.x >= parameters_.roi_x_min && point.x <= parameters_.roi_x_max &&
-          point.y >= parameters_.roi_y_min && point.y <= parameters_.roi_y_max &&
-          point.z >= parameters_.roi_z_min && point.z <= parameters_.roi_z_max)
-        cropped->push_back(point);
-    }
-    return cropped;
-  }
 
   Cloud::Ptr downsample(const Cloud::Ptr& cloud) const {
     Cloud::Ptr filtered(new Cloud);

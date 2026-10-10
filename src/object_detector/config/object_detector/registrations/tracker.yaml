@@ -1,0 +1,2 @@
+stage: track
+inputs: [objects, competition]

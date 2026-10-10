@@ -16,7 +16,7 @@
 
 #include "control/libraries/morai_mpc/autoware/lowpass_filter.h"
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 Butterworth2dFilter::Butterworth2dFilter(double dt, double f_cutoff_hz)
 {
@@ -141,4 +141,4 @@ bool MoveAverageFilter::filt_vector(const int num, std::vector<double> &u)
   u = filtered_u;
   return true;
 }
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

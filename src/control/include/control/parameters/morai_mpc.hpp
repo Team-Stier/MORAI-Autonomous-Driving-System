@@ -5,7 +5,7 @@
 #include <initializer_list>
 #include <stdexcept>
 
-namespace control { namespace morai_mpc {
+namespace control { namespace autoware_ai_mpc {
 namespace parameter_detail {
 inline bool finitePositive(double value) { return std::isfinite(value) && value > 0.0; }
 inline void positive(std::initializer_list<double> values) {
@@ -67,45 +67,45 @@ inline void validateParameters(const Parameters& parameters) {
                             config.solver == "coordinate_search";
   if (!solver_valid || config.horizon_steps < 2 ||
       config.optimizer_iterations <= 0 || config.line_search_steps <= 0 ||
-      !morai_mpc::parameter_detail::finitePositive(config.prediction_dt_sec) ||
-      !morai_mpc::parameter_detail::finitePositive(config.gradient_epsilon) ||
-      !morai_mpc::parameter_detail::finitePositive(config.gradient_step) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.prediction_dt_sec) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.gradient_epsilon) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.gradient_step) ||
       !std::isfinite(config.gradient_tolerance) ||
       config.gradient_tolerance < 0.0 ||
-      !morai_mpc::parameter_detail::finitePositive(config.coordinate_initial_step) ||
-      !morai_mpc::parameter_detail::finitePositive(config.coordinate_minimum_step) ||
-      !morai_mpc::parameter_detail::finitePositive(config.command_step_decay) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.coordinate_initial_step) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.coordinate_minimum_step) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.command_step_decay) ||
       config.command_step_decay >= 1.0 ||
-      !morai_mpc::parameter_detail::finitePositive(config.maximum_accel_command) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.maximum_accel_command) ||
       config.maximum_accel_command > 1.0 ||
-      !morai_mpc::parameter_detail::finitePositive(config.maximum_brake_command) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.maximum_brake_command) ||
       config.maximum_brake_command > 1.0 ||
-      !morai_mpc::parameter_detail::finitePositive(config.command_rate_limit_per_sec) ||
-      !morai_mpc::parameter_detail::finitePositive(config.acceleration_gain_mps2) ||
-      !morai_mpc::parameter_detail::finitePositive(config.braking_gain_mps2) ||
-      !morai_mpc::parameter_detail::finitePositive(config.actuator_time_constant_sec) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.command_rate_limit_per_sec) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.acceleration_gain_mps2) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.braking_gain_mps2) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.actuator_time_constant_sec) ||
       !std::isfinite(config.constant_drag_mps2) || config.constant_drag_mps2 < 0.0 ||
       !std::isfinite(config.quadratic_drag_per_m) || config.quadratic_drag_per_m < 0.0 ||
-      !morai_mpc::parameter_detail::finitePositive(config.maximum_acceleration_mps2) ||
-      !morai_mpc::parameter_detail::finitePositive(config.maximum_deceleration_mps2) ||
-      !morai_mpc::parameter_detail::finitePositive(config.maximum_jerk_mps3) ||
-      !morai_mpc::parameter_detail::finitePositive(config.acceleration_estimate_filter_time_constant_sec) ||
-      !morai_mpc::parameter_detail::finitePositive(config.speed_weight) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.maximum_acceleration_mps2) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.maximum_deceleration_mps2) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.maximum_jerk_mps3) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.acceleration_estimate_filter_time_constant_sec) ||
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.speed_weight) ||
       !std::isfinite(config.acceleration_weight) ||
       config.acceleration_weight < 0.0 ||
       !std::isfinite(config.jerk_weight) || config.jerk_weight < 0.0 ||
       !std::isfinite(config.command_weight) || config.command_weight < 0.0 ||
       !std::isfinite(config.command_rate_weight) ||
       config.command_rate_weight < 0.0 ||
-      !morai_mpc::parameter_detail::finitePositive(config.terminal_speed_weight)) {
+      !autoware_ai_mpc::parameter_detail::finitePositive(config.terminal_speed_weight)) {
     throw std::invalid_argument("invalid longitudinal MPC configuration");
   }
 }
-}}  // namespace control::morai_mpc
+}}  // namespace control::autoware_ai_mpc
 
 namespace control {
-inline morai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::ParamReader& params) {
-  using morai_mpc::Parameters;
+inline autoware_ai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::ParamReader& params) {
+  using autoware_ai_mpc::Parameters;
   Parameters p;
   p.minimum_control_dt_sec = params.number("minimum_control_dt_sec");
   p.maximum_control_dt_sec = params.number("maximum_control_dt_sec");
@@ -176,7 +176,7 @@ inline morai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::ParamRe
   p.steering_prediction.delay_sec = params.number("steering_prediction/delay_sec");
   p.steering_prediction.time_constant_sec = params.number("steering_prediction/time_constant_sec");
   p.steering_prediction.gain = params.number("steering_prediction/gain");
-  morai_mpc::validateParameters(p);
+  autoware_ai_mpc::validateParameters(p);
   return p;
 }
 }

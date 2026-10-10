@@ -54,7 +54,7 @@
 #include <eigen3/Eigen/LU>
 #include "control/libraries/morai_mpc/autoware/vehicle_model/vehicle_model_interface.h"
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 /** 
  * @class vehicle model class of bicycle kinematics
@@ -100,4 +100,4 @@ private:
   double steer_gain_; // calibrated command -> effective road-wheel angle
 };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

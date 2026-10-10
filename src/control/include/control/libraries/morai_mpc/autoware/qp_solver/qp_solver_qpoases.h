@@ -32,7 +32,7 @@
 
 #include "control/libraries/morai_mpc/autoware/qp_solver/qp_solver_interface.h"
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 class QPSolverQpoasesHotstart : public QPSolverInterface
 {
@@ -72,4 +72,4 @@ public:
              const Eigen::MatrixXd& ubA, Eigen::VectorXd& U) override;
 };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

@@ -16,7 +16,7 @@
 
 #include <control/libraries/morai_mpc/vendor/amathutils/amathutils.hpp>
 
-namespace control { namespace morai_mpc { namespace amathutils
+namespace control { namespace autoware_ai_mpc { namespace amathutils
 {
 geometry_msgs::Point getNearPtOnLine(const geometry_msgs::Point &_p, const geometry_msgs::Point &_a,
                                      const geometry_msgs::Point &_b)
@@ -215,4 +215,4 @@ bool getIntersect(double x1, double y1, double x2, double y2, double x3, double 
     }
 }
 
-}}}  // namespace control::morai_mpc::amathutils
+}}}  // namespace control::autoware_ai_mpc::amathutils

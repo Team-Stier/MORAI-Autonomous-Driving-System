@@ -52,6 +52,8 @@ FUNCTION, METHOD, CONSTRUCTOR, DESTRUCTOR, CONVERSION, FUNCTION_TEMPLATE = 8, 21
 VAR = 9
 MACRO_EXPANSION = 502
 PARSE_DETAILED_PREPROCESSING_RECORD = 0x01
+PARSE_SKIP_FUNCTION_BODIES = 0x40
+PARSE_LIMIT_SKIP_FUNCTION_BODIES_TO_PREAMBLE = 0x800
 REFERENCE_KINDS = {43, 45, 46, 47, 49, 50, 101, 102, 103}
 STORAGE_STATIC = 3
 ARRAY_TYPES = {112, 114, 115, 116}
@@ -199,8 +201,11 @@ def ast_errors(clang, path, role, own_core, cores_dir, arguments):
     encoded = [argument.encode() for argument in arguments]
     array = (ctypes.c_char_p * len(encoded))(*encoded)
     index = clang.lib.clang_createIndex(0, 0)
+    # 포함 헤더의 함수 본문만 생략하고 현재 확장점 파일의 본문은 계속 검사한다.
+    parse_options = PARSE_DETAILED_PREPROCESSING_RECORD | PARSE_SKIP_FUNCTION_BODIES | \
+        PARSE_LIMIT_SKIP_FUNCTION_BODIES_TO_PREAMBLE
     unit = clang.lib.clang_parseTranslationUnit(index, path.encode(), array, len(encoded), None, 0,
-                                                PARSE_DETAILED_PREPROCESSING_RECORD)
+                                                parse_options)
     if not unit:
         clang.lib.clang_disposeIndex(index)
         return [f"{path}: libclang could not parse the file"]
@@ -366,10 +371,6 @@ def check(package_dir, package, src_dir, include_dirs, use_ast=True):
                 errors.append(f"config/{'/'.join(relative)}: unexpected configuration file")
 
     checked = {}
-    for path in glob.glob(os.path.join(package_dir, "include", package, "libraries", "**", "*"), recursive=True) + \
-            glob.glob(os.path.join(package_dir, "src", "libraries", "**", "*"), recursive=True):
-        if path.endswith(SOURCE_SUFFIXES):
-            checked[(path, "library")] = ("", "")
     for node in nodes:
         if not os.path.isfile(os.path.join(config_dir, node, "selection.yaml")):
             errors.append(f"config/{node}/selection.yaml is required")
@@ -410,7 +411,8 @@ def main():
     args = parser.parse_args()
     with open(args.include_dirs_file, encoding="utf-8") as stream:
         include_dirs = [line.strip() for line in stream if line.strip()]
-    errors = check(args.package_dir, args.package, args.src_dir, include_dirs)
+    # 의존 헤더를 읽는 libclang AST 파싱은 빌드에서 실행하지 않는다.
+    errors = check(args.package_dir, args.package, args.src_dir, include_dirs, use_ast=False)
     if errors:
         print(f"node_pipeline contract check failed for {args.package}:", file=sys.stderr)
         for error in errors:

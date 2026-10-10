@@ -1,0 +1,3 @@
+stage: prediction
+inputs: [ego, competition, objects, tf, imu, route]
+policy: remove_invalid.hpp

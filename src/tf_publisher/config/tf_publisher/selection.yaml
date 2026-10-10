@@ -1,4 +1,20 @@
 transform:
   section_core_map:
     "0": ego_tf.hpp
+    "1": ego_tf.hpp
+    "2": ego_tf.hpp
+    "3": ego_tf.hpp
+    "4": ego_tf.hpp
+    "5": ego_tf.hpp
+    "6": ego_tf.hpp
+    "7": ego_tf.hpp
+    "8": ego_tf.hpp
+    "9": ego_tf.hpp
+    "10": ego_tf.hpp
+    "11": ego_tf.hpp
+    "12": ego_tf.hpp
+    "13": ego_tf.hpp
+    "14": ego_tf.hpp
+    "15": ego_tf.hpp
+    "16": ego_tf.hpp
   health_core_map: []

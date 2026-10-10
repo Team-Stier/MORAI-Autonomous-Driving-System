@@ -1,4 +1,5 @@
 #include <path_planner/cores/prediction_core.hpp>
+#include <path_planner/cores/core_prediction.hpp>
 #include <gtest/gtest.h>
 #include <cmath>
 
@@ -35,7 +36,8 @@ TEST(PredictionCore, FollowsCounterclockwiseCircleAtAllTenHorizons) {
   auto objects = observation();
   objects.objects.front().bbox_pose.orientation.x = std::sqrt(0.5);
   objects.objects.front().bbox_pose.orientation.w = std::sqrt(0.5);
-  const auto predictions = pp::PredictionCore{}.process(objects, pp::Route{});
+  const auto predictions = std::get<6>(pp::PredictionCore{}.process(nav_msgs::Odometry{},
+      interfaces::CompetitionVehicleStatus{}, objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
   ASSERT_EQ(predictions.size(), 10u);
   for (const auto& sample : predictions) {
     ASSERT_EQ(sample.objects.size(), 1u);
@@ -71,7 +73,8 @@ TEST(PredictionCore, FollowsClockwiseCircleWithObliqueVelocityAndIgnoresTangenti
   // omega=-pi/5 plus an acceleration parallel to velocity.
   object.acceleration.x = 0.6 * kPi + 8.0;
   object.acceleration.y = -0.8 * kPi + 6.0;
-  const auto predictions = pp::PredictionCore{}.process(objects, pp::Route{});
+  const auto predictions = std::get<6>(pp::PredictionCore{}.process(nav_msgs::Odometry{},
+      interfaces::CompetitionVehicleStatus{}, objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
   const auto& quarter = predictions[4].objects.front();
   EXPECT_NEAR(quarter.position.x, 3.0 + 35.0 / kPi, 1e-10);
   EXPECT_NEAR(quarter.position.y, -4.0 - 5.0 / kPi, 1e-10);
@@ -100,7 +103,8 @@ TEST(PredictionCore, IntegratesStraightStationaryAndAlmostStraightMotion) {
   tiny_turn.acceleration.y = 4e-13;
   objects.objects.push_back(stationary);
   objects.objects.push_back(tiny_turn);
-  const auto predictions = pp::PredictionCore{}.process(objects, pp::Route{});
+  const auto predictions = std::get<6>(pp::PredictionCore{}.process(nav_msgs::Odometry{},
+      interfaces::CompetitionVehicleStatus{}, objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
   const auto& last = predictions.back().objects;
   EXPECT_NEAR(last[0].position.x, 23.0, 1e-10);
   EXPECT_NEAR(last[0].position.y, 11.0, 1e-10);
@@ -120,7 +124,8 @@ TEST(PredictionCore, PreservesObservationHeaderAccelerationAndObjectMetadata) {
     objects.objects.back().id += i;
   }
   const auto original = objects;
-  auto predictions = pp::PredictionCore{}.process(objects, pp::Route{});
+  auto predictions = std::get<6>(pp::PredictionCore{}.process(nav_msgs::Odometry{},
+      interfaces::CompetitionVehicleStatus{}, objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
   EXPECT_EQ(objects, original);
   for (const auto& sample : predictions) {
     EXPECT_EQ(sample.header, original.header);
@@ -144,6 +149,46 @@ TEST(PredictionCore, PreservesObservationHeaderAccelerationAndObjectMetadata) {
 TEST(PredictionCore, KeepsAllTenListsEmptyWhenNoObjectsAreObserved) {
   auto objects = observation();
   objects.objects.clear();
-  const auto predictions = pp::PredictionCore{}.process(objects, pp::Route{});
+  const auto predictions = std::get<6>(pp::PredictionCore{}.process(nav_msgs::Odometry{},
+      interfaces::CompetitionVehicleStatus{}, objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
   for (const auto& sample : predictions) EXPECT_EQ(sample, objects);
+}
+
+TEST(CorePrediction, ConvertsMapMotionBackToObservationFrameAndPassesInputsThrough) {
+  const auto objects = observation();
+  nav_msgs::Odometry ego;
+  ego.header.stamp.fromSec(123.25);
+  ego.pose.pose.position.x = 100.0;
+  ego.pose.pose.position.y = -200.0;
+  ego.pose.pose.orientation.z = std::sin(0.4);
+  ego.pose.pose.orientation.w = std::cos(0.4);
+  interfaces::CompetitionVehicleStatus competition;
+  competition.gear = 4;
+  tf2_msgs::TFMessage tf;
+  tf.transforms.resize(1);
+  tf.transforms.front().child_frame_id = "base_link";
+  sensor_msgs::Imu imu;
+  imu.linear_acceleration.x = 0.3;
+  const pp::Route route;
+  const auto result = pp::CorePrediction{}.process(ego, competition, objects, tf, imu, route);
+  EXPECT_EQ(std::get<0>(result), ego);
+  EXPECT_EQ(std::get<1>(result), competition);
+  EXPECT_EQ(std::get<2>(result), objects);
+  EXPECT_EQ(std::get<3>(result), tf);
+  EXPECT_EQ(std::get<4>(result), imu);
+  EXPECT_EQ(std::get<5>(result), route);
+  const auto expected = std::get<6>(pp::PredictionCore{}.process(ego, competition, objects, tf, imu, route));
+  const auto& predicted = std::get<6>(result);
+  for (std::size_t k = 0; k < predicted.size(); ++k) {
+    EXPECT_EQ(predicted[k].header, objects.header);
+    const auto& actual = predicted[k].objects.front();
+    const auto& reference = expected[k].objects.front();
+    EXPECT_NEAR(actual.position.x, reference.position.x, 1e-10);
+    EXPECT_NEAR(actual.position.y, reference.position.y, 1e-10);
+    EXPECT_NEAR(actual.velocity.x, reference.velocity.x, 1e-10);
+    EXPECT_NEAR(actual.velocity.y, reference.velocity.y, 1e-10);
+    EXPECT_NEAR(actual.bbox_pose.orientation.z, reference.bbox_pose.orientation.z, 1e-10);
+    EXPECT_EQ(actual.acceleration, objects.objects.front().acceleration);
+    EXPECT_EQ(actual.bbox_size, objects.objects.front().bbox_size);
+  }
 }

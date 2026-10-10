@@ -27,7 +27,7 @@
 #include <eigen3/Eigen/Dense>
 #include <eigen3/Eigen/LU>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 class QPSolverInterface
 {
@@ -49,4 +49,4 @@ public:
                      const Eigen::MatrixXd &ubA, Eigen::VectorXd &U) = 0;
 };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

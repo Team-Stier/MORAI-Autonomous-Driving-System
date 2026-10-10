@@ -1,6 +1,6 @@
 # /local_path와 /local_path/velocity_injected의 공통 타입.
-# /local_path의 velocity와 acceleration은 미주입 값이므로 사용하지 않는다.
-# Velocity Planner는 경로 형상과 점 순서를 유지하고 속도와 가속도를 채운다.
+# /local_path의 velocity가 NaN인 point는 속도 미주입 상태다. 0을 포함한 유한값은 주입된 속도다.
+# Velocity Planner의 1스테이지는 NaN인 point의 속도와 가속도만 채우고, 기존 값과 경로 형상·점 순서를 유지한다.
 # 입력은 map, 출력은 입력 stamp 시점 TF로 변환한 base_link. 각 point pose도 변환한다.
 # 경로와 point pose의 stamp는 입력 값을 유지하며 frame_id는 출력 좌표계로 설정한다.
 std_msgs/Header header

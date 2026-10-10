@@ -430,6 +430,7 @@ template<class Schema> struct CoreProfile {
   using HealthType = Health<DataType::count>;
   CoreId id{};
   std::string name;
+  std::vector<std::size_t> argument_inputs;
   std::vector<std::size_t> required_inputs;
   std::vector<std::vector<Kind>> allowed_issues;
   std::string validator_name;

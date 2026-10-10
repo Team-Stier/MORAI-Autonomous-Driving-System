@@ -16,7 +16,7 @@
 
 #include "control/libraries/morai_mpc/autoware/mpc_trajectory.h"
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 void MPCTrajectory::push_back(const double &xp, const double &yp, const double &zp,
                               const double &yawp, const double &vxp, const double &kp,
@@ -56,4 +56,4 @@ unsigned int MPCTrajectory::size() const
   }
 }
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

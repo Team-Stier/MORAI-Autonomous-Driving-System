@@ -1,5 +1,5 @@
 stage: global
-inputs: [ego, objects, checkpoints]
+inputs: [ego, competition, objects, tf, imu, checkpoints]
 policy: remove_invalid.hpp
 allowed_issues:
   ego: [Stale, ReceiveTimeout, Skew]

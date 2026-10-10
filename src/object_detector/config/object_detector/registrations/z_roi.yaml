@@ -1,0 +1,3 @@
+stage: roi
+inputs: [cloud, competition]
+validator: cloud_layout.hpp

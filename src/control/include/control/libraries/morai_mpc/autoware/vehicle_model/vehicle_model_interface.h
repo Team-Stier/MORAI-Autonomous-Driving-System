@@ -24,7 +24,7 @@
 #pragma once
 #include <eigen3/Eigen/Core>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 /** 
  * @class vehicle model class
@@ -96,4 +96,4 @@ public:
   virtual void calculateReferenceInput(Eigen::MatrixXd &Uref) = 0;
 };
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

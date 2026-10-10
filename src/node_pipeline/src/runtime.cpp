@@ -282,6 +282,7 @@ RosSettings loadRosConfig(ros::NodeHandle& nh, const NodeParams& params, std::ve
   StageParams current;
   topics.assign(names.size(), std::string());
   for (std::size_t i = 0; i < names.size(); ++i) {
+    if (names[i] == "stamp") throw std::invalid_argument(declared.where() + ": stamp is a reserved input name");
     const auto found = inputs.find(names[i]);
     if (found == inputs.end() || found->second != i) throw std::invalid_argument(declared.where() + ": inputs do not match the build");
     const auto decl = declared[names[i]];
@@ -324,6 +325,8 @@ RosSettings loadRosConfig(ros::NodeHandle& nh, const NodeParams& params, std::ve
     if (!outputs.isList() || outputs.size() == 0) throw std::invalid_argument(outputs.where() + ": must be a non-empty list");
     for (std::size_t o = 0; o < outputs.size(); ++o) {
       const auto output = outputs.at(o);
+      const auto name = output["name"].text();
+      if (name == "stamp") throw std::invalid_argument(output.where() + ": stamp is a reserved input name");
       HealthLimits limits;
       int origin = -1;
       if (output["from"].defined()) {
@@ -338,7 +341,7 @@ RosSettings loadRosConfig(ros::NodeHandle& nh, const NodeParams& params, std::ve
       }
       applyChecks(limits, output);
       current.origins.push_back(origin);
-      next.slots.push_back(output["name"].text());
+      next.slots.push_back(name);
       next.limits.push_back(limits);
       next.subscribed.push_back(false);
     }
@@ -375,17 +378,19 @@ RosSettings loadRosConfig(ros::NodeHandle& nh, const NodeParams& params, std::ve
 }
 
 void loadRegistration(const ConfigNode& registration, const StageParams& stage_params,
-                      const std::map<std::string, std::size_t>& input_registry, const std::vector<std::size_t>& required_inputs,
+                      const std::map<std::string, std::size_t>& input_registry, const std::vector<std::size_t>& argument_inputs,
                       const std::string& validator_name, const std::string& policy_name,
                       std::vector<std::vector<Kind>>& allowed_issues) {
   const auto where = registration.where();
   if (registration["stage"].text() != stage_params.name) throw std::invalid_argument(where + ": stage does not match the build");
   const auto inputs = registration["inputs"];
-  if (!inputs.isList() || inputs.size() != required_inputs.size())
+  if (!inputs.isList() || inputs.size() != argument_inputs.size())
     throw std::invalid_argument(where + ": inputs do not match the build");
   for (std::size_t i = 0; i < inputs.size(); ++i) {
-    const auto found = input_registry.find(inputs.at(i).text());
-    if (found == input_registry.end() || found->second != required_inputs[i])
+    const auto name = inputs.at(i).text();
+    const auto found = input_registry.find(name);
+    if ((name == "stamp" && argument_inputs[i] != kStampInput) ||
+        (name != "stamp" && (found == input_registry.end() || found->second != argument_inputs[i])))
       throw std::invalid_argument(where + ": inputs do not match the build");
   }
   if (textOr(registration, "validator") != validator_name || textOr(registration, "policy") != policy_name)
@@ -394,8 +399,8 @@ void loadRegistration(const ConfigNode& registration, const StageParams& stage_p
   if (!allowed.defined() || allowed.isNull()) return;
   for (const auto& input : allowed.keys()) {
     const auto found = input_registry.find(input);
-    if (found == input_registry.end() ||
-        std::find(required_inputs.begin(), required_inputs.end(), found->second) == required_inputs.end())
+    if (input == "stamp" || found == input_registry.end() ||
+        std::find(argument_inputs.begin(), argument_inputs.end(), found->second) == argument_inputs.end())
       throw std::invalid_argument(where + ": allowed_issues input '" + input + "' is not a core input");
     const auto issues = allowed[input];
     if (!issues.isList()) throw std::invalid_argument(issues.where() + ": must be a list of issues");

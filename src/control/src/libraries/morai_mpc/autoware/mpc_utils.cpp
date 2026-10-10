@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace control { namespace morai_mpc { namespace autoware {
+namespace control { namespace autoware_ai_mpc { namespace autoware {
 
 Eigen::Matrix2d MPCUtils::frontPointWeight(double weight, double distance)
 {
@@ -217,7 +217,7 @@ void MPCUtils::calcTrajectoryCurvature(MPCTrajectory &traj, int curvature_smooth
   }
 }
 
-void MPCUtils::convertWaypointsToMPCTraj(const control::morai_mpc::autoware::Lane &lane, MPCTrajectory &mpc_traj)
+void MPCUtils::convertWaypointsToMPCTraj(const control::autoware_ai_mpc::autoware::Lane &lane, MPCTrajectory &mpc_traj)
 {
   mpc_traj.clear();
   const double k_tmp = 0.0;
@@ -233,7 +233,7 @@ void MPCUtils::convertWaypointsToMPCTraj(const control::morai_mpc::autoware::Lan
   }
 }
 
-void MPCUtils::convertWaypointsToMPCTrajWithDistanceResample(const control::morai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
+void MPCUtils::convertWaypointsToMPCTrajWithDistanceResample(const control::autoware_ai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
                                                              const double &dl, MPCTrajectory &ref_traj)
 {
   ref_traj.clear();
@@ -253,14 +253,14 @@ void MPCUtils::convertWaypointsToMPCTrajWithDistanceResample(const control::mora
 }
 
 
-void MPCUtils::convertWaypointsToMPCTrajWithTimeResample(const control::morai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
+void MPCUtils::convertWaypointsToMPCTrajWithTimeResample(const control::autoware_ai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
                                                          const double &dt, MPCTrajectory &ref_traj)
 {
   ref_traj.clear();
   convertWaypointsToMPCTrajWithResample(path, path_time, path_time, dt, ref_traj);
 }
 
-void MPCUtils::convertWaypointsToMPCTrajWithResample(const control::morai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
+void MPCUtils::convertWaypointsToMPCTrajWithResample(const control::autoware_ai_mpc::autoware::Lane &path, const std::vector<double> &path_time,
                                                      const std::vector<double> &ref_index, const double &d_ref_index, MPCTrajectory &ref_traj)
 {
   if (ref_index.size() == 0) {
@@ -309,7 +309,7 @@ void MPCUtils::convertWaypointsToMPCTrajWithResample(const control::morai_mpc::a
   }
 }
 
-void MPCUtils::calcPathRelativeTime(const control::morai_mpc::autoware::Lane &path, std::vector<double> &path_time)
+void MPCUtils::calcPathRelativeTime(const control::autoware_ai_mpc::autoware::Lane &path, std::vector<double> &path_time)
 {
   double t = 0.0;
   path_time.clear();
@@ -511,4 +511,4 @@ bool MPCUtils::calcNearestPoseInterp(const MPCTrajectory &traj, const geometry_m
   return true;
 }
 
-}}}  // namespace control::morai_mpc::autoware
+}}}  // namespace control::autoware_ai_mpc::autoware

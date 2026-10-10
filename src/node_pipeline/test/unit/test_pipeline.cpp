@@ -49,6 +49,15 @@ struct Constant {
 struct Forward {
   std::tuple<Reading, Reading> process(const Reading& a, const Reading& b) { return std::make_tuple(a, b); }
 };
+struct RecordStamp {
+  std::shared_ptr<std::vector<ros::Time>> stamps = std::make_shared<std::vector<ros::Time>>();
+  Reading process(const Reading& a, const ros::Time& stamp) {
+    stamps->push_back(stamp);
+    Reading result;
+    result.value = a.value;
+    return result;
+  }
+};
 struct RejectNegative {
   void operator()(const Reading& message, const np::HealthLimits&, std::vector<np::Kind>& issues) const {
     if (message.value < 0) issues.push_back(np::Kind::OutRangeNegative);
@@ -62,17 +71,18 @@ struct ValueNumbers {
   static std::vector<double> collect(const Reading& message) { return {message.value}; }
 };
 
-enum class TestCoreId : std::size_t { Sum, Negate, Constant, Forward };
+enum class TestCoreId : std::size_t { Sum, Negate, Constant, Forward, RecordStamp };
 struct CoreSet {
   npd::BankSet<Offset> banks;
   Sum sum;
   Negate negate;
   Constant constant;
   Forward forward;
+  RecordStamp record_stamp;
 };
 CoreSet makeCores() {
   const auto offset = std::make_shared<Offset>();
-  return CoreSet{npd::BankSet<Offset>{offset}, Sum(*offset), Negate{}, Constant{}, Forward{}};
+  return CoreSet{npd::BankSet<Offset>{offset}, Sum(*offset), Negate{}, Constant{}, Forward{}, RecordStamp{}};
 }
 
 struct StageOne {
@@ -83,9 +93,12 @@ struct StageOne {
   static std::vector<npd::CoreProfile<StageOne>> coreProfiles() {
     auto sum = npd::makeProfile<StageOne, RejectNegative, RemoveAll>(CoreId::Sum, "sum.hpp", {0, 1}, "", "");
     sum.allowed_issues[1].push_back(np::Kind::Stale);
-    return {sum, npd::makeProfile<StageOne, npd::NoValidator, npd::NoPolicy>(CoreId::Negate, "negate.hpp", {0}, "", "")};
+    return {sum, npd::makeProfile<StageOne, npd::NoValidator, npd::NoPolicy>(CoreId::Negate, "negate.hpp", {0}, "", ""),
+            npd::makeProfile<StageOne, npd::NoValidator, npd::NoPolicy>(
+                CoreId::RecordStamp, "record_stamp.hpp", {0, npd::kStampInput}, "", "")};
   }
-  static bool processCore(CoreSet& cores, CoreId id, const npd::StageData& data, npd::CoreResult& result) {
+  static bool processCore(CoreSet& cores, CoreId id, const npd::StageData& data, const std::int64_t& stamp_ns,
+                          npd::CoreResult& result) {
     const std::vector<int> origins{-1};
     switch (id) {
       case CoreId::Sum: {
@@ -102,6 +115,15 @@ struct StageOne {
         result = npd::wrapResult(std::move(value), origins);
         break;
       }
+      case CoreId::RecordStamp: {
+        static_assert(npd::requireProcessContract<RecordStamp, StageOne, std::index_sequence<0, npd::kStampInput>>(),
+                      "process() contract");
+        if (!data.hasInputs(std::vector<std::size_t>{0})) return false;
+        ros::Time stamp;
+        stamp.fromNSec(static_cast<std::uint64_t>(stamp_ns));
+        result = npd::wrapResult(cores.record_stamp.process(data.message<Reading>(0), stamp), origins);
+        break;
+      }
       default:
         throw std::invalid_argument("unregistered core id");
     }
@@ -116,7 +138,7 @@ struct ForwardStage {
   static std::vector<npd::CoreProfile<ForwardStage>> coreProfiles() {
     return {npd::makeProfile<ForwardStage, npd::NoValidator, npd::NoPolicy>(CoreId::Forward, "forward.hpp", {0, 1}, "", "")};
   }
-  static bool processCore(CoreSet& cores, CoreId, const npd::StageData& data, npd::CoreResult& result) {
+  static bool processCore(CoreSet& cores, CoreId, const npd::StageData& data, const std::int64_t&, npd::CoreResult& result) {
     auto value = cores.forward.process(data.message<Reading>(0), data.message<Reading>(1));
     result = npd::wrapResult(std::move(value), {0, 1});
     return true;
@@ -132,7 +154,7 @@ struct SumStage {
     sum.allowed_issues[1].push_back(np::Kind::Stale);
     return {sum};
   }
-  static bool processCore(CoreSet& cores, CoreId, const npd::StageData& data, npd::CoreResult& result) {
+  static bool processCore(CoreSet& cores, CoreId, const npd::StageData& data, const std::int64_t&, npd::CoreResult& result) {
     auto value = cores.sum.process(data.message<Reading>(0), data.message<Reading>(1));
     result = npd::wrapResult(std::move(value), {-1});
     return true;
@@ -146,8 +168,27 @@ struct ConstantStage {
   static std::vector<npd::CoreProfile<ConstantStage>> coreProfiles() {
     return {npd::makeProfile<ConstantStage, npd::NoValidator, npd::NoPolicy>(CoreId::Constant, "constant.hpp", {}, "", "")};
   }
-  static bool processCore(CoreSet& cores, CoreId, const npd::StageData&, npd::CoreResult& result) {
+  static bool processCore(CoreSet& cores, CoreId, const npd::StageData&, const std::int64_t&, npd::CoreResult& result) {
     result = npd::wrapResult(cores.constant.process(), {-1});
+    return true;
+  }
+};
+struct StampStage {
+  using CoreId = TestCoreId;
+  using DataType = npd::Data<Reading>;
+  using Numbers = npd::Types<npd::NoNumbers>;
+  using Outputs = npd::Types<Reading>;
+  static std::vector<npd::CoreProfile<StampStage>> coreProfiles() {
+    return {npd::makeProfile<StampStage, npd::NoValidator, npd::NoPolicy>(
+        CoreId::RecordStamp, "record_stamp.hpp", {0, npd::kStampInput}, "", "")};
+  }
+  static bool processCore(CoreSet& cores, CoreId, const npd::StageData& data, const std::int64_t& stamp_ns,
+                          npd::CoreResult& result) {
+    static_assert(npd::requireProcessContract<RecordStamp, StampStage, std::index_sequence<0, npd::kStampInput>>(),
+                  "process() contract");
+    ros::Time stamp;
+    stamp.fromNSec(static_cast<std::uint64_t>(stamp_ns));
+    result = npd::wrapResult(cores.record_stamp.process(data.message<Reading>(0), stamp), {-1});
     return true;
   }
 };
@@ -233,6 +274,21 @@ struct SingleFixture {
     node.reset(new SingleNode(onInput(), Buffer(8), Assembler(-1),
                               std::make_tuple(stageOf<StageOne>(stage_selector, {limits(), limits()}, true, max_skew_ns)),
                               makeCores(), FakeInjector{}, io));
+  }
+};
+struct StampFixture {
+  FakeIO io;
+  std::shared_ptr<std::vector<ros::Time>> stamps;
+  std::unique_ptr<NodeOf<StageOne, StampStage>> node;
+  StampFixture(npd::ExecutionConfig execution, int reference_input) {
+    auto cores = makeCores();
+    stamps = cores.record_stamp.stamps;
+    io.clocks->ros_ns = 10000000000;
+    node.reset(new NodeOf<StageOne, StampStage>(
+        execution, Buffer(8), Assembler(reference_input),
+        std::make_tuple(stageOf<StageOne>(selector({{0, TestCoreId::RecordStamp}}), {limits(), limits()}, true),
+                        stageOf<StampStage>(selector({{0, TestCoreId::RecordStamp}}), {limits()}, false)),
+        std::move(cores), FakeInjector{}, io));
   }
 };
 }  // namespace
@@ -398,4 +454,40 @@ TEST(Pipeline, ContractCheckRejectsPayloadTypeMismatch) {
   data.inputs[0].type = std::type_index(typeid(int));
   const auto profile = stageOf<StageOne>(selector({{0, TestCoreId::Sum}}), {limits(), limits()}, true).coreProfile(TestCoreId::Sum);
   EXPECT_THROW(profile.ContractCheck(data, npd::Context{}, npd::Clocks{}), std::invalid_argument);
+}
+
+TEST(Pipeline, StampArgumentDoesNotBecomeARequiredPayloadSlot) {
+  const auto profile = npd::makeProfile<StageOne, npd::NoValidator, npd::NoPolicy>(
+      TestCoreId::Sum, "sum.hpp", {0, npd::kStampInput, 1}, "", "");
+  EXPECT_EQ((std::vector<std::size_t>{0, npd::kStampInput, 1}), profile.argument_inputs);
+  EXPECT_EQ((std::vector<std::size_t>{0, 1}), profile.required_inputs);
+}
+
+TEST(Pipeline, PeriodicCoresReceivePublishStampAcrossStagesWithReferenceFallback) {
+  npd::ExecutionConfig execution;
+  execution.mode = npd::ExecutionMode::Periodic;
+  StampFixture fixture(execution, 1);
+  fixture.node->onInput(A{}, reading(3, 9807654321));
+  EXPECT_EQ(npd::ProcessStatus::Published, fixture.node->onPeriodic().status);
+  ASSERT_EQ(2u, fixture.stamps->size());
+  EXPECT_EQ(9807654321u, fixture.stamps->at(0).toNSec());
+  EXPECT_EQ(9807654321u, fixture.stamps->at(1).toNSec());
+  EXPECT_EQ(9807654321u, fixture.io.published->back().header.stamp.ns);
+
+  fixture.node->onInput(B{}, reading(2, 9901234567));
+  EXPECT_EQ(npd::ProcessStatus::Published, fixture.node->onPeriodic().status);
+  ASSERT_EQ(4u, fixture.stamps->size());
+  EXPECT_EQ(9901234567u, fixture.stamps->at(2).toNSec());
+  EXPECT_EQ(9901234567u, fixture.stamps->at(3).toNSec());
+  EXPECT_EQ(9901234567u, fixture.io.published->back().header.stamp.ns);
+}
+
+TEST(Pipeline, OnInputCoresReceiveTriggerPublishStampAcrossStages) {
+  StampFixture fixture(onInput(), -1);
+  fixture.node->onInput(B{}, reading(2, 9901234567));
+  EXPECT_EQ(npd::ProcessStatus::Published, fixture.node->onInput(A{}, reading(3, 9807654321)).status);
+  ASSERT_EQ(2u, fixture.stamps->size());
+  EXPECT_EQ(9807654321u, fixture.stamps->at(0).toNSec());
+  EXPECT_EQ(9807654321u, fixture.stamps->at(1).toNSec());
+  EXPECT_EQ(9807654321u, fixture.io.published->back().header.stamp.ns);
 }

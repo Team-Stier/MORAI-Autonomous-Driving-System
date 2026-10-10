@@ -9,4 +9,9 @@
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
   <depend>sensor_msgs</depend>
+  <depend>libopencv-dev</depend>
+  <depend>libcurl4-openssl-dev</depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <test_depend>python3-numpy</test_depend>
+  <export><node_pipeline include_roots="opencv2 onnxruntime_cxx_api.h curl"/></export>
 </package>

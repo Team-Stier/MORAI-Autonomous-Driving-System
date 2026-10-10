@@ -1,0 +1,4 @@
+stage: track
+inputs: [path, ego, competition]
+validator: mpc_inputs.hpp
+policy: remove_all.hpp

@@ -1,5 +1,6 @@
 execution: {mode: on_input, trigger_input: cloud, queue_capacity: 8, max_health_checks: 10}
 section_topic: /section_annotation
+max_skew_sec: 0.1
 inputs:
   cloud:
     type: sensor_msgs/PointCloud2
@@ -7,10 +8,22 @@ inputs:
     frame: base_link
     stale_after_sec: 0.3
     receive_timeout_sec: 0.3
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    frame: base_link
+    numbers: [roll_rad, pitch_rad, yaw_rad, velocity_x_mps]
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
 stages:
+  - name: roi
+    outputs:
+      - {name: cloud, from: cloud}
+      - {name: competition, from: competition}
   - name: detect
     outputs:
       - {name: objects, type: interfaces/Objects}
+      - {name: competition, from: competition}
   - name: track
     outputs:
       - {name: objects, type: interfaces/Objects}

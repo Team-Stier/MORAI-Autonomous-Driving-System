@@ -1,4 +1,5 @@
 #pragma once
+#include <sensor_msgs/Imu.h>
 #include <path_planner/banks/shared_map.hpp>
 #include <path_planner/libraries/types.hpp>
 #include <lanelet2_routing/RoutingGraph.h>
@@ -22,17 +23,27 @@ class LocalPath {
             lanelet::Locations::Germany, lanelet::Participants::Vehicle)),
         graph_(lanelet::routing::RoutingGraph::build(*map_, *rules_)) {}
 
-  Message process(const nav_msgs::Odometry& ego, const Route& global_path, const PredictedObjects&) {
+  Message process(const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus&,
+                  const interfaces::Objects&, const tf2_msgs::TFMessage&, const sensor_msgs::Imu&,
+                  const Route& global_path, const PredictedObjects&) {
     const auto& route = global_path.value();
     const auto& position = ego.pose.pose.position;
     const lanelet::BasicPoint2d ego_xy(position.x, position.y);
     Message message;
-    const auto first_line = route.front().centerline3d().basicLineString();
-    const auto projection = project(first_line, ego_xy);
+    std::size_t first_lane = 0;
+    auto projection = project(route.front().centerline3d().basicLineString(), ego_xy);
+    for (std::size_t i = 1; i < route.size(); ++i) {
+      const auto candidate = project(route[i].centerline3d().basicLineString(), ego_xy);
+      if (candidate.squared_distance < projection.squared_distance) {
+        first_lane = i;
+        projection = candidate;
+      }
+    }
+    const auto first_line = route[first_lane].centerline3d().basicLineString();
     appendPoint(message, projection.point);
     double length_m = 0;
     appendLine(message, first_line, projection.segment + 1, length_m);
-    for (std::size_t i = 1; i < route.size() && length_m < parameters_.local_path_length_m; ++i)
+    for (std::size_t i = first_lane + 1; i < route.size() && length_m < parameters_.local_path_length_m; ++i)
       appendLine(message, route[i].centerline3d().basicLineString(), 0, length_m);
 
     auto last = route.back();
@@ -95,6 +106,7 @@ class LocalPath {
     point.pose.pose.position.y = position.y();
     point.pose.pose.position.z = position.z();
     point.pose.pose.orientation.w = 1;
+    point.velocity = std::numeric_limits<double>::quiet_NaN();
     message.points.push_back(point);
   }
 

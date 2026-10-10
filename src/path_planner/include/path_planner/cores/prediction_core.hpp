@@ -1,16 +1,21 @@
 #pragma once
+#include <sensor_msgs/Imu.h>
 #include <path_planner/libraries/types.hpp>
 #include <cmath>
+#include <tuple>
 
 namespace path_planner {
 class PredictionCore {
  public:
-  using Result = PredictedObjects;
+  using Result = std::tuple<nav_msgs::Odometry, interfaces::CompetitionVehicleStatus,
+                            interfaces::Objects, tf2_msgs::TFMessage, sensor_msgs::Imu, Route, PredictedObjects>;
 
   // Uniform planar turn in the observation's base_link frame.
   // Input velocity and acceleration are available; tangential acceleration is ignored.
-  Result process(const interfaces::Objects& objects, const Route&) const {
-    Result predictions;
+  Result process(const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus& competition,
+                 const interfaces::Objects& objects, const tf2_msgs::TFMessage& tf,
+                 const sensor_msgs::Imu& imu, const Route& route) const {
+    PredictedObjects predictions;
     predictions.fill(objects);
     for (std::size_t object_index = 0; object_index < objects.objects.size(); ++object_index) {
       const auto& object = objects.objects[object_index];
@@ -47,7 +52,7 @@ class PredictionCore {
         predicted_q.w = cos_half_angle * q.w - sin_half_angle * q.z;
       }
     }
-    return predictions;
+    return std::make_tuple(ego, competition, objects, tf, imu, route, predictions);
   }
 };
 }  // namespace path_planner

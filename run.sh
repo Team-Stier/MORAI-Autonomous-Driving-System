@@ -115,7 +115,7 @@ pull_lfs_assets() {
     if ! command -v git-lfs >/dev/null 2>&1; then
         run_privileged apt-get install -y git-lfs || return $?
     fi
-    git -C "$WORKSPACE" lfs install --local >/dev/null && git -C "$WORKSPACE" lfs pull
+    git -C "$WORKSPACE" lfs install --local --skip-repo >/dev/null && git -C "$WORKSPACE" lfs pull
 }
 
 run_step "Fetch Git LFS assets" pull_lfs_assets
@@ -170,6 +170,9 @@ start_package path_planner
 start_package velocity_planner
 start_package control
 start_package speed_filter
+if [[ -f "$WORKSPACE/src/visualizer/launch.sh" ]]; then
+    start_package visualizer
+fi
 
 stop_child_groups() {
     local signal="$1"

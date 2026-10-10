@@ -27,6 +27,7 @@ if(CATKIN_ENABLE_TESTING)
     endif()
   endforeach()
   catkin_add_nosetests(test/unit/test_np_check.py)
+  catkin_add_nosetests(test/unit/test_np_generate.py)
 endif()
 
 install(TARGETS node_pipeline

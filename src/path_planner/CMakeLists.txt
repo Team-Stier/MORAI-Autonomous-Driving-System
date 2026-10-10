@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(path_planner)
-find_package(catkin REQUIRED COMPONENTS node_pipeline geometry_msgs interfaces nav_msgs tf2_msgs
+find_package(catkin REQUIRED COMPONENTS node_pipeline geometry_msgs interfaces nav_msgs sensor_msgs tf2_msgs visualization_msgs
   lanelet2_core lanelet2_io lanelet2_routing lanelet2_traffic_rules)
 find_package(Eigen3 REQUIRED)
 find_package(pugixml REQUIRED CONFIG)
