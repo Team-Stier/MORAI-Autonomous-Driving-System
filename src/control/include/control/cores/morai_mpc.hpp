@@ -1053,6 +1053,7 @@ class MoraiMpc {
 
   morai_msgs::CtrlCmd process(const interfaces::Path& path, const nav_msgs::Odometry& ego,
                              const interfaces::CompetitionVehicleStatus& status) {
+    ROS_INFO_ONCE("[control] executing morai_mpc.hpp");
     const auto stamp = path.header.stamp.toNSec();
     const double dt = has_previous_stamp_ ?
         std::max(parameters_.minimum_control_dt_sec,

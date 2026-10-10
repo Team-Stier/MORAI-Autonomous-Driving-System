@@ -57,24 +57,33 @@ prediction:
     "14": core_prediction.hpp
     "15": core_prediction.hpp
     "16": core_prediction.hpp
-  health_core_map: []
+  health_core_map:
+    - when: [{input: objects, issue: Missing}]
+      priority: 100
+      core: prediction_pass_through.hpp
 local:
   section_core_map:
-    "0": local_path.hpp
-    "1": local_path.hpp
-    "2": local_path.hpp
-    "3": local_path.hpp
-    "4": local_path.hpp
-    "5": local_path.hpp
-    "6": local_path.hpp
-    "7": local_path.hpp
-    "8": local_path.hpp
-    "9": local_path.hpp
-    "10": local_path.hpp
-    "11": local_path.hpp
-    "12": local_path.hpp
-    "13": local_path.hpp
-    "14": local_path.hpp
-    "15": local_path.hpp
-    "16": local_path.hpp
-  health_core_map: []
+    "0": frenet_path.hpp
+    "1": frenet_path.hpp
+    "2": frenet_path.hpp
+    "3": frenet_path.hpp
+    "4": frenet_path.hpp
+    "5": frenet_path.hpp
+    "6": frenet_path.hpp
+    "7": frenet_path.hpp
+    "8": frenet_path.hpp
+    "9": roundabout_merge.hpp
+    "10": frenet_path.hpp
+    "11": frenet_speed_path.hpp
+    "12": frenet_speed_path.hpp
+    "13": frenet_path.hpp
+    "14": frenet_path.hpp
+    "15": frenet_path.hpp
+    "16": frenet_path.hpp
+  health_core_map:
+    - when: [{input: objects, issue: Missing}]
+      priority: 110
+      core: frenet_path.hpp
+    - when: [{input: predictions, issue: Missing}]
+      priority: 100
+      core: frenet_path.hpp

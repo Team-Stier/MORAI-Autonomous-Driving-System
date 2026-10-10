@@ -10,8 +10,8 @@ limit:
     "7": speed_limit60.hpp
     "8": speed_limit60.hpp
     "9": speed_limit60.hpp
-    "10": no_speed_limit.hpp
-    "11": speed_limit60.hpp
+    "10": speed_limit60.hpp
+    "11": no_speed_limit.hpp
     "12": no_speed_limit.hpp
     "13": speed_limit60.hpp
     "14": speed_limit60.hpp

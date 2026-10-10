@@ -343,6 +343,7 @@ class AutowareUniverse {
     : parameters_(std::move(parameters)), controller_(parameters_) {}
   morai_msgs::CtrlCmd process(const interfaces::Path& path, const nav_msgs::Odometry& ego,
     const interfaces::CompetitionVehicleStatus& competition, const sensor_msgs::Imu& imu) {
+    ROS_INFO_ONCE("[control] executing autoware_universe.hpp");
     autoware_planning_msgs::msg::Trajectory trajectory;
     trajectory.header=path.header;trajectory.header.frame_id="map";
     tf2::Transform map_from_base;tf2::fromMsg(ego.pose.pose,map_from_base);

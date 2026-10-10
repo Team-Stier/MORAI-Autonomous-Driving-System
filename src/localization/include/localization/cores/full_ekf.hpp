@@ -1,5 +1,6 @@
 #pragma once
 #include <localization/libraries/projection.hpp>
+#include <localization/banks/ekf_state.hpp>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/NavSatFix.h>
 #include <sensor_msgs/Imu.h>
@@ -18,7 +19,10 @@ struct EkfParameters {
 
 class FullEkf {
  public:
-  explicit FullEkf(EkfParameters parameters = {}) : parameters_(parameters) {}
+  FullEkf(EkfParameters parameters, EkfState& shared)
+      : parameters_(parameters), state_(shared.state), covariance_(shared.covariance),
+        initialized_(shared.initialized), previous_imu_stamp_(shared.previous_imu_stamp),
+        previous_gps_stamp_(shared.previous_gps_stamp), previous_status_stamp_(shared.previous_status_stamp) {}
   nav_msgs::Odometry process(const sensor_msgs::NavSatFix& gps,
                             const sensor_msgs::Imu& imu,
                             const interfaces::CompetitionVehicleStatus& status) {
@@ -32,13 +36,11 @@ class FullEkf {
     position -= rotation * Eigen::Vector3d(0, 0, parameters_.gps_height_m);
     const auto stamp = imu.header.stamp.toNSec();
     if (!initialized_) {
-      altitude_origin_m_ = position.z();
-      state_.head<3>() << position.x(), position.y(), 0;
+      state_.head<3>() = position;
       state_.tail<3>() = rotation * Eigen::Vector3d(status.velocity_x_mps, 0, 0);
       previous_imu_stamp_ = stamp;
       initialized_ = true;
     }
-    position.z() -= altitude_origin_m_;
     // 같은 IMU를 timer가 다시 선택하면 예측을 중복하지 않는다.
     if (stamp != previous_imu_stamp_) {
       const double dt = (static_cast<double>(stamp) - previous_imu_stamp_) * 1e-9;
@@ -76,7 +78,7 @@ class FullEkf {
     message.child_frame_id = "base_link";
     message.pose.pose.position.x = state_[0];
     message.pose.pose.position.y = state_[1];
-    message.pose.pose.position.z = 0;
+    message.pose.pose.position.z = state_[2];
     message.pose.pose.orientation.x = orientation.x();
     message.pose.pose.orientation.y = orientation.y();
     message.pose.pose.orientation.z = orientation.z();
@@ -100,10 +102,9 @@ class FullEkf {
     covariance_ = residual * covariance_ * residual.transpose() + variance * gain * gain.transpose();
   }
   EkfParameters parameters_;
-  Vector6 state_ = Vector6::Zero();
-  Matrix6 covariance_ = Matrix6::Identity();
-  bool initialized_ = false;
-  double altitude_origin_m_ = 0;
-  std::uint64_t previous_imu_stamp_ = 0, previous_gps_stamp_ = 0, previous_status_stamp_ = 0;
+  Vector6& state_;
+  Matrix6& covariance_;
+  bool& initialized_;
+  std::uint64_t &previous_imu_stamp_, &previous_gps_stamp_, &previous_status_stamp_;
 };
 }

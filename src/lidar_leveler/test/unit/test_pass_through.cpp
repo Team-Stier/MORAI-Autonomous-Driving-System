@@ -1,4 +1,8 @@
 #include <lidar_leveler/cores/pass_through.hpp>
+#include <lidar_leveler/cores/pass_through_roi.hpp>
+#include <lidar_leveler/cores/roll_pitch_leveler.hpp>
+#include <lidar_leveler/cores/roll_pitch_roi_leveler.hpp>
+#include <interfaces/CompetitionVehicleStatus.h>
 #include <ros/serialization.h>
 #include <gtest/gtest.h>
 #include <cstring>
@@ -49,9 +53,39 @@ TEST(PassThrough, AppliesMountingTfAndPreservesOtherFields) {
   ++expected_x; ++expected_y; ++expected_z;
   *expected_x = 10; *expected_y = 19; *expected_z = 30.5;
   const auto expected = ros::serialization::serializeMessage(expected_cloud);
-  const auto actual = ros::serialization::serializeMessage(core.process(cloud, tf_static));
+  const auto actual = ros::serialization::serializeMessage(
+    core.process(cloud, interfaces::CompetitionVehicleStatus{}, tf_static));
   ASSERT_EQ(expected.num_bytes, actual.num_bytes);
   EXPECT_EQ(0, std::memcmp(expected.buf.get(), actual.buf.get(), expected.num_bytes));
+}
+
+TEST(LevelCores, EveryRegisteredCoreUsesTheSameLeveledCoordinates) {
+  sensor_msgs::PointCloud2 cloud;
+  cloud.header.frame_id = "velodyne";
+  cloud.height = 1;
+  sensor_msgs::PointCloud2Modifier modifier(cloud);
+  modifier.setPointCloud2FieldsByString(1, "xyz");
+  modifier.resize(1);
+  *sensor_msgs::PointCloud2Iterator<float>(cloud, "x") = 0;
+  *sensor_msgs::PointCloud2Iterator<float>(cloud, "y") = 2;
+  *sensor_msgs::PointCloud2Iterator<float>(cloud, "z") = 0;
+  interfaces::CompetitionVehicleStatus competition;
+  competition.roll_rad = std::acos(-1.0) / 2;
+  tf2_msgs::TFMessage mounts;
+  mounts.transforms.resize(1);
+  mounts.transforms[0].header.frame_id = "base_link";
+  mounts.transforms[0].child_frame_id = "velodyne";
+  mounts.transforms[0].transform.rotation.w = 1;
+  const sensor_msgs::PointCloud2 outputs[] = {
+    lidar_leveler::PassThrough{}.process(cloud, competition, mounts),
+    lidar_leveler::PassThroughRoi{}.process(cloud, competition, mounts),
+    lidar_leveler::RollPitchLeveler{}.process(cloud, competition, mounts),
+    lidar_leveler::RollPitchRoiLeveler{}.process(cloud, competition, mounts)};
+  for (const auto& output : outputs) {
+    ASSERT_EQ(1u, output.width);
+    EXPECT_NEAR(0, *sensor_msgs::PointCloud2ConstIterator<float>(output, "y"), 1e-6);
+    EXPECT_NEAR(2, *sensor_msgs::PointCloud2ConstIterator<float>(output, "z"), 1e-6);
+  }
 }
 
 int main(int argc, char** argv) {

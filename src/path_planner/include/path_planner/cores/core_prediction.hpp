@@ -126,35 +126,26 @@ class CorePrediction {
   Result process(const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus& competition,
                  const interfaces::Objects& objects, const tf2_msgs::TFMessage& tf,
                  const sensor_msgs::Imu& imu, const Route& route) const {
-    const auto& q = ego.pose.pose.orientation;
-    const Eigen::Quaterniond map_from_base(q.w, q.x, q.y, q.z);
-    const auto& position = ego.pose.pose.position;
-    const Eigen::Vector3d origin(position.x, position.y, position.z);
     std::vector<TrackedObject> tracked;
     tracked.reserve(objects.objects.size());
     for (const auto& object : objects.objects) {
-      const Eigen::Vector3d point = origin + map_from_base *
-        Eigen::Vector3d(object.position.x, object.position.y, object.position.z);
-      const Eigen::Vector3d velocity = map_from_base *
-        Eigen::Vector3d(object.velocity.x, object.velocity.y, object.velocity.z);
-      const Eigen::Vector3d acceleration = map_from_base *
-        Eigen::Vector3d(object.acceleration.x, object.acceleration.y, object.acceleration.z);
-      const auto& bbox_q = object.bbox_pose.orientation;
-      const Eigen::Quaterniond orientation = map_from_base *
-        Eigen::Quaterniond(bbox_q.w, bbox_q.x, bbox_q.y, bbox_q.z);
+      const auto& point = object.position;
+      const auto& velocity = object.velocity;
+      const auto& acceleration = object.acceleration;
+      const auto& orientation = object.bbox_pose.orientation;
       TrackedObject input;
       input.id = object.id;
       input.kind = object.label == "vehicle" ? ObjectKind::Vehicle : ObjectKind::Unknown;
-      input.pose.position = {point.x(), point.y()};
-      input.pose.yaw_rad = std::atan2(2 * (orientation.w()*orientation.z() + orientation.x()*orientation.y()),
-                                    1 - 2 * (orientation.y()*orientation.y() + orientation.z()*orientation.z()));
-      input.velocity_mps = {velocity.x(), velocity.y()};
+      input.pose.position = {point.x, point.y};
+      input.pose.yaw_rad = std::atan2(2 * (orientation.w*orientation.z + orientation.x*orientation.y),
+                                    1 - 2 * (orientation.y*orientation.y + orientation.z*orientation.z));
+      input.velocity_mps = {velocity.x, velocity.y};
       input.stamp_sec = objects.header.stamp.toSec();
       input.length_m = object.bbox_size.x;
       input.width_m = object.bbox_size.y;
-      const double speed_squared = velocity.x()*velocity.x() + velocity.y()*velocity.y();
+      const double speed_squared = velocity.x*velocity.x + velocity.y*velocity.y;
       input.turn_rate_radps = speed_squared == 0 ? 0 :
-        (velocity.x()*acceleration.y() - velocity.y()*acceleration.x()) / speed_squared;
+        (velocity.x*acceleration.y - velocity.y*acceleration.x) / speed_squared;
       tracked.push_back(input);
     }
     const auto calculated = predict(tracked, objects.header.stamp.toSec());
@@ -165,25 +156,16 @@ class CorePrediction {
       for (std::size_t i = 0; i < objects.objects.size(); ++i) {
         const auto& input = objects.objects[i];
         const auto& predicted = calculated.future[k][i];
-        const Eigen::Vector3d source = origin + map_from_base *
-          Eigen::Vector3d(input.position.x, input.position.y, input.position.z);
-        const Eigen::Vector3d velocity = map_from_base *
-          Eigen::Vector3d(input.velocity.x, input.velocity.y, input.velocity.z);
-        const Eigen::Vector3d point = map_from_base.conjugate() *
-          (Eigen::Vector3d(predicted.pose.position.x, predicted.pose.position.y,
-                          source.z() + velocity.z()*dt) - origin);
-        const Eigen::Vector3d predicted_velocity = map_from_base.conjugate() *
-          Eigen::Vector3d(predicted.velocity_mps.x, predicted.velocity_mps.y, velocity.z());
         auto& output = predictions[k].objects[i];
-        output.position.x = point.x(); output.position.y = point.y(); output.position.z = point.z();
-        output.velocity.x = predicted_velocity.x(); output.velocity.y = predicted_velocity.y();
-        output.velocity.z = predicted_velocity.z();
+        output.position.x = predicted.pose.position.x; output.position.y = predicted.pose.position.y;
+        output.position.z = input.position.z + input.velocity.z*dt;
+        output.velocity.x = predicted.velocity_mps.x; output.velocity.y = predicted.velocity_mps.y;
+        output.velocity.z = input.velocity.z;
         output.bbox_pose.position = output.position;
         const auto& bbox_q = input.bbox_pose.orientation;
-        const Eigen::Quaterniond orientation = map_from_base.conjugate() *
-          Eigen::Quaterniond(Eigen::AngleAxisd((tracked[i].kind == ObjectKind::Vehicle ?
+        const Eigen::Quaterniond orientation = Eigen::Quaterniond(Eigen::AngleAxisd((tracked[i].kind == ObjectKind::Vehicle ?
                                                tracked[i].turn_rate_radps : 0)*dt,
-                                              Eigen::Vector3d::UnitZ())) * map_from_base *
+                                              Eigen::Vector3d::UnitZ())) *
           Eigen::Quaterniond(bbox_q.w, bbox_q.x, bbox_q.y, bbox_q.z);
         output.bbox_pose.orientation.x = orientation.x(); output.bbox_pose.orientation.y = orientation.y();
         output.bbox_pose.orientation.z = orientation.z(); output.bbox_pose.orientation.w = orientation.w();

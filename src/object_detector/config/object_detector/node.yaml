@@ -5,7 +5,7 @@ inputs:
   cloud:
     type: sensor_msgs/PointCloud2
     topic: /velodyne_points/leveled
-    frame: base_link
+    frame: base_link_level
     stale_after_sec: 0.3
     receive_timeout_sec: 0.3
   competition:
@@ -15,16 +15,32 @@ inputs:
     numbers: [roll_rad, pitch_rad, yaw_rad, velocity_x_mps]
     stale_after_sec: 0.06
     receive_timeout_sec: 0.06
+  tf:
+    type: tf2_msgs/TFMessage
+    topic: /tf
+    frame: map
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
 stages:
   - name: roi
     outputs:
       - {name: cloud, from: cloud}
       - {name: competition, from: competition}
-  - name: detect
+      - {name: tf, from: tf}
+  - name: clustering
+    outputs:
+      - {name: clusters, type: object_detector::Clusters, header: object_detector/libraries/types.hpp}
+      - {name: competition, from: competition}
+      - {name: tf, from: tf}
+  - name: tf
+    outputs:
+      - {name: clusters, type: object_detector::Clusters, header: object_detector/libraries/types.hpp}
+      - {name: competition, from: competition}
+  - name: bbox_fitting
     outputs:
       - {name: objects, type: interfaces/Objects}
       - {name: competition, from: competition}
   - name: track
     outputs:
       - {name: objects, type: interfaces/Objects}
-output: {topic: /objects, frame_id: base_link}
+output: {topic: /objects, frame_id: map}

@@ -38,7 +38,7 @@ interfaces::Objects observation(double stamp_sec, const Eigen::Vector3d& positio
   interfaces::Objects objects;
   objects.header.seq = 42;
   objects.header.stamp.fromSec(stamp_sec);
-  objects.header.frame_id = "base_link";
+  objects.header.frame_id = "map";
   interfaces::Object object;
   object.id = 7;
   object.label = label;
@@ -52,8 +52,8 @@ interfaces::Objects observation(double stamp_sec, const Eigen::Vector3d& positio
   object.bbox_size.z = 1.4;
   object.velocity.x = 1e8;
   object.acceleration.y = -1e8;
-  object.velocity_available = true;
-  object.acceleration_available = true;
+  object.velocity_available = false;
+  object.acceleration_available = false;
   objects.objects.push_back(object);
   return objects;
 }
@@ -87,13 +87,6 @@ nav_msgs::Odometry movingEgo(double stamp_sec) {
   ego.twist.twist.linear.z = 0.2;
   ego.twist.twist.angular.z = 0.4;
   return ego;
-}
-
-Eigen::Vector3d inBase(const nav_msgs::Odometry& ego, const Eigen::Vector3d& point_map) {
-  const auto& position = ego.pose.pose.position;
-  const auto& q = ego.pose.pose.orientation;
-  return Eigen::Quaterniond(q.w, q.x, q.y, q.z).conjugate() *
-      (point_map - Eigen::Vector3d(position.x, position.y, position.z));
 }
 
 void expectPosition(const interfaces::Object& object, const Eigen::Vector3d& expected, double tolerance_m) {
@@ -186,7 +179,7 @@ TEST(NpcHistoryPrediction, UsesOnlyLastSecondForUnknownAndKnownObjectsOutsideLea
   }
 }
 
-TEST(NpcHistoryPrediction, CorrectsEgoTimeWithBodyTwistAndKeepsObservationFrameForDuplicateEpoch) {
+TEST(NpcHistoryPrediction, KeepsMapMotionIndependentOfEgoPoseAndTimeForDuplicateEpoch) {
   pp::NpcHistoryPrediction core(circleModel());
   const interfaces::CompetitionVehicleStatus competition;
   const tf2_msgs::TFMessage tf;
@@ -194,29 +187,34 @@ TEST(NpcHistoryPrediction, CorrectsEgoTimeWithBodyTwistAndKeepsObservationFrameF
   const pp::Route route;
   for (int i = 0; i <= 10; ++i) {
     const double time_sec = 100.0 + 0.1 * i;
-    const auto ego_at_observation = movingEgo(time_sec);
     const Eigen::Vector3d point_map(20.0 + 2.0 * (time_sec - 100.0),
         5.0 + 0.5 * (time_sec - 100.0), 0.7 + 0.1 * (time_sec - 100.0));
-    auto objects = observation(time_sec, inBase(ego_at_observation, point_map));
-    const double local_yaw = 0.2 - (0.35 + 0.4 * (time_sec - 100.0));
-    objects.objects.front().bbox_pose.orientation.z = std::sin(0.5 * local_yaw);
-    objects.objects.front().bbox_pose.orientation.w = std::cos(0.5 * local_yaw);
-    const auto ego = movingEgo(time_sec + 0.1);
+    auto objects = observation(time_sec, point_map);
+    objects.objects.front().bbox_pose.orientation.z = std::sin(0.1);
+    objects.objects.front().bbox_pose.orientation.w = std::cos(0.1);
+    auto ego = movingEgo(time_sec + 0.1);
+    const Eigen::Quaterniond rotation = Eigen::Quaterniond(ego.pose.pose.orientation.w, 0.0, 0.0,
+        ego.pose.pose.orientation.z) * Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(-0.2, Eigen::Vector3d::UnitX());
+    ego.pose.pose.orientation.x = rotation.x(); ego.pose.pose.orientation.y = rotation.y();
+    ego.pose.pose.orientation.z = rotation.z(); ego.pose.pose.orientation.w = rotation.w();
     const auto result = core.process(ego, competition, objects, tf, imu, route);
     if (i != 10) continue;
     const auto& predictions = std::get<6>(result);
     for (std::size_t j = 0; j < predictions.size(); ++j) {
       const double horizon_sec = 0.5 * (j + 1);
-      const auto expected = inBase(ego_at_observation,
-          point_map + horizon_sec * Eigen::Vector3d(2.0, 0.5, 0.1));
+      const auto expected = point_map + horizon_sec * Eigen::Vector3d(2.0, 0.5, 0.1);
       ASSERT_EQ(predictions[j].objects.size(), 1u);
       EXPECT_EQ(predictions[j].header, objects.header);
       const auto& predicted = predictions[j].objects.front();
       expectPosition(predicted, expected, 1e-7);
-      EXPECT_NEAR(predicted.bbox_pose.orientation.z, std::sin(0.5 * local_yaw), 1e-7);
-      EXPECT_NEAR(predicted.bbox_pose.orientation.w, std::cos(0.5 * local_yaw), 1e-7);
+      EXPECT_NEAR(predicted.bbox_pose.orientation.z, std::sin(0.1), 1e-7);
+      EXPECT_NEAR(predicted.bbox_pose.orientation.w, std::cos(0.1), 1e-7);
+      EXPECT_NEAR(predicted.velocity.x, 2.0, 1e-7);
+      EXPECT_NEAR(predicted.velocity.y, 0.5, 1e-7);
+      EXPECT_NEAR(predicted.velocity.z, 0.1, 1e-7);
     }
-    auto revised_ego = movingEgo(time_sec + 0.15);
+    auto revised_ego = movingEgo(time_sec - 0.5);
     revised_ego.pose.pose.position.x += 0.01;
     const auto repeated = core.process(revised_ego, competition, objects, tf, imu, route);
     EXPECT_EQ(std::get<0>(repeated), revised_ego);
@@ -234,6 +232,25 @@ TEST(NpcHistoryPrediction, ReturnsTenEmptyListsForEmptyObservation) {
   for (const auto& prediction : std::get<6>(result)) EXPECT_EQ(prediction, objects);
 }
 
+TEST(NpcHistoryPrediction, ResetsObjectHistoryWhenObservationTimeMovesBackward) {
+  pp::NpcHistoryPrediction core(circleModel());
+  for (int i = 0; i <= 10; ++i) {
+    const double time = 100.0 + 0.1*i;
+    core.process(stationaryEgo(time), interfaces::CompetitionVehicleStatus{},
+        observation(time, {5.0+0.2*i, 2.0, 0.7}), tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{});
+  }
+  const auto objects = observation(99.0, {1000.0, 2.0, 0.7});
+  const auto predictions = std::get<6>(core.process(stationaryEgo(102.0),
+      interfaces::CompetitionVehicleStatus{}, objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
+  for (const auto& prediction : predictions) {
+    EXPECT_EQ(prediction.header, objects.header);
+    ASSERT_EQ(prediction.objects.size(), 1u);
+    expectPosition(prediction.objects.front(), {1000.0, 2.0, 0.7}, 1e-10);
+    EXPECT_FALSE(prediction.objects.front().velocity_available);
+    EXPECT_FALSE(prediction.objects.front().acceleration_available);
+  }
+}
+
 TEST(NpcHistoryPrediction, LoadsDeployedTrajectoryAssetThroughItsParameterReader) {
   const std::string source = __FILE__;
   const std::string package = source.substr(0, source.find("/test/unit/"));
@@ -249,7 +266,7 @@ TEST(NpcHistoryPrediction, LoadsDeployedTrajectoryAssetThroughItsParameterReader
   for (const auto& prediction : std::get<6>(result)) EXPECT_EQ(prediction, objects);
 }
 
-TEST(NpcHistoryPrediction, DoesNotInterpolateEgoAcrossAnInactiveSectionGap) {
+TEST(NpcHistoryPrediction, PreservesMapHistoryAcrossAnInactiveSectionGap) {
   auto parameters = circleModel();
   parameters.curves.front().nominal_rate_mps = parameters.curves.front().length_m * 3.0 / (36.0*kPi);
   pp::NpcHistoryPrediction core(parameters);
@@ -258,21 +275,20 @@ TEST(NpcHistoryPrediction, DoesNotInterpolateEgoAcrossAnInactiveSectionGap) {
     const double angle = (time_sec-100.0)*3.0/18.0;
     const Eigen::Vector3d point = kCircleCenter +
         Eigen::Vector3d(18.0*std::cos(angle), 18.0*std::sin(angle), 0.0);
-    const auto ego_at_observation = movingEgo(time_sec);
-    const auto objects = observation(time_sec, inBase(ego_at_observation, point), "test_actor");
+    const auto objects = observation(time_sec, point, "test_actor");
     const auto result = core.process(movingEgo(time_sec+0.1), interfaces::CompetitionVehicleStatus{},
         objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{});
     if (time_sec != 120.0 && time_sec != 121.0) continue;
     for (std::size_t i = 0; i < std::get<6>(result).size(); ++i) {
       const double future_angle = angle+0.5*(i+1)*3.0/18.0;
-      const auto expected = inBase(ego_at_observation, kCircleCenter +
-          Eigen::Vector3d(18.0*std::cos(future_angle), 18.0*std::sin(future_angle), 0.0));
+      const auto expected = kCircleCenter +
+          Eigen::Vector3d(18.0*std::cos(future_angle), 18.0*std::sin(future_angle), 0.0);
       expectPosition(std::get<6>(result)[i].objects.front(), expected, 0.015);
     }
   }
 }
 
-TEST(NpcHistoryPrediction, PublishesAllTenObservationFrameMessagesIncludingCachedResults) {
+TEST(NpcHistoryPrediction, PublishesAllTenMapMessagesIncludingCachedResults) {
   const std::array<std::string, 10> names{{"0_5s", "1_0s", "1_5s", "2_0s", "2_5s",
       "3_0s", "3_5s", "4_0s", "4_5s", "5_0s"}};
   ros::M_string remappings;

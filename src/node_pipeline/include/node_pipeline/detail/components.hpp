@@ -390,7 +390,6 @@ class InputPolicy {
     std::size_t target = 0;
     Kind kind = Kind::Missing;
     for (const auto input : inputs_) {
-      if (!typed_data.sample(input).present()) continue;
       for (const auto issue : health.inputs.at(input).issues) {
         const int rank = priority_(issue);
         if (rank > best) {

@@ -56,7 +56,7 @@ TEST(Tracking, PreservesBoxesAndIdsAcrossReorderingAndAssignsNewIds) {
   EXPECT_FALSE(next.objects[2].velocity_available);
 }
 
-TEST(Tracking, UsesExplicitStampAndReturnsObservedRelativeVelocity) {
+TEST(Tracking, UsesExplicitStampAndReturnsMapVelocity) {
   object_detector::Tracking tracker;
   interfaces::Object object;
   std::uint32_t id = 0;
@@ -73,16 +73,18 @@ TEST(Tracking, UsesExplicitStampAndReturnsObservedRelativeVelocity) {
   EXPECT_NEAR(-5, object.velocity.x, 0.02);
   EXPECT_NEAR(0.4, object.velocity.y, 0.02);
   EXPECT_DOUBLE_EQ(0, object.velocity.z);
-  EXPECT_FALSE(object.acceleration_available);
+  EXPECT_TRUE(object.acceleration_available);
+  EXPECT_NEAR(0, object.acceleration.x, 0.02);
+  EXPECT_NEAR(0, object.acceleration.y, 0.02);
 }
 
-TEST(Tracking, PreservesThreeAxisGeometryWithoutEstimatingVerticalMotion) {
+TEST(Tracking, EstimatesVerticalMapMotionAndPreservesGeometry) {
   object_detector::Tracking tracker;
   std::uint32_t id = 0;
-  for (int i = 0; i <= 1; ++i) {
+  for (int i = 0; i <= 30; ++i) {
     auto input = observations({{10 + 0.1 * i, 2}});
     auto& measured = input.objects.front();
-    measured.position.z = 1.25 + i;
+    measured.position.z = 1.25 + 0.1 * i;
     measured.bbox_pose.position = measured.position;
     measured.bbox_pose.orientation.z = 0.6;
     measured.bbox_pose.orientation.w = 0.8;
@@ -98,8 +100,8 @@ TEST(Tracking, PreservesThreeAxisGeometryWithoutEstimatingVerticalMotion) {
     EXPECT_EQ(measured.bbox_pose, object.bbox_pose);
     EXPECT_EQ(measured.bbox_size, object.bbox_size);
     EXPECT_EQ(i > 0, object.velocity_available);
-    EXPECT_DOUBLE_EQ(0, object.velocity.z);
-    EXPECT_FALSE(object.acceleration_available);
+    if (i == 30) EXPECT_NEAR(1.0, object.velocity.z, 0.02);
+    EXPECT_EQ(i >= 2, object.acceleration_available);
   }
 }
 
@@ -112,4 +114,21 @@ TEST(Tracking, EmptyFrameDropsTracksAndReappearanceGetsANewId) {
   ASSERT_EQ(1u, next.objects.size());
   EXPECT_NE(first.objects[0].id, next.objects[0].id);
   EXPECT_FALSE(next.objects[0].velocity_available);
+}
+
+TEST(Tracking, EstimatesThreeAxisMapAccelerationAfterTwoVelocityObservations) {
+  object_detector::Tracking tracker;
+  interfaces::Object object;
+  for (int i = 0; i <= 100; ++i) {
+    const double time = i * 0.1;
+    auto input = observations({{10 + 0.2*time*time, 2}});
+    input.objects.front().position.z = 1 + 0.3*time*time;
+    input.objects.front().bbox_pose.position = input.objects.front().position;
+    object = tracker.process(input, stamp(time)).objects.front();
+    EXPECT_EQ(i > 0, object.velocity_available);
+    EXPECT_EQ(i > 1, object.acceleration_available);
+  }
+  EXPECT_NEAR(0.4, object.acceleration.x, 0.02);
+  EXPECT_NEAR(0, object.acceleration.y, 0.02);
+  EXPECT_NEAR(0.6, object.acceleration.z, 0.02);
 }

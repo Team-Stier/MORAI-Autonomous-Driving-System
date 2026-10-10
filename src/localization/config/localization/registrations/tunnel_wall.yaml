@@ -2,3 +2,4 @@ stage: estimate
 inputs: [imu, competition, lidar]
 validator: tunnel_inputs.hpp
 policy: remove_all.hpp
+bank: ekf_state.hpp

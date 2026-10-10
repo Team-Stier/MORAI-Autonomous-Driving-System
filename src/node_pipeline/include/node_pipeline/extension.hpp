@@ -30,11 +30,16 @@ struct HealthLimits {
   bool check_skew = true;
 };
 
-// Policy가 보정할 입력 하나다. 원본은 유지하고 같은 타입의 복사본만 수정한다.
+// Policy가 보정할 입력 하나다. 원본은 유지하고 같은 타입의 복사본을 수정하거나 누락값을 채운다.
 class EditableInput {
  public:
   EditableInput(std::shared_ptr<const void>& message, std::type_index type) : message_(message), type_(type) {}
   void remove() { message_.reset(); }
+  template<class T> bool fill(T value) {
+    if (message_ || type_ != std::type_index(typeid(T))) return false;
+    message_ = std::make_shared<T>(std::move(value));
+    return true;
+  }
   template<class T, class Fn> void modify(Fn fn) {
     if (!message_) return;
     if (type_ != std::type_index(typeid(T))) throw std::invalid_argument("policy modify type mismatch");

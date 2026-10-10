@@ -1,4 +1,3 @@
-yaw_offset_rad: -0.023509
 association_gate_m: 2.5
 shape_weight: 0.2
 max_age_sec: 0.6

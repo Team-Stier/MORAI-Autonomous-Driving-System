@@ -1,7 +1,9 @@
 #include <path_planner/cores/prediction_core.hpp>
 #include <path_planner/cores/core_prediction.hpp>
+#include <path_planner/validators/prediction_motion_inputs.hpp>
 #include <gtest/gtest.h>
 #include <cmath>
+#include <limits>
 
 namespace pp = path_planner;
 namespace {
@@ -11,7 +13,7 @@ interfaces::Objects observation() {
   interfaces::Objects objects;
   objects.header.seq = 17;
   objects.header.stamp.fromSec(123.25);
-  objects.header.frame_id = "base_link";
+  objects.header.frame_id = "map";
   interfaces::Object object;
   object.id = 42;
   object.label = "vehicle";
@@ -154,14 +156,21 @@ TEST(PredictionCore, KeepsAllTenListsEmptyWhenNoObjectsAreObserved) {
   for (const auto& sample : predictions) EXPECT_EQ(sample, objects);
 }
 
-TEST(CorePrediction, ConvertsMapMotionBackToObservationFrameAndPassesInputsThrough) {
-  const auto objects = observation();
+TEST(CorePrediction, PredictsMapMotionIndependentlyOfEgoPoseAndPassesInputsThrough) {
+  auto objects = observation();
+  objects.objects.front().velocity.z = 0.2;
+  objects.objects.front().bbox_pose.orientation.x = std::sqrt(0.5);
+  objects.objects.front().bbox_pose.orientation.w = std::sqrt(0.5);
   nav_msgs::Odometry ego;
   ego.header.stamp.fromSec(123.25);
   ego.pose.pose.position.x = 100.0;
   ego.pose.pose.position.y = -200.0;
-  ego.pose.pose.orientation.z = std::sin(0.4);
-  ego.pose.pose.orientation.w = std::cos(0.4);
+  const Eigen::Quaterniond ego_rotation = Eigen::AngleAxisd(0.8, Eigen::Vector3d::UnitZ()) *
+      Eigen::AngleAxisd(0.3, Eigen::Vector3d::UnitY()) * Eigen::AngleAxisd(-0.2, Eigen::Vector3d::UnitX());
+  ego.pose.pose.orientation.x = ego_rotation.x();
+  ego.pose.pose.orientation.y = ego_rotation.y();
+  ego.pose.pose.orientation.z = ego_rotation.z();
+  ego.pose.pose.orientation.w = ego_rotation.w();
   interfaces::CompetitionVehicleStatus competition;
   competition.gear = 4;
   tf2_msgs::TFMessage tf;
@@ -177,18 +186,60 @@ TEST(CorePrediction, ConvertsMapMotionBackToObservationFrameAndPassesInputsThrou
   EXPECT_EQ(std::get<3>(result), tf);
   EXPECT_EQ(std::get<4>(result), imu);
   EXPECT_EQ(std::get<5>(result), route);
-  const auto expected = std::get<6>(pp::PredictionCore{}.process(ego, competition, objects, tf, imu, route));
   const auto& predicted = std::get<6>(result);
-  for (std::size_t k = 0; k < predicted.size(); ++k) {
-    EXPECT_EQ(predicted[k].header, objects.header);
-    const auto& actual = predicted[k].objects.front();
-    const auto& reference = expected[k].objects.front();
-    EXPECT_NEAR(actual.position.x, reference.position.x, 1e-10);
-    EXPECT_NEAR(actual.position.y, reference.position.y, 1e-10);
-    EXPECT_NEAR(actual.velocity.x, reference.velocity.x, 1e-10);
-    EXPECT_NEAR(actual.velocity.y, reference.velocity.y, 1e-10);
-    EXPECT_NEAR(actual.bbox_pose.orientation.z, reference.bbox_pose.orientation.z, 1e-10);
+  for (const auto& sample : predicted) {
+    EXPECT_EQ(sample.header, objects.header);
+    const auto& actual = sample.objects.front();
+    EXPECT_EQ(actual.bbox_pose.position, actual.position);
     EXPECT_EQ(actual.acceleration, objects.objects.front().acceleration);
     EXPECT_EQ(actual.bbox_size, objects.objects.front().bbox_size);
   }
+  const auto& quarter = predicted[4].objects.front();
+  EXPECT_NEAR(quarter.position.x, 13.0, 1e-10);
+  EXPECT_NEAR(quarter.position.y, 6.0, 1e-10);
+  EXPECT_NEAR(quarter.position.z, 1.5, 1e-10);
+  EXPECT_NEAR(quarter.velocity.x, 0.0, 1e-10);
+  EXPECT_NEAR(quarter.velocity.y, 2.0 * kPi, 1e-10);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.x, 0.5, 1e-10);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.y, 0.5, 1e-10);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.z, 0.5, 1e-10);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.w, 0.5, 1e-10);
+}
+
+TEST(PredictionMotionInputs, RejectsUnavailableMotionBeforePrediction) {
+  auto objects = observation();
+  pp::PredictionMotionInputs validator;
+  for (const auto flags : {std::pair<bool, bool>{false, false}, {false, true}, {true, false}, {true, true}}) {
+    objects.objects.front().velocity_available = flags.first;
+    objects.objects.front().acceleration_available = flags.second;
+    std::vector<node_pipeline::Kind> issues;
+    validator(objects, node_pipeline::HealthLimits{}, issues);
+    if (flags.first && flags.second) EXPECT_TRUE(issues.empty());
+    else EXPECT_EQ(issues, std::vector<node_pipeline::Kind>{node_pipeline::Kind::Missing});
+  }
+}
+
+TEST(PredictionMotionInputs, AcceptsEmptyObservations) {
+  std::vector<node_pipeline::Kind> issues;
+  pp::PredictionMotionInputs{}(interfaces::Objects{}, node_pipeline::HealthLimits{}, issues);
+  EXPECT_TRUE(issues.empty());
+}
+
+TEST(PredictionMotionInputs, RejectsNonfiniteAvailableMotionWithoutUsingUnavailableVectors) {
+  auto objects = observation();
+  pp::PredictionMotionInputs validator;
+  objects.objects.front().velocity.z = std::numeric_limits<double>::quiet_NaN();
+  objects.objects.front().acceleration.z = std::numeric_limits<double>::infinity();
+  std::vector<node_pipeline::Kind> issues;
+  validator(objects, node_pipeline::HealthLimits{}, issues);
+  EXPECT_EQ(issues, (std::vector<node_pipeline::Kind>{node_pipeline::Kind::NaN, node_pipeline::Kind::Inf}));
+  objects.objects.front().velocity_available = false;
+  objects.objects.front().acceleration_available = false;
+  issues.clear();
+  validator(objects, node_pipeline::HealthLimits{}, issues);
+  EXPECT_EQ(issues, std::vector<node_pipeline::Kind>{node_pipeline::Kind::Missing});
+  objects.objects.front().velocity_available = true;
+  issues.clear();
+  validator(objects, node_pipeline::HealthLimits{}, issues);
+  EXPECT_EQ(issues, (std::vector<node_pipeline::Kind>{node_pipeline::Kind::Missing, node_pipeline::Kind::NaN}));
 }

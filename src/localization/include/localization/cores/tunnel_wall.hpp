@@ -1,4 +1,5 @@
 #pragma once
+#include <localization/banks/ekf_state.hpp>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/Imu.h>
@@ -41,16 +42,15 @@ struct TunnelWallParameters {
 };
 class TunnelWall {
  public:
-  // Contract: parameters carry an initialized map-state snapshot; cloud has finite little-endian
-  // FLOAT32 XYZ and point time (seconds from cloud stamp) in base_link.
+  // Contract: shared state is initialized by FullEkf; cloud has finite little-endian
+  // FLOAT32 XYZ and point time (seconds from cloud stamp) in base_link_level.
   // Wall consensus supplies lateral information.
   // The surveyed wall planes and heading are in the repository map frame.
-  explicit TunnelWall(TunnelWallParameters parameters)
-      : parameters_(parameters), state_(parameters.initial_state),
-        covariance_(parameters.initial_covariance),
-        previous_imu_stamp_(parameters.initial_previous_imu_stamp),
-        previous_status_stamp_(parameters.initial_previous_status_stamp),
-        previous_lidar_stamp_(parameters.initial_previous_lidar_stamp),
+  TunnelWall(TunnelWallParameters parameters, EkfState& shared)
+      : parameters_(parameters), state_(shared.state), covariance_(shared.covariance),
+        previous_imu_stamp_(shared.previous_imu_stamp),
+        previous_status_stamp_(shared.previous_status_stamp),
+        previous_lidar_stamp_(shared.previous_lidar_stamp),
         tangent_(std::cos(parameters.axis_yaw_rad), std::sin(parameters.axis_yaw_rad), 0),
         normal_(-std::sin(parameters.axis_yaw_rad), std::cos(parameters.axis_yaw_rad), 0) {}
 
@@ -113,9 +113,13 @@ class TunnelWall {
       if (angle != 0) scan_orientation = orientation * Eigen::Quaterniond(
         Eigen::AngleAxisd(angle, angular_velocity.normalized()));
       const double age = imu.header.stamp.toSec() - cloud.header.stamp.toSec();
+      const Eigen::Quaterniond body_from_level = (Eigen::Quaterniond(
+        Eigen::AngleAxisd(status.pitch_rad, Eigen::Vector3d::UnitY()) *
+        Eigen::AngleAxisd(status.roll_rad, Eigen::Vector3d::UnitX()))).conjugate();
       const auto wall = wallInformation(cloud, scan_orientation, angular_velocity,
         state_.tail<3>() - acceleration * age, acceleration,
-        state_.head<3>() - state_.tail<3>() * age + 0.5 * acceleration * age * age);
+        state_.head<3>() - state_.tail<3>() * age + 0.5 * acceleration * age * age,
+        body_from_level);
       Vector6 observation = Vector6::Zero();
       observation.head<3>() = normal_;
       observation.tail<3>() = -age * normal_;
@@ -139,7 +143,7 @@ class TunnelWall {
     message.child_frame_id = "base_link";
     message.pose.pose.position.x = state_[0];
     message.pose.pose.position.y = state_[1];
-    message.pose.pose.position.z = 0;
+    message.pose.pose.position.z = state_[2];
     message.pose.pose.orientation.x = orientation.x();
     message.pose.pose.orientation.y = orientation.y();
     message.pose.pose.orientation.z = orientation.z();
@@ -181,7 +185,8 @@ class TunnelWall {
                          const Eigen::Vector3d& angular_velocity,
                          const Eigen::Vector3d& velocity,
                          const Eigen::Vector3d& acceleration,
-                         const Eigen::Vector3d& position) const {
+                         const Eigen::Vector3d& position,
+                         const Eigen::Quaterniond& body_from_level) const {
     std::uint32_t offsets[4];
     const char* names[] = {"x", "y", "z", "time"};
     for (std::size_t i = 0; i < 4; ++i) offsets[i] = std::find_if(
@@ -203,7 +208,7 @@ class TunnelWall {
         Eigen::Quaterniond point_orientation = orientation;
         if (angular_speed != 0) point_orientation = orientation * Eigen::Quaterniond(
           Eigen::AngleAxisd(angular_speed * point_dt, angular_velocity / angular_speed));
-        const Eigen::Vector3d point = point_orientation * Eigen::Vector3d(
+        const Eigen::Vector3d point = point_orientation * body_from_level * Eigen::Vector3d(
           coordinates[0], coordinates[1], coordinates[2]) +
           velocity * point_dt + 0.5 * acceleration * point_dt * point_dt;
         const double station = scan_station + tangent_.dot(point);
@@ -231,9 +236,9 @@ class TunnelWall {
     covariance_ = residual * covariance_ * residual.transpose() + variance * gain * gain.transpose();
   }
   TunnelWallParameters parameters_;
-  Vector6 state_;
-  Matrix6 covariance_;
-  std::uint64_t previous_imu_stamp_, previous_status_stamp_, previous_lidar_stamp_;
+  Vector6& state_;
+  Matrix6& covariance_;
+  std::uint64_t &previous_imu_stamp_, &previous_status_stamp_, &previous_lidar_stamp_;
   Eigen::Vector3d tangent_, normal_;
 };
 }  // namespace localization

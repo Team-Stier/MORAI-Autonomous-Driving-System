@@ -1,9 +1,13 @@
 #include <path_planner/cores/frenet_path.hpp>
+#include <path_planner/cores/global_path.hpp>
+#include <path_planner/libraries/map_parameters.hpp>
 #include <path_planner/parameters/frenet_path.hpp>
 #include <path_planner/validators/frenet_inputs.hpp>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <iterator>
 #include <limits>
 
 namespace pp = path_planner;
@@ -69,6 +73,34 @@ pp::SharedMap branchingMap() {
   return pp::SharedMap({lanelet::utils::createMap({incoming, straight, curve})});
 }
 
+pp::SharedMap turnMap(double direction, double radius_m) {
+  std::vector<lanelet::Point3d> left, right, center;
+  auto add = [&](double x, double y, double heading) {
+    const auto i = static_cast<lanelet::Id>(center.size());
+    center.emplace_back(100 + 3*i, x, y, 0);
+    left.emplace_back(101 + 3*i, x - 3*std::sin(heading), y + 3*std::cos(heading), 0);
+    right.emplace_back(102 + 3*i, x + 3*std::sin(heading), y - 3*std::cos(heading), 0);
+  };
+  for (double x : {-12.0, -8.0, -4.0, 0.0}) add(x, 0, 0);
+  const double quarter_turn = std::acos(-1.0) / 2;
+  for (int i = 1; i <= 4; ++i) {
+    const double angle = quarter_turn * i / 4;
+    add(radius_m*std::sin(angle), direction*radius_m*(1 - std::cos(angle)), direction*angle);
+  }
+  for (int i = 1; i <= 6; ++i)
+    add(radius_m, direction*(radius_m + 4*i), direction*quarter_turn);
+  lanelet::Lanelets lanes;
+  for (std::size_t i = 0; i + 1 < center.size(); ++i) {
+    const auto index = static_cast<lanelet::Id>(i);
+    auto lane = road(300 + index,
+        lanelet::LineString3d(200 + 3*index, {left[i], left[i + 1]}),
+        lanelet::LineString3d(201 + 3*index, {right[i], right[i + 1]}));
+    lane.setCenterline(lanelet::LineString3d(202 + 3*index, {center[i], center[i + 1]}));
+    lanes.push_back(lane);
+  }
+  return pp::SharedMap({lanelet::utils::createMap(lanes)});
+}
+
 pp::Route route(const pp::SharedMap& shared, std::initializer_list<lanelet::Id> ids) {
   lanelet::ConstLanelets lanes;
   for (const auto id : ids) lanes.push_back(shared.map->laneletLayer.get(id));
@@ -85,6 +117,7 @@ nav_msgs::Odometry egoAt(double x, double y = 0) {
 
 interfaces::Objects obstacleAt(double x, double y, double length, double width, double yaw = 0) {
   interfaces::Objects objects;
+  objects.header.frame_id = "map";
   interfaces::Object obstacle;
   obstacle.position.x = obstacle.bbox_pose.position.x = x;
   obstacle.position.y = obstacle.bbox_pose.position.y = y;
@@ -97,16 +130,54 @@ interfaces::Objects obstacleAt(double x, double y, double length, double width, 
   return objects;
 }
 
+double headingOf(const geometry_msgs::Quaternion& q) {
+  return std::atan2(2*(q.w*q.z + q.x*q.y), 1 - 2*(q.y*q.y + q.z*q.z));
+}
+
+void expectPathGeometry(const interfaces::Path& path, const nav_msgs::Odometry& ego) {
+  EXPECT_NEAR(path.points.front().pose.pose.position.x, ego.pose.pose.position.x, 1e-8);
+  EXPECT_NEAR(path.points.front().pose.pose.position.y, ego.pose.pose.position.y, 1e-8);
+  EXPECT_NEAR(std::remainder(headingOf(path.points.front().pose.pose.orientation) -
+      headingOf(ego.pose.pose.orientation), 2*std::acos(-1.0)), 0, 1e-8);
+  for (std::size_t i = 0; i < path.points.size(); ++i) {
+    SCOPED_TRACE(i);
+    const auto& point = path.points[i];
+    const auto& p = point.pose.pose.position;
+    const auto& q = point.pose.pose.orientation;
+    EXPECT_TRUE(std::isnan(point.velocity));
+    EXPECT_TRUE(std::isfinite(p.x) && std::isfinite(p.y) && std::isfinite(p.z));
+    EXPECT_NEAR(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w, 1, 1e-8);
+    if (i == 0) continue;
+    const auto& previous = path.points[i - 1].pose.pose;
+    const double distance = std::hypot(p.x - previous.position.x, p.y - previous.position.y);
+    EXPECT_GT(distance, 0);
+    const double curvature = std::abs(std::remainder(
+        headingOf(q) - headingOf(previous.orientation), 2*std::acos(-1.0))) / distance;
+    EXPECT_TRUE(std::isfinite(curvature));
+  }
+}
+
+double globalMse(const interfaces::Path& path, const pp::Route& global) {
+  double squared_error = 0;
+  for (const auto& point : path.points) {
+    double closest = std::numeric_limits<double>::infinity();
+    const lanelet::BasicPoint2d position(point.pose.pose.position.x, point.pose.pose.position.y);
+    for (const auto& lane : *global)
+      closest = std::min(closest, lanelet::geometry::distance2d(lane.centerline2d(), position));
+    squared_error += closest*closest;
+  }
+  return squared_error / path.points.size();
+}
+
 const char* parametersYaml =
     "path_length_m: 20\n"
     "sample_step_m: 0.5\n"
+    "reference_step_m: 2\n"
     "transition_lengths_m: [8, 12, 16]\n"
     "lateral_offsets_m: [-0.5, 0, 0.5]\n"
     "vehicle_front_m: 3.845008\n"
     "vehicle_rear_m: 0.79\n"
-    "vehicle_half_width_m: 1.080418\n"
-    "obstacle_margin_m: 0.2\n"
-    "max_curvature_inv_m: 0.2797\n";
+    "vehicle_half_width_m: 1.080418\n";
 }  // namespace
 
 TEST(FrenetPath, StartsAtEgoBeyondPredecessorAndExtendsAcrossSuccessors) {
@@ -139,6 +210,84 @@ TEST(FrenetPath, StartsAtEgoBeyondPredecessorAndExtendsAcrossSuccessors) {
   }
 }
 
+TEST(FrenetPath, ProducesPathAtCapturedKcityTurnPose) {
+  std::ifstream map_file(std::string(NP_PACKAGE_DIR) + "/../map/kcity_lanelet2.osm");
+  ASSERT_TRUE(map_file.good());
+  pp::SharedMap shared({pp::readLaneletMap(
+      std::string(std::istreambuf_iterator<char>(map_file), std::istreambuf_iterator<char>()))});
+  std::ifstream checkpoint_file(std::string(NP_PACKAGE_DIR) + "/../map/checkpoints.csv");
+  ASSERT_TRUE(checkpoint_file.good());
+  const auto checkpoints = pp::readCheckpoints(
+      std::string(std::istreambuf_iterator<char>(checkpoint_file), std::istreambuf_iterator<char>()));
+  ASSERT_GT(checkpoints.size(), 2u);
+  nav_msgs::Odometry ego;
+  ego.pose.pose.position.x = -99.16518005091528;
+  ego.pose.pose.position.y = -368.90550608011836;
+  ego.pose.pose.position.z = 28.900005381065853;
+  ego.pose.pose.orientation.x = -0.0010602508418359577;
+  ego.pose.pose.orientation.y = -0.0010576366397041317;
+  ego.pose.pose.orientation.z = -0.5156392761892773;
+  ego.pose.pose.orientation.w = -0.8568044666806357;
+  pp::GlobalPath global_core(shared);
+  const auto global = std::get<5>(global_core.process(ego, interfaces::CompetitionVehicleStatus{},
+      interfaces::Objects{}, tf2_msgs::TFMessage{}, sensor_msgs::Imu{},
+      pp::Checkpoints(checkpoints.begin() + 2, checkpoints.end())));
+  ASSERT_TRUE(static_cast<bool>(global));
+  pp::FrenetPath core({}, shared);
+  const auto path = core.process(ego, interfaces::Objects{}, global);
+  ASSERT_EQ(path.points.size(), 41u);
+  expectPathGeometry(path, ego);
+  EXPECT_LT(globalMse(path, global), 1.0);
+}
+
+TEST(FrenetPath, GeneratesPathStartingOutsideRoadWithoutObjects) {
+  auto shared = straightMap();
+  pp::FrenetPathParameters parameters;
+  parameters.lateral_offsets_m = {0};
+  pp::FrenetPath core(parameters, shared);
+  const auto ego = egoAt(2, 4);
+  const auto path = core.process(ego, interfaces::Objects{}, route(shared, {300, 301, 302}));
+  ASSERT_EQ(path.points.size(), 41u);
+  expectPathGeometry(path, ego);
+  EXPECT_NEAR(path.points.back().pose.pose.position.y, 0, 1e-8);
+}
+
+TEST(FrenetPath, GeneratesHighCurvatureLateralTransitionWithoutObjects) {
+  auto shared = straightMap();
+  pp::FrenetPathParameters parameters;
+  parameters.transition_lengths_m = {1};
+  parameters.lateral_offsets_m = {1.5};
+  pp::FrenetPath core(parameters, shared);
+  const auto ego = egoAt(2);
+  const auto path = core.process(ego, interfaces::Objects{}, route(shared, {300, 301, 302}));
+  ASSERT_EQ(path.points.size(), 41u);
+  expectPathGeometry(path, ego);
+  EXPECT_NEAR(path.points[2].pose.pose.position.y, 1.5, 1e-8);
+  EXPECT_NEAR(path.points.back().pose.pose.position.y, 1.5, 1e-8);
+}
+
+TEST(FrenetPath, FollowsContinuousLeftAndRightTurnsAcrossShortLanelets) {
+  for (double direction : {-1.0, 1.0}) {
+    for (double radius_m : {8.0, 10.0}) {
+      SCOPED_TRACE(direction);
+      SCOPED_TRACE(radius_m);
+      auto shared = turnMap(direction, radius_m);
+      pp::FrenetPath core({}, shared);
+      const auto global = route(shared, {302, 303, 304, 305, 306, 307, 308, 309});
+      auto ego = egoAt(-2, 0.2);
+      ego.pose.pose.orientation.z = std::sin(0.03 / 2);
+      ego.pose.pose.orientation.w = std::cos(0.03 / 2);
+      const auto path = core.process(ego, interfaces::Objects{}, global);
+      ASSERT_EQ(path.points.size(), 41u);
+      expectPathGeometry(path, ego);
+      EXPECT_NEAR(headingOf(path.points.back().pose.pose.orientation),
+          direction*std::acos(-1.0) / 2, 0.12);
+      EXPECT_GT(direction*path.points.back().pose.pose.position.y, radius_m);
+      EXPECT_LT(globalMse(path, global), 1.0);
+    }
+  }
+}
+
 TEST(FrenetPath, StartsInActualEgoLaneAndChangesToLegalGlobalNeighbor) {
   auto shared = parallelMap(true);
   pp::FrenetPathParameters parameters;
@@ -156,24 +305,73 @@ TEST(FrenetPath, StartsInActualEgoLaneAndChangesToLegalGlobalNeighbor) {
   }
 }
 
-TEST(FrenetPath, SolidBoundaryDoesNotCreateEscapeCandidate) {
+TEST(FrenetPath, PrefersLaterGlobalRouteLaneletBeforeDistance) {
+  auto shared = parallelMap(true);
+  pp::FrenetPathParameters parameters;
+  parameters.lateral_offsets_m = {0};
+  pp::FrenetPath core(parameters, shared);
+  const auto ego = egoAt(2);
+  const auto forward = core.process(ego, interfaces::Objects{}, route(shared, {300, 301}));
+  ASSERT_EQ(forward.points.size(), 41u);
+  expectPathGeometry(forward, ego);
+  EXPECT_NEAR(forward.points.back().pose.pose.position.y, 4, 1e-8);
+  const auto reverse = core.process(ego, interfaces::Objects{}, route(shared, {301, 300}));
+  ASSERT_EQ(reverse.points.size(), 41u);
+  expectPathGeometry(reverse, ego);
+  EXPECT_NEAR(reverse.points.back().pose.pose.position.y, 0, 1e-8);
+}
+
+TEST(FrenetPath, IgnoresBlockedHigherProgressCandidate) {
+  auto shared = parallelMap(true);
+  pp::FrenetPathParameters parameters;
+  parameters.lateral_offsets_m = {0};
+  pp::FrenetPath core(parameters, shared);
+  const auto ego = egoAt(2);
+  const auto path = core.process(ego, obstacleAt(20, 4, 1, 3), route(shared, {300, 301}));
+  ASSERT_EQ(path.points.size(), 41u);
+  expectPathGeometry(path, ego);
+  EXPECT_NEAR(path.points.back().pose.pose.position.y, 0, 1e-8);
+}
+
+TEST(FrenetPath, SolidBoundaryDoesNotCreateNeighborReference) {
   auto shared = parallelMap(false);
-  pp::FrenetPath core({}, shared);
-  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(10, 0, 1, 40),
-      route(shared, {301})).points.empty());
+  pp::FrenetPathParameters parameters;
+  parameters.lateral_offsets_m = {0};
+  pp::FrenetPath core(parameters, shared);
+  const auto ego = egoAt(2);
+  const auto path = core.process(ego, interfaces::Objects{}, route(shared, {301}));
+  ASSERT_EQ(path.points.size(), 41u);
+  expectPathGeometry(path, ego);
+  EXPECT_NEAR(path.points.back().pose.pose.position.y, 0, 1e-8);
 }
 
 TEST(FrenetPath, ReturnsEmptyWhenEveryCandidateIsBlocked) {
   auto shared = straightMap();
   pp::FrenetPath core({}, shared);
-  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(10, 0, 4, 40),
+  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(12, 0, 4, 40),
       route(shared, {300, 301, 302})).points.empty());
+}
+
+TEST(FrenetPath, UsesMapObjectsWithTranslatedAndRotatedEgo) {
+  auto lane = road(300,
+      lanelet::LineString3d(200, {lanelet::Point3d(100, 97, 200, 0),
+                                lanelet::Point3d(101, 97, 260, 0)}),
+      lanelet::LineString3d(201, {lanelet::Point3d(102, 103, 200, 0),
+                                lanelet::Point3d(103, 103, 260, 0)}));
+  pp::SharedMap shared({lanelet::utils::createMap({lane})});
+  pp::FrenetPath core({}, shared);
+  auto ego = egoAt(100, 202);
+  ego.pose.pose.orientation.z = ego.pose.pose.orientation.w = std::sqrt(0.5);
+  const auto global = route(shared, {300});
+  ASSERT_FALSE(core.process(ego, interfaces::Objects{}, global).points.empty());
+  EXPECT_TRUE(core.process(ego, obstacleAt(100, 210, 4, 40, std::acos(-1.0) / 2),
+      global).points.empty());
 }
 
 TEST(FrenetPath, FindsUnblockedFollowingBranch) {
   auto shared = branchingMap();
   pp::FrenetPath core({}, shared);
-  const auto path = core.process(egoAt(2), obstacleAt(21, 0, 0.2, 0.2), route(shared, {300}));
+  const auto path = core.process(egoAt(2), obstacleAt(23, 0, 0.2, 0.2), route(shared, {300}));
   ASSERT_GE(path.points.size(), 2u);
   EXPECT_GT(path.points.back().pose.pose.position.y, 1.5);
 }
@@ -204,7 +402,7 @@ TEST(FrenetPath, DetectsThinObstacleBetweenOutputSamples) {
   pp::FrenetPath core(parameters, shared);
   const auto global = route(shared, {300, 301, 302});
   EXPECT_FALSE(core.process(egoAt(2), interfaces::Objects{}, global).points.empty());
-  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(6, 0, 0.01, 40), global).points.empty());
+  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(8, 0, 0.01, 40), global).points.empty());
 }
 
 TEST(FrenetPath, UsesObservedBoundingBoxRotation) {
@@ -213,9 +411,40 @@ TEST(FrenetPath, UsesObservedBoundingBoxRotation) {
   parameters.lateral_offsets_m = {0};
   pp::FrenetPath core(parameters, shared);
   const auto global = route(shared, {300, 301, 302});
-  EXPECT_FALSE(core.process(egoAt(2), obstacleAt(10, 3, 8, 0.2), global).points.empty());
-  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(10, 3, 8, 0.2, std::acos(-1.0) / 4),
+  EXPECT_FALSE(core.process(egoAt(2), obstacleAt(12, 3, 8, 0.2), global).points.empty());
+  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(12, 3, 8, 0.2, std::acos(-1.0) / 4),
       global).points.empty());
+}
+
+TEST(FrenetPath, KeepsHorizontalObjectsIndependentOfEgoRollAndPitch) {
+  auto shared = straightMap();
+  pp::FrenetPathParameters parameters;
+  parameters.lateral_offsets_m = {0};
+  pp::FrenetPath core(parameters, shared);
+  const auto global = route(shared, {300, 301, 302});
+  auto ego = egoAt(2);
+  ego.header.frame_id = "map";
+  ego.child_frame_id = "base_link";
+  const Eigen::Quaterniond rotation = Eigen::AngleAxisd(std::acos(-1.0) / 6, Eigen::Vector3d::UnitY()) *
+      Eigen::AngleAxisd(std::acos(-1.0) / 3, Eigen::Vector3d::UnitX());
+  auto& orientation = ego.pose.pose.orientation;
+  orientation.x = rotation.x(); orientation.y = rotation.y();
+  orientation.z = rotation.z(); orientation.w = rotation.w();
+  auto objects = obstacleAt(12, 2.5, 1, 0.2);
+  objects.objects.front().position.z = objects.objects.front().bbox_pose.position.z = 0.75;
+  const auto unobstructed = core.process(ego, interfaces::Objects{}, global);
+  ASSERT_EQ(unobstructed.points.size(), 41u);
+  const auto path = core.process(ego, objects, global);
+  ASSERT_EQ(path.points.size(), unobstructed.points.size());
+  expectPathGeometry(path, ego);
+  for (std::size_t i = 0; i < path.points.size(); ++i) {
+    SCOPED_TRACE(i);
+    const auto& actual = path.points[i].pose.pose.position;
+    const auto& expected = unobstructed.points[i].pose.pose.position;
+    EXPECT_NEAR(actual.x, expected.x, 1e-8);
+    EXPECT_NEAR(actual.y, expected.y, 1e-8);
+    EXPECT_NEAR(actual.z, expected.z, 1e-8);
+  }
 }
 
 TEST(FrenetPathInputs, RejectsInvalidGeometryAndAllowsZeroSizedObservation) {
@@ -256,11 +485,12 @@ TEST(FrenetPathInputs, RejectsInvalidGeometryAndAllowsZeroSizedObservation) {
 TEST(FrenetPathParameters, LoadsCoefficientsAndRejectsUnsafeSampling) {
   const auto parameters = pp::loadFrenetPathParameters(node_pipeline::ParamReader::fromString(parametersYaml));
   EXPECT_DOUBLE_EQ(parameters.path_length_m, 20);
+  EXPECT_DOUBLE_EQ(parameters.reference_step_m, 2);
   EXPECT_EQ(parameters.transition_lengths_m, (std::vector<double>{8, 12, 16}));
   EXPECT_EQ(parameters.lateral_offsets_m, (std::vector<double>{-0.5, 0, 0.5}));
   const std::pair<std::string, std::string> invalid[] = {
       {"sample_step_m: 0.5", "sample_step_m: 0"},
-      {"obstacle_margin_m: 0.2", "obstacle_margin_m: -0.2"},
+      {"reference_step_m: 2", "reference_step_m: 0"},
       {"transition_lengths_m: [8, 12, 16]", "transition_lengths_m: []"},
       {"transition_lengths_m: [8, 12, 16]", "transition_lengths_m: [21]"},
       {"lateral_offsets_m: [-0.5, 0, 0.5]", "lateral_offsets_m: []"}};

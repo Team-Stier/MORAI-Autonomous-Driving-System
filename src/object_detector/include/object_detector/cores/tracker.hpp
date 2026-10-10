@@ -1,9 +1,8 @@
 #pragma once
 #include <interfaces/Objects.h>
-#include <interfaces/CompetitionVehicleStatus.h>
 #include <cstdint>
 #include <vector>
-#include <Eigen/Geometry>
+#include <Eigen/Core>
 #include <Eigen/QR>
 #include <algorithm>
 #include <deque>
@@ -11,7 +10,6 @@
 
 namespace object_detector {
 struct TrackerParameters {
-  double yaw_offset_rad = -0.023509;
   double association_gate_m = 2.5;
   double shape_weight = 0.2;
   double max_age_sec = 0.6;
@@ -22,24 +20,15 @@ class Tracker {
  public:
   explicit Tracker(TrackerParameters parameters = {}) : parameters_(parameters) {}
   interfaces::Objects process(const interfaces::Objects& objects,
-                              const interfaces::CompetitionVehicleStatus& status) {
-    const double time = status.header.stamp.toSec();
-    const Eigen::Matrix3d map_from_base = (
-      Eigen::AngleAxisd(status.yaw_rad + parameters_.yaw_offset_rad, Eigen::Vector3d::UnitZ()) *
-      Eigen::AngleAxisd(status.pitch_rad, Eigen::Vector3d::UnitY()) *
-      Eigen::AngleAxisd(status.roll_rad, Eigen::Vector3d::UnitX())).toRotationMatrix();
-    const Eigen::Vector3d ego_velocity = map_from_base * Eigen::Vector3d(status.velocity_x_mps, 0, 0);
-    if (have_ego_) ego_position_ += 0.5 * (ego_velocity_ + ego_velocity) * (time - ego_time_);
-    ego_velocity_ = ego_velocity;
-    ego_time_ = time;
-    have_ego_ = true;
+                              const ros::Time& stamp) {
+    const double time = stamp.toSec();
     tracks_.erase(std::remove_if(tracks_.begin(), tracks_.end(), [&](const Track& track) {
       return time - track.history.back().time > parameters_.max_age_sec;
     }), tracks_.end());
 
     std::vector<Eigen::Vector3d> positions;
     for (const auto& object : objects.objects)
-      positions.push_back(ego_position_ + map_from_base * vector(object.position));
+      positions.push_back(vector(object.position));
     const auto matches = associate(objects, positions, time);
     interfaces::Objects output;
     output.objects = objects.objects;
@@ -174,8 +163,5 @@ class Tracker {
   TrackerParameters parameters_;
   std::vector<Track> tracks_;
   std::uint32_t next_id_ = 1;
-  bool have_ego_ = false;
-  double ego_time_ = 0;
-  Eigen::Vector3d ego_position_ = Eigen::Vector3d::Zero(), ego_velocity_ = Eigen::Vector3d::Zero();
 };
 }  // namespace object_detector

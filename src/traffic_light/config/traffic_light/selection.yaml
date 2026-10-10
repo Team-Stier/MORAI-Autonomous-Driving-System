@@ -1,20 +1,20 @@
 recognize:
   section_core_map:
-    "0": yolo_traffic_light_mac.hpp
-    "1": yolo_traffic_light_mac.hpp
-    "2": yolo_traffic_light_mac.hpp
+    "0": unknown.hpp
+    "1": unknown.hpp
+    "2": unknown.hpp
     "3": yolo_traffic_light_mac.hpp
     "4": yolo_traffic_light_mac.hpp
     "5": yolo_traffic_light_mac.hpp
-    "6": yolo_traffic_light_mac.hpp
+    "6": unknown.hpp
     "7": yolo_traffic_light_mac.hpp
-    "8": yolo_traffic_light_mac.hpp
-    "9": yolo_traffic_light_mac.hpp
-    "10": yolo_traffic_light_mac.hpp
-    "11": yolo_traffic_light_mac.hpp
-    "12": yolo_traffic_light_mac.hpp
-    "13": yolo_traffic_light_mac.hpp
-    "14": yolo_traffic_light_mac.hpp
-    "15": yolo_traffic_light_mac.hpp
-    "16": yolo_traffic_light_mac.hpp
+    "8": unknown.hpp
+    "9": unknown.hpp
+    "10": unknown.hpp
+    "11": unknown.hpp
+    "12": unknown.hpp
+    "13": unknown.hpp
+    "14": unknown.hpp
+    "15": unknown.hpp
+    "16": unknown.hpp
   health_core_map: []

@@ -1,5 +1,6 @@
 #pragma once
 #include <sensor_msgs/PointCloud2.h>
+#include <interfaces/CompetitionVehicleStatus.h>
 #include <tf2/LinearMath/Transform.h>
 #include <tf2_msgs/TFMessage.h>
 #include <algorithm>
@@ -16,6 +17,7 @@ class PassThroughRoi {
   explicit PassThroughRoi(PassThroughRoiParameters parameters = {}) : parameters_(parameters) {}
 
   sensor_msgs::PointCloud2 process(const sensor_msgs::PointCloud2& cloud,
+                                  const interfaces::CompetitionVehicleStatus& competition,
                                   const tf2_msgs::TFMessage& tf_static) {
     const auto mount = std::find_if(tf_static.transforms.begin(), tf_static.transforms.end(),
       [&](const geometry_msgs::TransformStamped& transform) {
@@ -26,6 +28,10 @@ class PassThroughRoi {
     const auto& translation = transform.translation;
     const tf2::Transform mounting_tf(tf2::Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
       tf2::Vector3(translation.x, translation.y, translation.z));
+    tf2::Quaternion level_from_body;
+    level_from_body.setRPY(competition.roll_rad, competition.pitch_rad, 0);
+    const tf2::Transform level_from_sensor =
+      tf2::Transform(level_from_body, tf2::Vector3(0, 0, 0)) * mounting_tf;
     auto output = cloud;
     const auto field_offset = [&](const char* name) {
       return std::find_if(cloud.fields.begin(), cloud.fields.end(),
@@ -39,7 +45,7 @@ class PassThroughRoi {
         float coordinates[3];
         for (std::size_t axis = 0; axis < 3; ++axis)
           std::memcpy(&coordinates[axis], record + offsets[axis], sizeof(float));
-        const auto point = mounting_tf * tf2::Vector3(coordinates[0], coordinates[1], coordinates[2]);
+        const auto point = level_from_sensor * tf2::Vector3(coordinates[0], coordinates[1], coordinates[2]);
         if (point.z() >= parameters_.z_min_m && point.z() <= parameters_.z_max_m) {
           coordinates[0] = point.x();
           coordinates[1] = point.y();

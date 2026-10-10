@@ -32,7 +32,7 @@ class RollPitchLeveler {
     // 결과 frame은 차체와 함께 기울어지는 base_link가 아니다. 같은 뒷차축 원점과
     // 차량 yaw를 공유하면서 roll/pitch가 0인 수평 perception 좌표계다.
     // +x는 수평 heading 방향, +y는 좌측, +z는 중력 반대 방향이며 이후 ROI,
-    // VoxelGrid, DBSCAN, OBB와 /objects는 이 좌표를 그대로 사용한다.
+    // VoxelGrid·DBSCAN은 이 좌표를 사용하고, TF Stage가 클러스터를 map으로 옮겨 OBB·추적에 전달한다.
     // downstream이 차체나 map 좌표를 필요로 하면 자신의 입력 경계에서 timestamp에
     // 맞는 명시적인 변환을 해야 한다. frame 이름만 바꾸면 자세가 중복 반영될 수 있다.
     const auto mount = std::find_if(tf_static.transforms.begin(), tf_static.transforms.end(),

@@ -1,5 +1,5 @@
 stage: inject
 inputs: [path, light, competition, tf]
 validator: velocity_inputs.hpp
-policy: remove_invalid.hpp
+policy: missing_light_unknown.hpp
 allowed_issues: {path: [Stale, ReceiveTimeout, Skew], light: [Skew], tf: [Stale, ReceiveTimeout, Skew]}

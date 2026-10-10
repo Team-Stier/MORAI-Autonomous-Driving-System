@@ -1,4 +1,4 @@
 stage: local
 inputs: [ego, competition, objects, tf, imu, route, predictions]
-validator: route_present.hpp
+validator: core_path_inputs.hpp
 policy: remove_invalid.hpp

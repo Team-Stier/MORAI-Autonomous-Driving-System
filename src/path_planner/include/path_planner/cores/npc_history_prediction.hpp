@@ -53,34 +53,19 @@ class NpcHistoryPrediction {
                  const interfaces::Objects& objects, const tf2_msgs::TFMessage& tf,
                  const sensor_msgs::Imu& imu, const Route& route) {
     const double now = objects.header.stamp.toSec();
-    const double ego_time = ego.header.stamp.toSec();
-    if ((!ego_history_.empty() && ego_time < ego_history_.back().time) || now < last_stamp_) {
+    if (now < last_stamp_) {
       tracks_.clear();
-      ego_history_.clear();
       last_stamp_ = -std::numeric_limits<double>::infinity();
-    }
-    if (ego_history_.empty() || ego_time > ego_history_.back().time) {
-      const auto& q = ego.pose.pose.orientation;
-      const auto& p = ego.pose.pose.position;
-      const auto& v = ego.twist.twist.linear;
-      const auto& w = ego.twist.twist.angular;
-      ego_history_.push_back({ego_time, {p.x, p.y, p.z}, {q.w, q.x, q.y, q.z},
-                              {v.x, v.y, v.z}, {w.x, w.y, w.z}});
-      while (ego_history_.size() > 2 && ego_time - ego_history_[1].time > 30.2)
-        ego_history_.pop_front();
     }
     if (now == last_stamp_ && objects == last_objects_) {
       publishPredictions(last_predictions_);
       return std::make_tuple(ego, competition, objects, tf, imu, route, last_predictions_);
     }
-    if (now != last_stamp_) {
-      observation_frame_ = observationFrame(now);
-      last_stamp_ = now;
-    }
+    last_stamp_ = now;
     for (const auto& object : objects.objects) {
       auto& history = tracks_[object.id];
       const auto& p = object.position;
-      const Eigen::Vector3d point = observation_frame_ * Eigen::Vector3d(p.x, p.y, p.z);
+      const Eigen::Vector3d point(p.x, p.y, p.z);
       if (history.empty() || history.back().time != now) history.push_back({now, point});
       else history.back().point = point;
       while (!history.empty() && history.front().time < now - 30.0 - 1e-9)
@@ -130,7 +115,6 @@ class NpcHistoryPrediction {
       const auto recent = observations(history, now, 1.0);
       const Motion motion = estimateMotion(recent);
       const auto& observed = history.back().point;
-      const Eigen::Quaterniond frame_rotation(observation_frame_.rotation());
       const auto& source_q = input.bbox_pose.orientation;
       const Eigen::Quaterniond orientation(source_q.w, source_q.x, source_q.y, source_q.z);
       for (std::size_t k = 0; k < predictions.size(); ++k) {
@@ -161,20 +145,16 @@ class NpcHistoryPrediction {
                                          motion.turn_rate*velocity.x(), 0.0);
         }
         auto& output = predictions[k].objects[i];
-        const Eigen::Vector3d local_point = observation_frame_.inverse() * point;
-        const Eigen::Vector3d local_velocity = frame_rotation.conjugate() * velocity;
-        const Eigen::Vector3d local_acceleration = frame_rotation.conjugate() * acceleration;
-        output.position.x = local_point.x(); output.position.y = local_point.y(); output.position.z = local_point.z();
+        output.position.x = point.x(); output.position.y = point.y(); output.position.z = point.z();
         output.bbox_pose.position = output.position;
-        const Eigen::Quaterniond future_q = (frame_rotation.conjugate() *
-            Eigen::Quaterniond(Eigen::AngleAxisd(yaw_delta, Eigen::Vector3d::UnitZ())) *
-            frame_rotation * orientation).normalized();
+        const Eigen::Quaterniond future_q = (Eigen::Quaterniond(
+            Eigen::AngleAxisd(yaw_delta, Eigen::Vector3d::UnitZ())) * orientation).normalized();
         output.bbox_pose.orientation.x = future_q.x(); output.bbox_pose.orientation.y = future_q.y();
         output.bbox_pose.orientation.z = future_q.z(); output.bbox_pose.orientation.w = future_q.w();
-        output.velocity.x = local_velocity.x(); output.velocity.y = local_velocity.y(); output.velocity.z = local_velocity.z();
+        output.velocity.x = velocity.x(); output.velocity.y = velocity.y(); output.velocity.z = velocity.z();
         output.velocity_available = recent.size() > 1;
-        output.acceleration.x = local_acceleration.x(); output.acceleration.y = local_acceleration.y();
-        output.acceleration.z = local_acceleration.z();
+        output.acceleration.x = acceleration.x(); output.acceleration.y = acceleration.y();
+        output.acceleration.z = acceleration.z();
         output.acceleration_available = !selected.curve && recent.size() > 2;
       }
     }
@@ -187,12 +167,6 @@ class NpcHistoryPrediction {
  private:
   using Curve = NpcHistoryPredictionParameters::Curve;
   struct Observation { double time; Eigen::Vector3d point; };
-  struct EgoPose {
-    double time;
-    Eigen::Vector3d position;
-    Eigen::Quaterniond rotation;
-    Eigen::Vector3d velocity, angular_velocity;
-  };
   struct Fit {
     const Curve* curve = nullptr;
     double phase = 0.0, rate = 0.0;
@@ -231,35 +205,6 @@ class NpcHistoryPrediction {
     nearestPoint(tree, split > 0.0 ? point.left : point.right, x, y, nearest, distance);
     if (split*split <= distance)
       nearestPoint(tree, split > 0.0 ? point.right : point.left, x, y, nearest, distance);
-  }
-  Eigen::Isometry3d observationFrame(double time) const {
-    const auto after = std::lower_bound(ego_history_.begin(), ego_history_.end(), time,
-        [](const EgoPose& pose, double t) { return pose.time < t; });
-    Eigen::Isometry3d result = Eigen::Isometry3d::Identity();
-    if (after != ego_history_.begin() && after != ego_history_.end() &&
-        after->time-(after-1)->time <= 0.2+1e-9) {
-      const auto& before = *(after - 1);
-      const double u = (time - before.time) / (after->time - before.time);
-      result.linear() = before.rotation.slerp(u, after->rotation).toRotationMatrix();
-      result.translation() = (1.0-u)*before.position + u*after->position;
-    } else {
-      const auto& pose = after == ego_history_.end() ? ego_history_.back() : *after;
-      const double dt = time - pose.time;
-      const double omega = pose.angular_velocity.norm();
-      const double angle = omega*dt;
-      const double a = std::abs(angle) < 1e-5 ? dt*dt*(0.5-angle*angle/24.0) :
-                       (1.0-std::cos(angle))/(omega*omega);
-      const double b = std::abs(angle) < 1e-5 ? dt*dt*dt*(1.0/6.0-angle*angle/120.0) :
-                       (angle-std::sin(angle))/(omega*omega*omega);
-      const Eigen::Vector3d cross = pose.angular_velocity.cross(pose.velocity);
-      result.translation() = pose.position + pose.rotation *
-          (dt*pose.velocity + a*cross + b*pose.angular_velocity.cross(cross));
-      const Eigen::Quaterniond delta = omega == 0.0 ? Eigen::Quaterniond::Identity() :
-          Eigen::Quaterniond(Eigen::AngleAxisd(angle, pose.angular_velocity / omega));
-      // shortcut: constant body twist across pose gaps or outside the buffer; dense poses use interpolation.
-      result.linear() = (pose.rotation * delta).toRotationMatrix();
-    }
-    return result;
   }
   static double continuousSpan(const std::deque<Observation>& history) {
     std::size_t begin = history.size()-1;
@@ -386,8 +331,6 @@ class NpcHistoryPrediction {
   std::unordered_map<std::uint32_t, std::deque<Observation>> tracks_;
   interfaces::Objects last_objects_;
   PredictedObjects last_predictions_;
-  std::deque<EgoPose> ego_history_;
-  Eigen::Isometry3d observation_frame_ = Eigen::Isometry3d::Identity();
   double last_stamp_ = -std::numeric_limits<double>::infinity();
   using ObjectsVisualizer = node_pipeline::Visualizer<interfaces::Objects>;
   std::array<ObjectsVisualizer, 10> prediction_visualizers_{{

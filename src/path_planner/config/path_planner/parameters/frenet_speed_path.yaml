@@ -1,0 +1,18 @@
+path_length_m: 50.0
+sample_step_m: 0.5
+reference_step_m: 2.0
+transition_lengths_m: [8.0, 12.0, 16.0]
+lateral_offsets_m: [-0.5, 0.0, 0.5]
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+desired_speed_mps: 8.0
+max_acceleration_mps2: 2.0
+max_deceleration_mps2: 4.0
+max_jerk_mps3: 4.0
+max_lateral_acceleration_mps2: 2.0
+time_step_sec: 0.25
+command_step_sec: 0.2
+beam_width: 64
+collision_margin_m: 0.5
+prediction_uncertainty_mps: 0.2

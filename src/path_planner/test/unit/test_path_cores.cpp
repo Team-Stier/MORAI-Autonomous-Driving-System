@@ -82,7 +82,7 @@ template<class Container> pp::Checkpoints remaining(const Container& checkpoints
 TEST(PredictionPassThrough, CopiesAllTenSamplesWithoutChangingObservation) {
   interfaces::Objects objects;
   objects.header.stamp.fromSec(10.0);
-  objects.header.frame_id = "base_link";
+  objects.header.frame_id = "map";
   interfaces::Object object;
   object.id = 42;
   object.label = "vehicle";
@@ -110,7 +110,7 @@ TEST(PredictionPassThrough, CopiesAllTenSamplesWithoutChangingObservation) {
 
 TEST(PredictionPassThrough, PreservesEmptyObjectLists) {
   interfaces::Objects objects;
-  objects.header.frame_id = "base_link";
+  objects.header.frame_id = "map";
   pp::PredictionPassThrough core;
   const auto samples = std::get<6>(core.process(nav_msgs::Odometry{}, interfaces::CompetitionVehicleStatus{},
       objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
@@ -128,7 +128,7 @@ TEST(PathCores, ReturnsRouteWithPassThroughAndExtendsShortRoute) {
   ego.pose.pose.position.x = 2;
   ego.pose.pose.orientation.w = 1;
   interfaces::Objects objects;
-  objects.header.frame_id = "base_link";
+  objects.header.frame_id = "map";
   interfaces::CompetitionVehicleStatus competition;
   competition.gear = 4;
   tf2_msgs::TFMessage tf;
@@ -193,7 +193,7 @@ TEST(PathCores, CoresFollowRemainingMapCheckpoints) {
   auto ego = std::make_shared<nav_msgs::Odometry>();
   auto objects = std::make_shared<interfaces::Objects>();
   objects->header.stamp.fromSec(1.0);
-  objects->header.frame_id = "base_link";
+  objects->header.frame_id = "map";
   ego->pose.pose.position.x = checkpoints.front().x_m;
   ego->pose.pose.position.y = checkpoints.front().y_m;
   ego->pose.pose.orientation.z = std::sin(checkpoints.front().yaw_rad / 2);
@@ -265,7 +265,10 @@ TEST(EgoCompensatedPrediction, PassesAllInputsWithoutChangingTheObservation) {
   interfaces::CompetitionVehicleStatus competition;
   competition.velocity_x_mps = 2;
   interfaces::Objects objects;
+  objects.header.frame_id = "map";
   objects.objects.resize(1);
+  objects.objects.front().velocity_available = true;
+  objects.objects.front().acceleration_available = true;
   objects.objects.front().bbox_pose.orientation.w = 1;
   tf2_msgs::TFMessage tf;
   sensor_msgs::Imu imu;
@@ -279,6 +282,46 @@ TEST(EgoCompensatedPrediction, PassesAllInputsWithoutChangingTheObservation) {
   EXPECT_EQ(std::get<4>(result), imu);
   EXPECT_EQ(std::get<5>(result), route);
   for (const auto& sample : std::get<6>(result)) EXPECT_EQ(sample, objects);
+}
+
+TEST(EgoCompensatedPrediction, PredictsMapTurnIndependentlyOfVehiclePoseAndStatusTime) {
+  nav_msgs::Odometry ego;
+  ego.pose.pose.position.x = 100.0;
+  ego.pose.pose.orientation.y = std::sin(0.2);
+  ego.pose.pose.orientation.w = std::cos(0.2);
+  interfaces::CompetitionVehicleStatus status;
+  status.header.stamp.fromSec(9.8);
+  status.roll_rad = -0.2;
+  status.pitch_rad = 0.3;
+  status.yaw_rad = 0.8;
+  status.angular_velocity_z_radps = 0.4;
+  interfaces::Objects objects;
+  objects.header.seq = 17;
+  objects.header.stamp.fromSec(10.0);
+  objects.header.frame_id = "map";
+  objects.objects.resize(1);
+  auto& object = objects.objects.front();
+  object.position.x = 3.0; object.position.y = -4.0; object.position.z = 1.0;
+  object.bbox_pose.position = object.position;
+  object.bbox_pose.orientation.x = std::sqrt(0.5);
+  object.bbox_pose.orientation.w = std::sqrt(0.5);
+  object.velocity.x = 2.0 * 3.14159265358979323846;
+  object.velocity.z = 0.2;
+  object.acceleration.y = 0.4 * 3.14159265358979323846 * 3.14159265358979323846;
+  object.velocity_available = true;
+  object.acceleration_available = true;
+  const auto predictions = std::get<6>(pp::EgoCompensatedPrediction{}.process(ego, status, objects,
+      tf2_msgs::TFMessage{}, sensor_msgs::Imu{}, pp::Route{}));
+  for (const auto& sample : predictions) EXPECT_EQ(sample.header, objects.header);
+  const auto& quarter = predictions[4].objects.front();
+  EXPECT_NEAR(quarter.position.x, 13.0, 1e-10);
+  EXPECT_NEAR(quarter.position.y, 6.0, 1e-10);
+  EXPECT_NEAR(quarter.position.z, 1.5, 1e-10);
+  EXPECT_EQ(quarter.bbox_pose.position, quarter.position);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.x, 0.5, 1e-10);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.y, 0.5, 1e-10);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.z, 0.5, 1e-10);
+  EXPECT_NEAR(quarter.bbox_pose.orientation.w, 0.5, 1e-10);
 }
 
 TEST(CorePathPlanner, UsesImuAccelerationAndReturnsMapPathPayload) {

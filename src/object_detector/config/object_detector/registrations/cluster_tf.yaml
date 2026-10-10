@@ -1,0 +1,4 @@
+stage: tf
+inputs: [clusters, competition, tf]
+validator: cluster_transform.hpp
+allowed_issues: {tf: [Stale]}

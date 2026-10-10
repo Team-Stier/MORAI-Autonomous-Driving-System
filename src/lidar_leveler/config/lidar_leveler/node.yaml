@@ -23,4 +23,4 @@ stages:
   - name: level
     outputs:
       - {name: cloud, from: cloud}
-output: {topic: /velodyne_points/leveled, frame_id: base_link}
+output: {topic: /velodyne_points/leveled, frame_id: base_link_level}

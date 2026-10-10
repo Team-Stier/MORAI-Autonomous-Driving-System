@@ -55,9 +55,9 @@ class StopLineCutoffLeft {
       state_.stop_line_id = contact.id;
       state_.green_frames = 0;
     }
-    if (!state_.stopping) return {std::move(output), tf};
+    if (!state_.stopping || contact.id == 0) return {std::move(output), tf};
 
-    if (contact.id == 0 || stop_station_m < parameters.y_m) {
+    if (stop_station_m < parameters.y_m) {
       for (auto& point : output.points) {
         point.velocity = 0;
         point.acceleration = 0;

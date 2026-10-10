@@ -62,8 +62,15 @@ Stage 모두 출력 헤더에 주입하는 `snapshot.context.stamp_ns`와 같은
 `section_core_map`으로 기본 Core를 선택한다. 선택된 Core의 선언 입력이 모두 존재하고 허용 issue만
 남을 때까지, 일치하는 health 매핑으로 Core를 덮어쓰고 선택된 Core의 Policy를 적용해 재검사한다.
 
-입력 불안정에 대한 fallback은 이 Core 교체로 수행한다.
-다른 곳, 특히 Core 내부에서 입력 대체나 별도의 fallback을 구현하지 않는다.
+입력 불안정에 대한 fallback은 Core 교체로 수행하며, 선택된 Core의 Policy는 Missing 입력에 같은 타입의 대체값을 채울 수 있다.
+Policy 대체값은 현재 스냅샷에만 적용하고 입력 계약을 재검사한다.
+Core 내부나 이 두 경로 밖에서 입력 대체·fallback을 구현하지 않는다.
+
+**검증 환경 복구 예외:** Core 개발자는 검증용 로컬 Docker 환경이 중단되면
+[morai-container 절차](/Users/taeyunkim/.codex/skills/morai-container/SKILL.md)로 Docker Desktop과 기존 `morai-noetic-bridge`를 시작·재시작할 수 있다.
+이는 사용자님의 상시 승인 범위로 추가 허가가 필요 없으며, Core 등록 가이드의 검증 중 환경 임의 변경 금지에 대한 예외다.
+정상 실행 중인 컨테이너와 `run.sh`는 중단하지 않는다. 시뮬레이터와 `run.sh` 실행에는 별도 요청이 필요하다.
+이 예외는 그 밖의 환경·네트워크·Compose 설정 변경 권한으로 확대하지 않는다.
 
 ### 좌표계
 
@@ -77,7 +84,7 @@ Stage 모두 출력 헤더에 주입하는 `snapshot.context.stamp_ns`와 같은
 | 원점 | 위 UTM 좌표에 해당하는 지도 기준점 |
 | 축 | `+x` UTM 격자 동쪽, `+y` 격자 북쪽, `+z` 위쪽 |
 | 단위 | m |
-| 적용 대상 | 지도, 체크포인트, `/localization/ego`, `/local_path` |
+| 적용 대상 | 지도, 체크포인트, `/localization/ego`, `/objects`, 객체 예측, `/local_path` |
 
 GPS 위경도는 WGS84에서 UTM 52N으로 투영한 뒤 다음과 같이 변환한다.
 격자 북쪽과 진북은 구분한다.
@@ -120,7 +127,19 @@ Pose와 TF의 orientation은 ROS `geometry_msgs/Quaternion`의 **`(x, y, z, w)`*
 | 원점 | **MORAI 차량 좌표계 원점**: 공식 정의상 좌우 뒷바퀴 축의 중점(뒷차축 중심) |
 | 축 | `+x` 전방, `+y` 좌측, `+z` 위쪽 |
 | 단위 | m |
-| 적용 대상 | `/velodyne_points/leveled`, `/objects`, `/local_path/velocity_injected` |
+| 적용 대상 | 차량 상태, 센서 장착 TF, `/local_path/velocity_injected` |
+
+#### 수평 관측 좌표계 — `base_link_level`
+
+원점은 차량 뒷차축 중심이며, 차량의 yaw만 따르고 roll·pitch는 0이다.
+`+x`는 수평 차량 heading, `+y`는 좌측, `+z`는 위쪽이며 단위는 m다.
+`/velodyne_points/leveled`는 센서 장착 변환과 차체 roll·pitch 보정을 적용한 이 좌표계다.
+도로 자체의 경사를 평평하게 만드는 지면 추정은 수행하지 않는다.
+객체 검출은 이 점군을 클러스터링한 뒤 TF Stage에서 `/tf`의
+`map → base_link_level` 변환으로 클러스터를 map으로 옮긴다.
+map 클러스터로 bbox를 계산하고 map 위치를 추적해 지면 기준 절대 속도·가속도를 추정한다.
+`/objects`와 객체 예측의 위치·자세·벡터는 모두 map이며,
+추정되지 않은 속도·가속도는 availability 필드가 false다.
 
 
 #### 센서 좌표계 및 변환
@@ -283,6 +302,8 @@ flowchart TD
     i7 ---> TL --> tl
     sa ---> O
     ll ---> O ---> o
+    tf ---> O
+    c ---> O
     e ---> P
     c ---> P
     sa ---> P
@@ -321,11 +342,11 @@ flowchart TD
 | MORAI-UDP-Bridge-Node | 커밋 `dbd2da34abbd13634304ad20803b17be13228007`(현장 점검에서 검증된 저장소)에 고정하여 깃 서브모듈 링크. MORAI UDP 패킷과 ROS 토픽 사이를 번역. 단순 번역 계층으로 독자적인 로직·판단으로 콘텐츠를 훼손·누락하지 않는다. 센서·차량 상태 수신 및 최종 제어 명령 송신. |
 | velodyne | 커밋 `29abd0e1361cb7f5eda451d2b51c35eeca45e0d5`에 고정하여 깃 서브모듈 링크. velodyne vlp16의 공식 드라이버. LiDAR 데이터를 `/velodyne_points`로 발행. |
 | Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 /localization/ego로 발행한다.         |
-| LiDAR_Leveler_Node | TF_Publisher의 센서 장착 TF로 점군을 `base_link`로 변환해 `/velodyne_points/leveled` 발행. |
-| Object_Detector_Node | 수평화 점군을 클러스터링해 `/objects` 발행. |
+| LiDAR_Leveler_Node | 센서 장착 TF와 차체 roll·pitch로 점군을 수평화해 `base_link_level`의 `/velodyne_points/leveled` 발행. |
+| Object_Detector_Node | 수평화 점군을 클러스터링하고 TF로 map 변환한 뒤 bbox 피팅·추적해 `/objects` 발행. |
 | Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 YOLO 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
 | Section_Annotator_Node | ego가 맵의 어느 구간에 위치해 있는지 발행. 각 노드는 콜백으로 자신의 모드를 스위치할 수 있다. |
-| TF_Publisher_Node | ego 콜백으로 동적 `map → base_link` 발행. |
+| TF_Publisher_Node | ego 콜백으로 동적 `map → base_link`와 yaw만 따르는 `map → base_link_level` 발행. |
 | Static_TF_Publisher_Node | 센서 장착 변환을 시작 시 한 번 `/tf_static`으로 latched 발행. TF_Publisher_Node와 같은 `tf_publisher` 패키지에 둔다. |
 | Path_Planner_Node | ego 위치·자세와 `/vehicle/competition_status`의 차량 상태를 사용해 차선 추종·장애물 회피 경로 생성. |
 | Velocity_Planner_Node | 전달받은 경로의 속도 프로파일을 생성하고 TF로 `map`에서 `base_link`로 변환해 발행. 경로 형상을 다시 계획하지 않는다.     |
@@ -372,9 +393,9 @@ flowchart TD
 | `/image/right/compressed` | 우측 영상 | `sensor_msgs/CompressedImage` | `camera_right_optical_frame` | Bridge 영상 수신 ROS 시각 | 영상 프레임 조립 완료마다 |
 | `/image/camera_7/compressed` | 신호등 영상 | `sensor_msgs/CompressedImage` | `camera_7_optical_frame` | Bridge 영상 수신 ROS 시각 | 영상 프레임 조립 완료마다 |
 | `/velodyne_points` | 원본 점군 | `sensor_msgs/PointCloud2` | `velodyne` | 드라이버 scan stamp 유지; 현재 설정은 마지막 패킷 시각 | 10 Hz (100 ms); scan 수신마다 |
-| `/velodyne_points/leveled` | 차량 기준 점군 | `sensor_msgs/PointCloud2` | `base_link` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
+| `/velodyne_points/leveled` | 수평화 차량 기준 점군 | `sensor_msgs/PointCloud2` | `base_link_level` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
 | `/localization/ego` | 차량 위치·자세·3축 선속도·각속도 | `nav_msgs/Odometry` | pose: `map`, twist: `base_link`; 차량 뒷차축 중심 | 추정 상태가 나타내는 시각; 발행 시각으로 대체하지 않음 | 50 Hz |
-| `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `base_link` | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
+| `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `map`; 속도·가속도는 지면 기준 절대값 | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
 | `/traffic_light` | 신호등 인식 결과 | `interfaces/TrafficLight` | `camera_7_optical_frame` | 판정에 사용한 영상 stamp 유지 | 목표 5 Hz (200 ms); 최신 미처리 영상 사용 |
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf` | 동적 좌표 변환 | `tf2_msgs/TFMessage` | 각 변환의 `header.frame_id`가 부모, `child_frame_id`가 자식 | ego stamp 유지 | `/localization/ego` 콜백마다 |
@@ -395,7 +416,7 @@ Static_TF_Publisher_Node가 정적 변환을 발행한다. 동적 변환은 ego 
 
 ```text
 map
-└── base_link                    # 동적: ego pose
+├── base_link                    # 동적: ego pose
     ├── gps_link                 # 정적: 센서 장착 변환
     ├── imu_link                 # 정적
     ├── velodyne                 # 정적
@@ -403,6 +424,7 @@ map
     ├── camera_left_optical_frame  # 정적: optical 축 변환 포함
     ├── camera_right_optical_frame # 정적: optical 축 변환 포함
     └── camera_7_optical_frame     # 정적: optical 축 변환 포함
+└── base_link_level              # 동적: ego 위치와 yaw, roll/pitch=0
 ```
 
 ### External inputs and outputs

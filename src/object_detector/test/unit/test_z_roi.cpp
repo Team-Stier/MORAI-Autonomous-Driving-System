@@ -61,7 +61,13 @@ TEST(ZRoi, IncludesBothBoundsAndPreservesRecordsAndCompetition) {
   competition.link_id = "test_link";
   pkg::ZRoi core({-1.0, 2.0});
 
-  const auto result = core.process(input, competition);
+  tf2_msgs::TFMessage tf;
+  tf.transforms.resize(1);
+  tf.transforms.front().header.frame_id = "map";
+  tf.transforms.front().header.stamp.fromNSec(1234567890);
+  tf.transforms.front().child_frame_id = "base_link_level";
+  tf.transforms.front().transform.translation.x = 123;
+  const auto result = core.process(input, competition, tf);
   const auto& output = std::get<0>(result);
   EXPECT_EQ(input.header, output.header);
   EXPECT_EQ(input.fields, output.fields);
@@ -77,12 +83,13 @@ TEST(ZRoi, IncludesBothBoundsAndPreservesRecordsAndCompetition) {
   ASSERT_EQ(expected_status.num_bytes, actual_status.num_bytes);
   EXPECT_EQ(0, std::memcmp(expected_status.buf.get(), actual_status.buf.get(), expected_status.num_bytes));
   EXPECT_EQ(160u, input.data.size());
+  EXPECT_EQ(tf.transforms, std::get<2>(result).transforms);
 }
 
 TEST(ZRoi, ReadsOrganizedRowsWithPaddingAndReturnsContiguousPoints) {
   const auto input = cloud({1.0f, 3.0f, -2.0f, 2.0f}, 2, 8);
   pkg::ZRoi core({-1.0, 2.0});
-  const auto output = std::get<0>(core.process(input, {}));
+  const auto output = std::get<0>(core.process(input, {}, {}));
   EXPECT_EQ(1u, output.height);
   EXPECT_EQ(2u, output.width);
   EXPECT_EQ(64u, output.row_step);
@@ -94,7 +101,7 @@ TEST(ZRoi, ReadsOrganizedRowsWithPaddingAndReturnsContiguousPoints) {
 TEST(ZRoi, ReturnsEmptyCloudWhenEveryPointIsOutsideBounds) {
   const auto input = cloud({-2.0f, 3.0f}, 2);
   pkg::ZRoi core({-1.0, 2.0});
-  const auto output = std::get<0>(core.process(input, {}));
+  const auto output = std::get<0>(core.process(input, {}, {}));
   EXPECT_EQ(1u, output.height);
   EXPECT_EQ(0u, output.width);
   EXPECT_EQ(0u, output.row_step);
@@ -105,7 +112,7 @@ TEST(ZRoi, ReturnsEmptyCloudWhenEveryPointIsOutsideBounds) {
 TEST(ZRoi, AcceptsValidEmptyCloud) {
   const auto input = cloud({}, 0);
   pkg::ZRoi core({-1.0, 2.0});
-  const auto output = std::get<0>(core.process(input, {}));
+  const auto output = std::get<0>(core.process(input, {}, {}));
   EXPECT_EQ(1u, output.height);
   EXPECT_EQ(0u, output.width);
   EXPECT_EQ(0u, output.row_step);
@@ -124,7 +131,7 @@ TEST(ZRoi, RemovesVehicleReturnsAndKeepsNearbyAndAboveVehiclePoints) {
     std::memcpy(record + 8, &positions[i][1], sizeof(float));
   }
   pkg::ZRoi core({0.2, 2.0});
-  const auto output = std::get<0>(core.process(input, {}));
+  const auto output = std::get<0>(core.process(input, {}, {}));
   EXPECT_EQ(2u, output.width);
   EXPECT_EQ((std::vector<std::uint8_t>(input.data.begin() + 96, input.data.end())), output.data);
 }
@@ -141,7 +148,7 @@ TEST(ZRoi, RemovesVehicleBoundaryPoints) {
     std::memcpy(record + 8, &positions[i][1], sizeof(float));
   }
   pkg::ZRoi core({-1.0, 2.0});
-  EXPECT_EQ(0u, std::get<0>(core.process(input, {})).width);
+  EXPECT_EQ(0u, std::get<0>(core.process(input, {}, {})).width);
 }
 
 TEST(ZRoi, PreservesInputCoordinatesAndOtherFieldsWithNonzeroVehicleAttitude) {
@@ -157,7 +164,7 @@ TEST(ZRoi, PreservesInputCoordinatesAndOtherFieldsWithNonzeroVehicleAttitude) {
     std::memcpy(record + 16, &points[i][2], sizeof(float));
   }
   pkg::ZRoi core({0.2, 2.0});
-  const auto output = std::get<0>(core.process(input, competition));
+  const auto output = std::get<0>(core.process(input, competition, {}));
   ASSERT_EQ(1u, output.width);
   const std::uint32_t offsets[] = {4, 8, 16};
   for (std::size_t axis = 0; axis < 3; ++axis) {
@@ -177,7 +184,7 @@ TEST(ZRoiParameters, LoadsRequiredBoundsAndAllowsSingleHeight) {
   EXPECT_DOUBLE_EQ(1.25, parameters.z_min_m);
   EXPECT_DOUBLE_EQ(1.25, parameters.z_max_m);
   pkg::ZRoi core(parameters);
-  const auto output = std::get<0>(core.process(cloud({1.0f, 1.25f, 1.5f}, 3), {}));
+  const auto output = std::get<0>(core.process(cloud({1.0f, 1.25f, 1.5f}, 3), {}, {}));
   EXPECT_EQ(1u, output.width);
 }
 

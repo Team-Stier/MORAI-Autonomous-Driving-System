@@ -67,6 +67,14 @@ struct RemoveAll {
   int priority(np::Kind) const { return 100; }
   void correct(np::EditableInput& input, np::Kind) const { input.remove(); }
 };
+struct FillMissing {
+  int priority(np::Kind kind) const { return kind == np::Kind::Missing ? 100 : -1; }
+  void correct(np::EditableInput& input, np::Kind) const {
+    Reading value;
+    value.value = 2;
+    input.fill(std::move(value));
+  }
+};
 struct ValueNumbers {
   static std::vector<double> collect(const Reading& message) { return {message.value}; }
 };
@@ -344,6 +352,55 @@ TEST(Pipeline, PolicyRemovesInvalidInputAndRejectsAtCheckLimit) {
   EXPECT_EQ(std::vector<np::Kind>{np::Kind::OutRangeNegative}, fixture.io.healths->at(0).at(0));
   EXPECT_EQ(std::vector<np::Kind>{np::Kind::Missing}, fixture.io.healths->at(1).at(0));
   EXPECT_TRUE(fixture.io.published->empty());
+}
+
+TEST(Pipeline, PolicyFillsMissingInputBeforeCoreRuns) {
+  FakeIO io;
+  io.clocks->ros_ns = 10000000000;
+  io.clocks->steady_ns = 2000000000;
+  auto stage = stageOf<StageOne>(selector({{0, TestCoreId::Sum}}), {limits(), limits()}, true);
+  stage.core_profiles.front().policy = npd::InputPolicy::of<FillMissing>({0, 1});
+  SingleNode node(onInput(), Buffer(8), Assembler(-1), std::make_tuple(stage), makeCores(), FakeInjector{}, io);
+  const auto report = node.onInput(A{}, reading(3, 9900000000));
+  EXPECT_EQ(npd::ProcessStatus::Published, report.status);
+  EXPECT_EQ(2u, report.health_checks);
+  EXPECT_EQ((std::vector<np::Kind>{np::Kind::Missing, np::Kind::ReceiveTimeout}), io.healths->at(0).at(1));
+  ASSERT_EQ(1u, io.published->size());
+  EXPECT_DOUBLE_EQ(5.5, io.published->back().value);
+  const auto next = node.onInput(A{}, reading(4, 9950000000));
+  EXPECT_EQ(npd::ProcessStatus::Published, next.status);
+  EXPECT_EQ(2u, next.health_checks);
+  ASSERT_EQ(2u, io.published->size());
+  EXPECT_DOUBLE_EQ(6.5, io.published->back().value);
+}
+
+TEST(EditableInput, FillOnlyMissingInputOfSameType) {
+  std::shared_ptr<const void> message;
+  np::EditableInput input(message, std::type_index(typeid(Reading)));
+  EXPECT_FALSE(input.fill(Offset{}));
+  EXPECT_FALSE(message);
+  Reading value;
+  value.value = 2;
+  EXPECT_TRUE(input.fill(value));
+  value.value = 99;
+  EXPECT_FALSE(input.fill(value));
+  ASSERT_TRUE(message);
+  EXPECT_DOUBLE_EQ(2, static_cast<const Reading*>(message.get())->value);
+}
+
+TEST(InputPolicy, FillPreservesOriginalTimeMetadata) {
+  npd::StageData data;
+  data.inputs.push_back({{}, std::type_index(typeid(Reading)), 7, 9000000000, 500, true, true});
+  npd::Health<1> health;
+  health.inputs[0].issues = {np::Kind::Missing};
+  const auto policy = npd::InputPolicy::of<FillMissing>({0});
+  EXPECT_TRUE(policy.apply(data.typed<npd::Data<Reading>>(), health));
+  EXPECT_TRUE(data.inputs[0].present());
+  EXPECT_EQ(7u, data.inputs[0].id);
+  EXPECT_EQ(9000000000, data.inputs[0].stamp_ns);
+  EXPECT_EQ(500, data.inputs[0].receipt_steady_ns);
+  EXPECT_TRUE(data.inputs[0].has_stamp);
+  EXPECT_TRUE(data.inputs[0].has_receipt);
 }
 
 TEST(Pipeline, CommonChecksRejectOutOfRangeNumbers) {

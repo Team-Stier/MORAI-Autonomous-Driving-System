@@ -64,6 +64,8 @@ private:
         uint32_t id = 0;
         Kalman x;
         Kalman y;
+        Kalman z;
+        bool have_velocity = false;
     };
 
     std::vector<Track> tracks_;
@@ -184,13 +186,14 @@ public:
 
         last_time_ = now;
 
-        // Kalman Filter 위치 예측 (base_link 기준)
+        // Kalman Filter 위치 예측 (map 기준)
         for (auto& track : tracks_) {
             track.x.predict(dt);
             track.y.predict(dt);
+            track.z.predict(dt);
         }
 
-        // Hungarian 객체 매칭 (base_link 기준)
+        // Hungarian 객체 매칭 (map 기준)
         std::vector<int> matches = match(input);
         std::vector<Track> next_tracks;
 
@@ -200,27 +203,38 @@ public:
 
             Track track;
             bool matched = matches[i] >= 0;
+            geometry_msgs::Vector3 acceleration;
+            bool have_acceleration = false;
 
             if (matched) {
                 track = tracks_[matches[i]];
-
+                const double vx = track.x.v, vy = track.y.v, vz = track.z.v;
                 track.x.update(measured.position.x);
                 track.y.update(measured.position.y);
+                track.z.update(measured.position.z);
+                have_acceleration = track.have_velocity && dt > 0;
+                if (have_acceleration) {
+                    acceleration.x = (track.x.v - vx) / dt;
+                    acceleration.y = (track.y.v - vy) / dt;
+                    acceleration.z = (track.z.v - vz) / dt;
+                }
             } else {
                 track.id = next_id_++;
                 track.x.p = measured.position.x;
                 track.y.p = measured.position.y;
+                track.z.p = measured.position.z;
             }
 
             object.id = track.id;
 
             object.velocity.x = track.x.v;
             object.velocity.y = track.y.v;
-            // shortcut: XY 속도만 추정; Z 추정이 필요하면 Kalman 축을 추가한다.
-            object.velocity.z = 0.0;
+            object.velocity.z = track.z.v;
+            object.acceleration = acceleration;
 
-            object.velocity_available = matched;
-            object.acceleration_available = false;
+            track.have_velocity = matched && dt > 0;
+            object.velocity_available = track.have_velocity;
+            object.acceleration_available = have_acceleration;
 
             next_tracks.push_back(track);
         }

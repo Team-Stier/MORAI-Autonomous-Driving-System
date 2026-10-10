@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(object_detector)
-find_package(catkin REQUIRED COMPONENTS node_pipeline interfaces nav_msgs sensor_msgs pcl_conversions)
+find_package(catkin REQUIRED COMPONENTS node_pipeline interfaces tf2_msgs sensor_msgs pcl_conversions)
 find_package(PCL REQUIRED COMPONENTS common filters kdtree search)
 np_add_nodes(INCLUDE_DIRS ${PCL_INCLUDE_DIRS} LIBRARIES ${PCL_LIBRARIES})

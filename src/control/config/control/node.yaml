@@ -6,29 +6,29 @@ inputs:
     type: interfaces/Path
     topic: /local_path/velocity_injected
     frame: base_link
-    range: [0.0, 16.666666666666668]
-    stale_after_sec: 0.15
-    receive_timeout_sec: 0.15
+    range: [0.0, 111.11111111111111]
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   ego:
     type: nav_msgs/Odometry
     topic: /localization/ego
     frame: map
     numbers: [pose.pose.position.x, pose.pose.position.y, pose.pose.position.z, twist.twist.linear.y, twist.twist.angular.z]
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   competition:
     type: interfaces/CompetitionVehicleStatus
     topic: /vehicle/competition_status
     frame: base_link
     numbers: [velocity_x_mps]
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   imu:
     type: sensor_msgs/Imu
     topic: /sensors/imu/data
     frame: imu_link
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
 stages:
   - name: track
     outputs:

@@ -1,2 +1,2 @@
 stage: track
-inputs: [objects, competition]
+inputs: [objects, stamp]

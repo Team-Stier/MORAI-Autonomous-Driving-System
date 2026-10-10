@@ -119,6 +119,10 @@ pull_lfs_assets() {
 }
 
 run_step "Fetch Git LFS assets" pull_lfs_assets
+if [[ -z "${ONNXRUNTIME_ROOT:-}" && ! -d /opt/onnxruntime-gpu/1.19.2 &&
+      -d /opt/onnxruntime-cpu/1.19.2 ]]; then
+    export ONNXRUNTIME_ROOT=/opt/onnxruntime-cpu/1.19.2
+fi
 run_step "Build catkin workspace" catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -j2
 if [[ -r devel/setup.bash ]]; then
     source devel/setup.bash || fail "source workspace overlay"

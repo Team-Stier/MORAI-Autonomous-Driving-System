@@ -168,7 +168,27 @@ TEST(StopLineCutoff, CollinearContactAndLostStopLineDoNotReleaseStop) {
   EXPECT_TRUE(state.stopping);
   for (auto& point : path.points) point.pose.pose.position.y = 2;
   const auto output = core.process(path, makeLight(interfaces::TrafficLight::OFF, 2), makeStatus(), {});
-  for (const auto& point : output.first.points) EXPECT_DOUBLE_EQ(0, point.velocity);
+  EXPECT_EQ(path, output.first);
+  EXPECT_TRUE(state.stopping);
+  EXPECT_EQ(1, state.stop_line_id);
+}
+
+TEST(StopLineCutoff, LostStopLinePreservesLeftInputAndTf) {
+  velocity_planner::StopLineState state(makeParameters());
+  velocity_planner::StopLineCutoffLeft core(state);
+  auto path = makePath();
+  tf2_msgs::TFMessage tf;
+  tf.transforms.resize(1);
+  tf.transforms[0].transform.translation.x = 123;
+  core.process(path, makeLight(interfaces::TrafficLight::RED, 1), makeStatus(), tf);
+  for (auto& point : path.points) point.pose.pose.position.y = 2;
+  path.points[2].velocity = 12;
+  path.points[2].acceleration = 1.25;
+  const auto output = core.process(path, makeLight(interfaces::TrafficLight::OFF, 2), makeStatus(), tf);
+  EXPECT_EQ(path, output.first);
+  EXPECT_EQ(tf, output.second);
+  EXPECT_TRUE(state.stopping);
+  EXPECT_EQ(1, state.stop_line_id);
 }
 
 TEST(StopLineCutoff, DirectionChangeDoesNotMixGreenConfirmationFrames) {

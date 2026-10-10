@@ -39,11 +39,14 @@ Bank `shared_map.hpp`는 `config/path_planner/parameters/shared_map.yaml`의 `ma
 
 ## Prediction·LocalPath
 
-기본 `core_prediction.hpp`는 ego로 객체를 map 좌표계로 옮겨 예측한다. 차량은 관측 속도·가속도로 구한 등속 선회율을, 나머지 객체는 등속 직선 모델을 사용한다. 0.5초 간격의 10개 결과를 관측 시점 base_link 좌표계로 반환한다. 예측 간격은 `config/path_planner/parameters/core_prediction.yaml`의 `step_sec`로 지정하며 0.5초로 고정한다.
-기본 `core_path_planner.hpp`는 route 중심선·차선 경계와 객체 예측, ego 운동 상태·IMU 가속도로 DP/QP 기반 경로를 계산한다. 차량 치수·계획 길이·도로/장애물 여유·곡률·가감속 한도는 `config/path_planner/parameters/core_path_planner.yaml`에 둔다.
-Validator `route_present.hpp`는 경로 탐색 결과가 없는 route를 Missing으로 기록하며, 이때 local Stage는 Core를 호출하지 않는다.
+`/objects`와 예측 객체의 위치·자세·절대 속도·가속도는 map이다. `core_prediction.hpp`는 map 관측을 직접 사용해 차량은 관측 속도·가속도로 구한 등속 선회율을, 나머지는 등속 직선 모델로 예측하고 map 결과를 반환한다. 예측 간격은 `config/path_planner/parameters/core_prediction.yaml`의 `step_sec`로 지정하며 0.5초로 고정한다.
+9번 섹션의 `npc_history_prediction.hpp`는 map 위치 이력으로 운동을 추정한다. 객체 좌표 변환을 위한 ego 이력은 사용하지 않는다.
+`core_path_planner.hpp`는 route 중심선·차선 경계와 map 객체 예측, ego 운동 상태·IMU 가속도로 DP/QP 기반 경로를 계산한다. 차량 치수·계획 길이·도로/장애물 여유·곡률·가감속 한도는 `config/path_planner/parameters/core_path_planner.yaml`에 둔다. `frenet_path.hpp`, `frenet_speed_path.hpp`, `roundabout_merge.hpp`도 map 객체·예측을 직접 사용한다.
+`route_present.hpp`와 CorePathPlanner의 `core_path_inputs.hpp`는 경로 탐색 결과가 없는 route를 Missing으로 기록하며, 이때 local Stage는 Core를 호출하지 않는다.
+`core_path_inputs.hpp`는 관측·예측 속도의 availability와 유한 값을 요구한다. 속도가 미제공이면 local Stage는 `health_core_map`으로 bbox만 사용하는 `frenet_path.hpp`를 선택한다.
 
 모든 Core는 Policy `remove_invalid.hpp`로 값·stamp·frame 오류 입력을 제거한다. 허용 issue는 각 `registrations/*.yaml`에 선언한 입력·issue에 한정한다.
+`prediction_motion_inputs.hpp`는 관측 벡터로 운동을 예측하는 Core에 속도·가속도의 availability와 유한 값을 요구한다. 운동 추정값이 없는 경우 prediction Stage는 `health_core_map`으로 `prediction_pass_through.hpp`를 선택한다.
 `prediction_pass_through.hpp`는 관측 Objects를 10개 예측 시점에 그대로 복사하는 등록된 대체 Core이며, `prediction_core.hpp`는 등속 선회 예측 대체 Core다. `local_path.hpp`는 route 중심선을 ego 투영점부터 잘라 경로를 만드는 등록된 대체 Core이며, 경로 길이는 `config/path_planner/parameters/local_path.yaml`의 `local_path_length_m`로 지정한다.
 
 ## 예측 배열 계약
@@ -53,7 +56,7 @@ Prediction Core의 반환과 LocalPath Core의 입력은 **Objects 메시지를 
 
 - `[0]`은 예측에 사용한 `/objects` 시각에서 0.5초 뒤, `[9]`는 5.0초 뒤의 객체 상태다. 목표 시각은 `objects.header.stamp + 0.5 × (i + 1)`초다.
 - 모든 원소의 header는 예측에 사용한 원본 `/objects`와 같다. `stamp`에 미래 시각이나 계산 완료 시각을 넣지 않는다.
-- 배열 인덱스는 예측 목표 시각을 나타내고 header는 예측에 사용한 관측의 기준 시각·좌표계를 나타낸다. 객체 상태는 원본 `/objects`의 `base_link` 좌표 기준으로 표현한다.
+- 배열 인덱스는 예측 목표 시각을 나타내고 header는 예측에 사용한 관측의 기준 시각·좌표계를 나타낸다. 객체 상태는 원본 `/objects`와 같은 map 좌표 기준으로 표현한다.
 - 외부 배열의 길이는 항상 10이다. 객체가 없으면 각 원소의 `objects` 목록은 비어 있다.
 
 

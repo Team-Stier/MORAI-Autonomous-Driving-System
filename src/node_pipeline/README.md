@@ -54,7 +54,7 @@ C++ 소스는 위 경로와 `test/` 밖에 두지 않는다. `test/unit/test_*.c
 5. Stage마다 `section_core_map`으로 Core를 선택한다. section이 미수신이거나 `frame_id≠map`·`stamp≤0`·미래 stamp이면 UNKNOWN(0)을 사용한다. 매핑된 Core가 없으면 `finish(NoCore, checks, "no compatible core")`로 종료한다.
 6. 검사 회차마다 선택된 Core의 profile로 입력 계약을 확인하고 health를 생성한다. Core 선언 입력의 슬롯이 부족하거나 존재하는 payload의 타입이 다르면 예외를 발생시키며, Failed로 보고하고 해당 처리 회차만 종료한다. 공통 검사층이 Missing·frame·선언 수치 필드의 NaN·Inf·범위·stamp·수신 timeout·skew를 검사한 뒤, 선택된 Core의 Validator가 도메인 고유 검사를 추가한다. timestamp 나이는 ROS 시각, 수신 경과는 steady 시각으로 검사한다. 최초 Stage의 구독 입력이 Missing이면 수신 대기는 노드 시작 시각 기준이다. Health는 input별 모든 오류를 보관한다.
 7. 선택된 Core의 선언 입력이 모두 존재하고 그 입력의 issue가 모두 `allowed_issues`에 포함되면 검사를 끝낸다. 선언 입력의 Missing은 허용 issue로 면제하지 않는다. Core가 선언하지 않은 입력의 issue는 판정에서 제외한다.
-8. 수용 조건을 만족하지 못하면 `health_core_map`으로 Core를 덮어쓴다. `when`은 AND 조건이고 가장 높은 priority의 일치 규칙을 적용한다. 일치하는 규칙이 없으면 현재 Core를 유지하며, 최고 priority 동률은 설정 오류다. 이어서 그 시점에 선택된 Core의 Policy를 적용하고, 다음 회차에서 그 Core의 Validator로 재검사한다. Policy는 입력의 보정 복사본만 수정하며 stamp·수신 시각을 보존한다.
+8. 수용 조건을 만족하지 못하면 `health_core_map`으로 Core를 덮어쓴다. `when`은 AND 조건이고 가장 높은 priority의 일치 규칙을 적용한다. 일치하는 규칙이 없으면 현재 Core를 유지하며, 최고 priority 동률은 설정 오류다. 이어서 그 시점에 선택된 Core의 Policy를 적용하고, 다음 회차에서 그 Core의 Validator로 재검사한다. Policy는 현재 스냅샷의 payload를 보정하거나 Missing 슬롯에 같은 타입의 대체값을 채운다. InputBuffer 원본과 슬롯의 stamp·수신 시각·sample ID는 보존하며, 최초 미수신 슬롯에 시각·수신 기록을 생성하지 않는다.
 9. Stage당 최대 검사 횟수는 `max_health_checks`이며 기본값은 10이다. 한도 안에서 수용하지 못하면 `finish(Rejected, checks, "health check limit")`로 종료한다.
 10. 첫 Stage의 Core 호출 직전에 Pipeline이 시도 token을 기록한다. Core ID별 case는 선언 입력의 존재를 다시 확인하고, Missing이면 `finish(NoCore, checks, "required core input missing")`로 종료한다. Core 반환값으로 `snapshot.data.inputs`만 교체하고 context·token·is_new는 이전 회차에서 이어받는다.
 11. Stage 출력 중 `from`으로 선언한 패스스루 값은 대응 입력 슬롯의 시간 메타데이터를 상속하고, 새 계산값은 시간 메타데이터를 비운다. 시간 정보가 없는 값에는 stamp·수신 timeout 검사를 적용하지 않고, skew는 양쪽 stamp가 있는 입력 쌍만 검사한다. 시간 정보의 부재와 입력값 Missing은 구분한다.
@@ -76,7 +76,7 @@ nav_msgs::Odometry process(const sensor_msgs::NavSatFix& gps,
 ```
 
 구독 입력을 다른 값 타입으로 변환하거나 Core에 Data·Slot·Sample 래퍼, Health, section, 수신 관리용 메타데이터를 넘기지 않는다.
-원래 메시지의 header는 메시지의 일부로 전달된다. Policy가 보정해도 메시지 타입은 동일하며 보정한 필드만 바뀐다.
+원래 메시지의 header는 메시지의 일부로 전달된다. Policy 보정·대체 후에도 메시지 타입은 동일하다.
 
 중간 Stage의 Core는 `node.yaml`에 선언된 해당 Stage `outputs`의 개수·타입·순서대로 반환한다. 여러 반환 값은 `std::pair`·`std::tuple`로 묶는다.
 마지막 Stage의 Core는 발행 메시지 타입 하나를 반환하고 payload를 완성한다.
@@ -101,7 +101,8 @@ Core 하나당 파일 하나를 둔다. 그 파일에는 필요한 include, Core
 Core 생성자는 연결한 것만 파라미터 값, Bank 참조 순서로 받는다. 연결한 것이 없으면 기본 생성자를 사용한다.
 
 Pipeline은 선택된 Core의 선언 입력 issue 중 0 이상인 Policy priority의 최고 issue 하나를 골라 `correct()`를 호출한다. 음수 priority는 보정하지 않는다.
-동률은 input·issue 순회 순서다. 이미 Missing인 입력은 다시 보정하지 않는다. `EditableInput`은 해당 입력의 `remove()`와 같은 타입 복사본의 `modify<T>(fn)`만 제공한다.
+동률은 input·issue 순회 순서이며 Missing도 Policy 대상이다. `EditableInput`은 해당 입력의 `remove()`, 같은 타입 복사본의 `modify<T>(fn)`, Missing 슬롯을 채우는 `bool fill<T>(T value)`를 제공한다.
+`fill()`은 슬롯이 Missing이고 기대 타입과 `T`가 같을 때만 값을 채워 true를 반환한다. 이미 payload가 있거나 타입이 다르면 변경 없이 false를 반환한다. 대체값도 다음 health 재검사를 통과해야 Core를 호출한다.
 `ParamReader`는 해당 Core 파라미터의 `has(key)`·`number(key)`·`integer(key)`·`text(key)`·`flag(key)`·`numbers(key)`·`keys(key)`와, 파라미터로 지정한 정적 자산 파일의 내용을 읽는 `asset(key)`만 제공한다. 키 경로는 `a/b`로 쓰고, 자산의 상대 경로는 패키지 디렉터리 기준이다. 키가 없거나 타입이 다르면 예외를 던지며, 시작 단계 실패로 보고된다.
 
 ## YAML
@@ -130,7 +131,7 @@ inputs:
   lidar:
     type: sensor_msgs/PointCloud2
     topic: /velodyne_points/leveled
-    frame: base_link
+    frame: base_link_level
     stale_after_sec: 0.3
     receive_timeout_sec: 0.3
     check_skew: false

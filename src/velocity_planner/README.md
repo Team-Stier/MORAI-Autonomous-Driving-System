@@ -26,7 +26,8 @@ map 경로에 속도를 주입하고 신호등 정지를 적용한 뒤 base_link
 - `stop_line_pass_through.hpp`는 기존 정지 상태를 유지하고 확인 횟수를 초기화한다. 정지 해제는 해당 방향의 정지 Core에서 수행한다.
 - `transform`의 `tf.hpp`는 map→base_link 역변환을 모든 pose에 적용하고 점 순서·속도·가속도를 유지한다. Validator가 필요한 TF와 pose 계약을 검사한다.
 - 출력 path와 각 point의 stamp는 입력 값을 상속한다. 최종 frame 헤더는 Pipeline이 주입한다.
-- Policy `remove_invalid.hpp`는 값·stamp·frame 오류 입력을 제거한다. path·tf의 Stale·ReceiveTimeout·Skew 및 light의 Skew는 허용 issue다.
+- `inject`의 모든 Core는 Policy `missing_light_unknown.hpp`로 Missing light에 `TrafficLight::UNKNOWN` (`frame_id=camera_7_optical_frame`, `stamp=0`)을 채운다. 다른 입력의 Missing과 값·stamp·frame 오류 및 이미 수신한 light의 Stale·ReceiveTimeout은 보정하지 않고 거부한다.
+- `cutoff`·`transform`의 Policy `remove_invalid.hpp`는 값·stamp·frame 오류 입력을 제거한다. path·tf의 Stale·ReceiveTimeout·Skew 및 light의 Skew는 허용 issue다.
 - `launch.sh`가 ROS·워크스페이스 환경을 준비하고 자기 노드만 실행한다.
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.

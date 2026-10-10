@@ -10,7 +10,7 @@ class PredictionCore {
   using Result = std::tuple<nav_msgs::Odometry, interfaces::CompetitionVehicleStatus,
                             interfaces::Objects, tf2_msgs::TFMessage, sensor_msgs::Imu, Route, PredictedObjects>;
 
-  // Uniform planar turn in the observation's base_link frame.
+  // Uniform planar turn in map using absolute velocity and acceleration.
   // Input velocity and acceleration are available; tangential acceleration is ignored.
   Result process(const nav_msgs::Odometry& ego, const interfaces::CompetitionVehicleStatus& competition,
                  const interfaces::Objects& objects, const tf2_msgs::TFMessage& tf,

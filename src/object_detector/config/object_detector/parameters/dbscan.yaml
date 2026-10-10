@@ -1,5 +1,5 @@
 voxel_leaf_size: 0.075
-dbscan_eps: 0.16
-dbscan_min_points: 8
+dbscan_eps: 2.1
+dbscan_min_points: 5
 min_cluster_size: 6
-max_cluster_size: 1000
+max_cluster_size: 5000

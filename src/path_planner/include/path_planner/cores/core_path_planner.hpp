@@ -336,7 +336,6 @@ class CorePathPlanner {
     const auto& orientation = ego.pose.pose.orientation;
     const Eigen::Quaterniond map_from_base(orientation.w, orientation.x, orientation.y, orientation.z);
     const auto& position = ego.pose.pose.position;
-    const Eigen::Vector3d origin(position.x, position.y, position.z);
     EgoState state;
     state.pose.position = {position.x, position.y};
     state.pose.yaw_rad = std::atan2(2 * (orientation.w*orientation.z + orientation.x*orientation.y),
@@ -363,19 +362,14 @@ class CorePathPlanner {
     const auto convert = [&](const interfaces::Objects& sample, std::vector<PredictedObject>& output) {
       output.reserve(sample.objects.size());
       for (const auto& object : sample.objects) {
-        const Eigen::Vector3d point = origin + map_from_base *
-          Eigen::Vector3d(object.position.x, object.position.y, object.position.z);
-        const Eigen::Vector3d velocity = map_from_base *
-          Eigen::Vector3d(object.velocity.x, object.velocity.y, object.velocity.z);
         const auto& q = object.bbox_pose.orientation;
-        const Eigen::Quaterniond rotation = map_from_base * Eigen::Quaterniond(q.w, q.x, q.y, q.z);
         PredictedObject converted;
         converted.id = object.id;
         converted.kind = object.label == "vehicle" ? ObjectKind::Vehicle : ObjectKind::Unknown;
-        converted.pose.position = {point.x(), point.y()};
-        converted.pose.yaw_rad = std::atan2(2 * (rotation.w()*rotation.z() + rotation.x()*rotation.y()),
-                                         1 - 2 * (rotation.y()*rotation.y() + rotation.z()*rotation.z()));
-        converted.velocity_mps = {velocity.x(), velocity.y()};
+        converted.pose.position = {object.position.x, object.position.y};
+        converted.pose.yaw_rad = std::atan2(2 * (q.w*q.z + q.x*q.y),
+                                         1 - 2 * (q.y*q.y + q.z*q.z));
+        converted.velocity_mps = {object.velocity.x, object.velocity.y};
         converted.length_m = object.bbox_size.x;
         converted.width_m = object.bbox_size.y;
         converted.source_stamp_sec = objects.header.stamp.toSec();

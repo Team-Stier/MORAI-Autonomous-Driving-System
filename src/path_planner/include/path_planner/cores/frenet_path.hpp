@@ -8,13 +8,7 @@
 #include <lanelet2_routing/RoutingGraph.h>
 #include <lanelet2_traffic_rules/TrafficRulesFactory.h>
 #include <Eigen/Geometry>
-#include <boost/geometry/algorithms/correct.hpp>
-#include <boost/geometry/algorithms/covered_by.hpp>
-#include <boost/geometry/algorithms/union.hpp>
-#include <boost/geometry/geometries/multi_polygon.hpp>
-#include <boost/geometry/geometries/polygon.hpp>
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -26,13 +20,12 @@ namespace path_planner {
 struct FrenetPathParameters {
   double path_length_m = 20.0;
   double sample_step_m = 0.5;
+  double reference_step_m = 2.0;
   std::vector<double> transition_lengths_m{8.0, 12.0, 16.0};
   std::vector<double> lateral_offsets_m{-0.5, 0.0, 0.5};
   double vehicle_front_m = 3.845008;
   double vehicle_rear_m = 0.790000;
   double vehicle_half_width_m = 1.080418;
-  double obstacle_margin_m = 0.2;
-  double max_curvature_inv_m = 0.2797;
 };
 
 class FrenetPath {
@@ -48,33 +41,26 @@ class FrenetPath {
                            const Route& route) {
     const auto& p = ego.pose.pose.position;
     const auto& q = ego.pose.pose.orientation;
-    const Eigen::Quaterniond rotation(q.w, q.x, q.y, q.z);
+    const double heading = yaw(Eigen::Quaterniond(q.w, q.x, q.y, q.z));
     const Vec2 position(p.x, p.y);
-    const double heading = yaw(rotation);
     const auto current = match(position, heading, route->front());
     lanelet::ConstLanelets seeds{current};
     const auto left = graph_->left(current), right = graph_->right(current);
     if (left) seeds.push_back(*left);
     if (right) seeds.push_back(*right);
     std::vector<Reference> references;
-    lanelet::ConstLanelets corridor;
     for (const auto& seed : seeds) {
       const auto chains = extend(seed, position);
-      for (const auto& reference : chains) {
-        references.push_back(reference);
-        for (const auto& lane : reference.lanes)
-          if (std::find(corridor.begin(), corridor.end(), lane) == corridor.end()) corridor.push_back(lane);
-      }
-      includePreviousRoad(seed, position, corridor);
+      references.insert(references.end(), chains.begin(), chains.end());
     }
-    updateRoad(corridor);
     updateRoute(*route);
-    const auto obstacles = objectBoxes(objects, rotation, Vec3(p.x, p.y, p.z));
+    const auto obstacles = objectBoxes(objects);
     visualization_msgs::MarkerArray display;
     visualization_msgs::Marker clear;
     clear.action = visualization_msgs::Marker::DELETEALL;
     display.markers.push_back(clear);
     interfaces::Path selected;
+    std::size_t best_progress = 0;
     double best_cost = std::numeric_limits<double>::infinity();
     std::size_t selected_marker = 0;
     for (const auto& reference : references) {
@@ -82,15 +68,16 @@ class FrenetPath {
         for (double offset : parameters_.lateral_offsets_m) {
           auto candidate = generate(reference, position, heading, transition, offset);
           if (candidate.points.empty()) continue;
-          const bool drivable = onRoad(candidate, current, corridor);
-          const bool collision = collides(candidate, obstacles);
-          const bool accepted = drivable && !collision;
+          const bool accepted = !collides(candidate, obstacles);
           auto marker = visualize(candidate, ego.header, static_cast<int>(display.markers.size()), accepted);
-          const double cost = accepted ? routeCost(candidate) : std::numeric_limits<double>::infinity();
-          if (cost < best_cost) {
-            best_cost = cost;
-            selected = std::move(candidate);
-            selected_marker = display.markers.size();
+          if (accepted) {
+            const auto cost = routeCost(candidate);
+            if (cost.first > best_progress || (cost.first == best_progress && cost.second < best_cost)) {
+              best_progress = cost.first;
+              best_cost = cost.second;
+              selected = std::move(candidate);
+              selected_marker = display.markers.size();
+            }
           }
           display.markers.push_back(std::move(marker));
         }
@@ -109,15 +96,13 @@ class FrenetPath {
   using Vec2 = lanelet::BasicPoint2d;
   using Vec3 = lanelet::BasicPoint3d;
   using LaneKey = std::pair<lanelet::Id, bool>;
-  using RoadPolygon = boost::geometry::model::polygon<Vec2>;
-  using Road = boost::geometry::model::multi_polygon<RoadPolygon>;
   struct Line {
     std::vector<Vec3> points;
     std::vector<double> stations;
+    mutable std::vector<Vec3> controls;
   };
   struct LaneData {
     Line center;
-    std::vector<Vec2> polygon;
   };
   struct Reference {
     Line line;
@@ -129,10 +114,18 @@ class FrenetPath {
     double distance_squared = std::numeric_limits<double>::infinity();
     Vec3 point = Vec3::Zero();
     double heading = 0.0;
+    double metric = 1.0;
+    double curvature = 0.0;
+    Vec2 derivative = Vec2::Zero();
+    Vec2 second_derivative = Vec2::Zero();
   };
   struct Box {
     Vec2 center;
     double heading, half_length, half_width;
+  };
+  struct RouteSegment {
+    Vec2 start, end;
+    std::size_t index;
   };
 
   static LaneKey key(const lanelet::ConstLanelet& lane) { return {lane.id(), lane.inverted()}; }
@@ -153,6 +146,7 @@ class FrenetPath {
     if (!line.points.empty() && distance == 0.0) return;
     line.stations.push_back(line.points.empty() ? 0.0 : line.stations.back() + distance);
     line.points.push_back(point);
+    line.controls.clear();
   }
   const LaneData& data(const lanelet::ConstLanelet& lane) {
     const auto id = key(lane);
@@ -160,32 +154,69 @@ class FrenetPath {
     if (found != lanes_.end()) return found->second;
     LaneData value;
     for (const auto& point : lane.centerline3d().basicLineString()) append(value.center, point);
-    for (const auto& point : lane.leftBound3d()) value.polygon.emplace_back(point.x(), point.y());
-    const auto right = lane.rightBound3d();
-    for (std::size_t i = right.size(); i > 0; --i) value.polygon.emplace_back(right[i - 1].x(), right[i - 1].y());
     return lanes_.emplace(id, std::move(value)).first->second;
   }
-  static Projection project(const Line& line, const Vec2& position) {
+  Projection project(const Line& line, const Vec2& position,
+                     double limit = std::numeric_limits<double>::infinity()) const {
     Projection best;
     for (std::size_t i = 1; i < line.points.size(); ++i) {
+      if (line.stations[i - 1] > limit) break;
       const Vec2 start = line.points[i - 1].head<2>();
       const Vec2 delta = line.points[i].head<2>() - start;
       const double ratio = std::max(0.0, std::min(1.0, (position - start).dot(delta) / delta.squaredNorm()));
-      const Vec3 point = line.points[i - 1] + ratio * (line.points[i] - line.points[i - 1]);
-      const double distance = (point.head<2>() - position).squaredNorm();
-      if (distance < best.distance_squared)
-        best = {line.stations[i - 1] + ratio * (line.stations[i] - line.stations[i - 1]),
-                distance, point, std::atan2(delta.y(), delta.x())};
+      const double upper = std::min(line.stations[i], limit);
+      double station = std::min(upper, line.stations[i - 1] + ratio * (line.stations[i] - line.stations[i - 1]));
+      for (int iteration = 0; iteration < 8; ++iteration) {
+        const auto value = sample(line, station);
+        const Vec2 residual = value.point.head<2>() - position;
+        const double denominator = value.derivative.squaredNorm() + residual.dot(value.second_derivative);
+        if (std::abs(denominator) < 1e-12) break;
+        const double next = std::max(line.stations[i - 1], std::min(upper,
+            station - residual.dot(value.derivative) / denominator));
+        if (std::abs(next - station) < 1e-8) { station = next; break; }
+        station = next;
+      }
+      auto value = sample(line, station);
+      value.distance_squared = (value.point.head<2>() - position).squaredNorm();
+      if (value.distance_squared < best.distance_squared) best = value;
     }
     return best;
   }
-  static Projection sample(const Line& line, double station) {
+  static Vec3 sampleLine(const Line& line, double station) {
     auto end = std::upper_bound(line.stations.begin(), line.stations.end(), station);
     const std::size_t i = std::min(line.points.size() - 1,
         std::max<std::size_t>(1, static_cast<std::size_t>(end - line.stations.begin())));
     const Vec3 delta = line.points[i] - line.points[i - 1];
     const double ratio = (station - line.stations[i - 1]) / (line.stations[i] - line.stations[i - 1]);
-    return {station, 0.0, line.points[i - 1] + ratio * delta, std::atan2(delta.y(), delta.x())};
+    return line.points[i - 1] + ratio * delta;
+  }
+  Projection sample(const Line& line, double station) const {
+    const double spacing = parameters_.reference_step_m;
+    if (line.controls.empty()) {
+      const std::size_t count = static_cast<std::size_t>(std::ceil(line.stations.back() / spacing)) + 1;
+      line.controls.reserve(count);
+      for (std::size_t i = 0; i < count; ++i) line.controls.push_back(sampleLine(line, spacing * i));
+    }
+    const int index = static_cast<int>(std::floor(station / spacing));
+    const double u = station / spacing - index, v = 1.0 - u;
+    const auto control = [&](int i) -> Vec3 {
+      if (i < 0) return line.controls.front() + i * (line.controls[1] - line.controls[0]);
+      if (i >= static_cast<int>(line.controls.size()))
+        return line.controls.back() + (i - static_cast<int>(line.controls.size()) + 1) *
+            (line.controls.back() - line.controls[line.controls.size() - 2]);
+      return line.controls[static_cast<std::size_t>(i)];
+    };
+    const Vec3 p0 = control(index - 1), p1 = control(index), p2 = control(index + 1), p3 = control(index + 2);
+    // Uniform cubic B-spline controls smooth lanelet junction kinks without forcing the curve through each corner.
+    const Vec3 point = (v*v*v*p0 + (3*u*u*u - 6*u*u + 4)*p1 +
+        (-3*u*u*u + 3*u*u + 3*u + 1)*p2 + u*u*u*p3) / 6;
+    const Vec3 first = (-v*v*p0 + (3*u*u - 4*u)*p1 +
+        (-3*u*u + 2*u + 1)*p2 + u*u*p3) / (2 * spacing);
+    const Vec3 second = (v*p0 + (3*u - 2)*p1 + (-3*u + 1)*p2 + u*p3) / (spacing * spacing);
+    const double metric = first.head<2>().norm();
+    const double curvature = metric > 1e-9 ? cross(first.head<2>(), second.head<2>()) / (metric*metric*metric) : 0.0;
+    return {station, 0.0, point, std::atan2(first.y(), first.x()), metric, curvature,
+            first.head<2>(), second.head<2>()};
   }
   lanelet::ConstLanelet match(const Vec2& position, double heading, lanelet::ConstLanelet selected) {
     auto score = [&](const lanelet::ConstLanelet& lane, double polygon_distance) {
@@ -207,13 +238,12 @@ class FrenetPath {
   std::vector<Reference> extend(const lanelet::ConstLanelet& seed, const Vec2& position) {
     const Line first = data(seed).center;
     const double start = project(first, position).station;
-    const double coverage = start + parameters_.path_length_m +
-                            std::hypot(parameters_.vehicle_front_m, parameters_.vehicle_half_width_m);
     std::vector<Reference> pending{{first, {seed}, start}}, complete;
     while (!pending.empty()) {
       Reference reference = std::move(pending.back());
       pending.pop_back();
-      if (reference.line.stations.back() >= coverage) {
+      reference.start_s = project(reference.line, position, first.stations.back()).station;
+      if (reference.line.stations.back() - reference.start_s >= parameters_.path_length_m) {
         complete.push_back(std::move(reference));
         continue;
       }
@@ -228,42 +258,22 @@ class FrenetPath {
         pending.push_back(std::move(next));
         extended = true;
       }
-      if (!extended) complete.push_back(std::move(reference));
-    }
-    return complete;
-  }
-  void includePreviousRoad(const lanelet::ConstLanelet& seed, const Vec2& position,
-                           lanelet::ConstLanelets& corridor) {
-    const double remaining = std::hypot(parameters_.vehicle_rear_m, parameters_.vehicle_half_width_m) -
-                             project(data(seed).center, position).station;
-    std::vector<std::pair<lanelet::ConstLanelet, double>> pending{{seed, remaining}};
-    std::map<LaneKey, double> explored;
-    while (!pending.empty()) {
-      const auto item = pending.back();
-      pending.pop_back();
-      if (item.second <= 0.0) continue;
-      const auto visited = explored.find(key(item.first));
-      if (visited != explored.end() && visited->second >= item.second) continue;
-      explored[key(item.first)] = item.second;
-      // A reference starts at the current lane, but the rear bumper can still occupy earlier lanes.
-      for (const auto& lane : graph_->previous(item.first, false)) {
-        if (std::find(corridor.begin(), corridor.end(), lane) == corridor.end()) corridor.push_back(lane);
-        pending.emplace_back(lane, item.second - data(lane).center.stations.back());
+      if (!extended) {
+        complete.push_back(std::move(reference));
       }
     }
+    return complete;
   }
   interfaces::Path generate(const Reference& reference, const Vec2& position, double heading,
                             double transition, double offset) const {
     interfaces::Path path;
     const auto origin = sample(reference.line, reference.start_s);
     const double relative_yaw = wrap(heading - origin.heading);
-    if (std::cos(relative_yaw) <= 0.05) return path;
-    const double horizon = std::min(parameters_.path_length_m, reference.line.stations.back() - reference.start_s -
-        std::hypot(parameters_.vehicle_front_m, parameters_.vehicle_half_width_m));
-    if (horizon < parameters_.sample_step_m) return path;
+    const double horizon = std::min(parameters_.path_length_m, reference.line.stations.back() - reference.start_s);
+    if (horizon <= 0.0) return path;
     transition = std::min(transition, horizon);
     const double d0 = (position - origin.point.head<2>()).dot(normal(origin.heading));
-    const double slope = std::tan(relative_yaw) * transition;
+    const double slope = std::tan(relative_yaw) * origin.metric * (1.0 - origin.curvature * d0) * transition;
     const double delta = offset - d0;
     const double a3 = 10 * delta - 6 * slope, a4 = -15 * delta + 8 * slope, a5 = 6 * delta - 3 * slope;
     const int steps = static_cast<int>(std::ceil(horizon / parameters_.sample_step_m));
@@ -286,120 +296,20 @@ class FrenetPath {
       const double angle = i == 0 ? heading : std::atan2(direction.y(), direction.x());
       auto& orientation = path.points[i].pose.pose.orientation;
       orientation.z = std::sin(angle / 2); orientation.w = std::cos(angle / 2);
-      if (i == 0) continue;
-      const Vec2 step = xy(path.points[i].pose.pose.position) - xy(path.points[i - 1].pose.pose.position);
-      if (step.dot(unit(poseYaw(path.points[i - 1].pose.pose))) <= 0.0 ||
-          std::abs(wrap(angle - poseYaw(path.points[i - 1].pose.pose))) > parameters_.max_curvature_inv_m * step.norm())
-        return {};
     }
     return path;
   }
-  static bool contains(const std::vector<Vec2>& polygon, const Vec2& point) {
-    bool inside = false;
-    for (std::size_t i = 0, j = polygon.size() - 1; i < polygon.size(); j = i++) {
-      const Vec2 a = polygon[j], b = polygon[i], delta = b - a;
-      if (point.x() >= std::min(a.x(), b.x()) - 1e-9 && point.x() <= std::max(a.x(), b.x()) + 1e-9 &&
-          point.y() >= std::min(a.y(), b.y()) - 1e-9 && point.y() <= std::max(a.y(), b.y()) + 1e-9 &&
-          std::abs(cross(point - a, delta)) <= 1e-9 * delta.norm()) return true;
-      if ((a.y() > point.y()) != (b.y() > point.y()) &&
-          point.x() < a.x() + (point.y() - a.y()) * delta.x() / delta.y()) inside = !inside;
-    }
-    return inside;
-  }
   static double cross(const Vec2& a, const Vec2& b) { return a.x() * b.y() - a.y() * b.x(); }
-  bool connected(const lanelet::ConstLanelet& from, const lanelet::ConstLanelet& to) const {
-    if (from == to) return true;
-    const auto following = graph_->following(from, false);
-    if (std::find(following.begin(), following.end(), to) != following.end()) return true;
-    const auto left = graph_->left(from), right = graph_->right(from);
-    return (left && *left == to) || (right && *right == to);
-  }
-  bool onRoad(const interfaces::Path& path, const lanelet::ConstLanelet& current,
-              const lanelet::ConstLanelets& corridor) {
-    lanelet::ConstLanelets active{current};
-    for (std::size_t i = 0; i < path.points.size(); ++i) {
-      const auto& pose = path.points[i].pose.pose;
-      const auto first = egoBox(path.points[i == 0 ? 0 : i - 1].pose.pose), last = egoBox(pose);
-      if (!boost::geometry::covered_by(boxPolygon(sweepBox(first, last)), road_)) return false;
-      if (i == 0) continue;
-      const Vec2 begin = xy(path.points[i - 1].pose.pose.position), end = xy(pose.position), delta = end - begin;
-      std::vector<double> cuts{0.0, 1.0};
-      for (const auto& lane : corridor) {
-        const auto& polygon = data(lane).polygon;
-        for (std::size_t k = 0, j = polygon.size() - 1; k < polygon.size(); j = k++) {
-          const Vec2 edge = polygon[k] - polygon[j];
-          const double denominator = cross(delta, edge);
-          if (std::abs(denominator) < 1e-12) continue;
-          const double u = cross(polygon[j] - begin, edge) / denominator;
-          const double v = cross(polygon[j] - begin, delta) / denominator;
-          if (u > 0.0 && u < 1.0 && v >= 0.0 && v <= 1.0) cuts.push_back(u);
-        }
-      }
-      std::sort(cuts.begin(), cuts.end());
-      for (std::size_t k = 1; k < cuts.size(); ++k) {
-        if (cuts[k] - cuts[k - 1] < 1e-9) continue;
-        const Vec2 middle = begin + ((cuts[k] + cuts[k - 1]) / 2) * delta;
-        lanelet::ConstLanelets next;
-        for (const auto& lane : corridor) {
-          if (contains(data(lane).polygon, middle) &&
-              std::any_of(active.begin(), active.end(), [&](const auto& from) { return connected(from, lane); }))
-            next.push_back(lane);
-        }
-        if (next.empty()) return false;
-        active = std::move(next);
-      }
-    }
-    return true;
-  }
   Box egoBox(const geometry_msgs::Pose& pose) const {
     const double heading = poseYaw(pose);
     return {xy(pose.position) + ((parameters_.vehicle_front_m - parameters_.vehicle_rear_m) / 2) * unit(heading),
             heading, (parameters_.vehicle_front_m + parameters_.vehicle_rear_m) / 2, parameters_.vehicle_half_width_m};
   }
-  static RoadPolygon boxPolygon(const Box& box) {
-    RoadPolygon polygon;
-    const Vec2 x = box.half_length * unit(box.heading), y = box.half_width * normal(box.heading);
-    polygon.outer() = {box.center + x + y, box.center + x - y,
-                       box.center - x - y, box.center - x + y, box.center + x + y};
-    return polygon;
-  }
-  void updateRoad(const lanelet::ConstLanelets& corridor) {
-    std::vector<LaneKey> ids;
-    for (const auto& lane : corridor) ids.push_back(key(lane));
-    std::sort(ids.begin(), ids.end());
-    if (ids == road_ids_) return;
-    road_ids_ = std::move(ids);
-    road_.clear();
-    for (const auto& lane : corridor) {
-      RoadPolygon polygon;
-      for (const auto& point : data(lane).polygon) polygon.outer().push_back(point);
-      boost::geometry::correct(polygon);
-      if (road_.empty()) road_.push_back(std::move(polygon));
-      else {
-        Road united;
-        boost::geometry::union_(road_, polygon, united);
-        road_ = std::move(united);
-      }
-    }
-  }
-  std::vector<Box> objectBoxes(const interfaces::Objects& objects, const Eigen::Quaterniond& rotation,
-                               const Vec3& origin) const {
+  std::vector<Box> objectBoxes(const interfaces::Objects& objects) const {
     std::vector<Box> boxes;
     for (const auto& object : objects.objects) {
-      const auto& p = object.bbox_pose.position;
-      const auto& q = object.bbox_pose.orientation;
-      const Vec3 center = origin + rotation * Vec3(p.x, p.y, p.z);
-      const Eigen::Matrix3d axes = (rotation * Eigen::Quaterniond(q.w, q.x, q.y, q.z)).toRotationMatrix();
-      const double heading = std::atan2(axes(1, 0), axes(0, 0));
-      double length = 0.0, width = 0.0;
-      // Project all three box axes so roll/pitch cannot shrink the collision footprint.
-      for (int i = 0; i < 3; ++i) {
-        const double half_size = (i == 0 ? object.bbox_size.x : i == 1 ? object.bbox_size.y : object.bbox_size.z) / 2;
-        length += half_size * std::abs(axes.col(i).head<2>().dot(unit(heading)));
-        width += half_size * std::abs(axes.col(i).head<2>().dot(normal(heading)));
-      }
-      boxes.push_back({center.head<2>(), heading, length + parameters_.obstacle_margin_m,
-                       width + parameters_.obstacle_margin_m});
+      boxes.push_back({xy(object.bbox_pose.position), poseYaw(object.bbox_pose),
+                       object.bbox_size.x / 2, object.bbox_size.y / 2});
     }
     return boxes;
   }
@@ -437,25 +347,34 @@ class FrenetPath {
     if (ids == route_ids_) return;
     route_ids_ = std::move(ids);
     route_segments_.clear();
+    std::size_t index = 0;
     for (const auto& lane : route) {
       const auto& points = data(lane).center.points;
       for (std::size_t i = 1; i < points.size(); ++i)
-        route_segments_.emplace_back(points[i - 1].head<2>(), points[i].head<2>());
+        route_segments_.push_back({points[i - 1].head<2>(), points[i].head<2>(), index});
+      ++index;
     }
   }
-  double routeCost(const interfaces::Path& path) const {
+  std::pair<std::size_t, double> routeCost(const interfaces::Path& path) const {
     double cost = 0.0;
+    std::size_t endpoint_index = 0;
     for (const auto& point : path.points) {
       const Vec2 position = xy(point.pose.pose.position);
       double nearest = std::numeric_limits<double>::infinity();
+      std::size_t nearest_index = 0;
       for (const auto& segment : route_segments_) {
-        const Vec2 delta = segment.second - segment.first;
-        const double u = std::max(0.0, std::min(1.0, (position - segment.first).dot(delta) / delta.squaredNorm()));
-        nearest = std::min(nearest, (position - segment.first - u * delta).squaredNorm());
+        const Vec2 delta = segment.end - segment.start;
+        const double u = std::max(0.0, std::min(1.0, (position - segment.start).dot(delta) / delta.squaredNorm()));
+        const double distance = (position - segment.start - u * delta).squaredNorm();
+        if (distance < nearest || (distance == nearest && segment.index > nearest_index)) {
+          nearest = distance;
+          nearest_index = segment.index;
+        }
       }
       cost += nearest;
+      endpoint_index = nearest_index;
     }
-    return cost / path.points.size();
+    return {endpoint_index, cost / path.points.size()};
   }
   static visualization_msgs::Marker visualize(const interfaces::Path& path, const std_msgs::Header& header,
                                                int id, bool accepted) {
@@ -480,10 +399,8 @@ class FrenetPath {
   lanelet::traffic_rules::TrafficRulesPtr rules_;
   lanelet::routing::RoutingGraphUPtr graph_;
   std::map<LaneKey, LaneData> lanes_;
-  std::vector<LaneKey> road_ids_;
-  Road road_;
   std::vector<LaneKey> route_ids_;
-  std::vector<std::pair<Vec2, Vec2>> route_segments_;
+  std::vector<RouteSegment> route_segments_;
   node_pipeline::Visualizer<visualization_msgs::MarkerArray> visualizer_;
 };
 }  // namespace path_planner

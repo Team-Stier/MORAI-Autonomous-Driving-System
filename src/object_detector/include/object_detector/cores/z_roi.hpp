@@ -1,5 +1,6 @@
 #pragma once
 #include <interfaces/CompetitionVehicleStatus.h>
+#include <tf2_msgs/TFMessage.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <algorithm>
 #include <cstdint>
@@ -17,8 +18,9 @@ class ZRoi {
  public:
   explicit ZRoi(ZRoiParameters parameters) : parameters_(parameters) {}
 
-  std::tuple<sensor_msgs::PointCloud2, interfaces::CompetitionVehicleStatus> process(
-      const sensor_msgs::PointCloud2& cloud, const interfaces::CompetitionVehicleStatus& competition) {
+  std::tuple<sensor_msgs::PointCloud2, interfaces::CompetitionVehicleStatus, tf2_msgs::TFMessage> process(
+      const sensor_msgs::PointCloud2& cloud, const interfaces::CompetitionVehicleStatus& competition,
+      const tf2_msgs::TFMessage& tf) {
     const auto field_offset = [&](const char* name) {
       return std::find_if(cloud.fields.begin(), cloud.fields.end(),
         [&](const sensor_msgs::PointField& field) { return field.name == name; })->offset;
@@ -49,7 +51,7 @@ class ZRoi {
     output.width = retained;
     output.row_step = retained * output.point_step;
     output.data.resize(output.row_step);
-    return std::make_tuple(std::move(output), competition);
+    return std::make_tuple(std::move(output), competition, tf);
   }
 
  private:
