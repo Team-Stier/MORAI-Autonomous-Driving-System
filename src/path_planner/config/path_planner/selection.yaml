@@ -67,9 +67,9 @@ local:
     "1": frenet_path.hpp
     "2": frenet_path.hpp
     "3": frenet_path.hpp
-    "4": frenet_path.hpp
-    "5": frenet_path.hpp
-    "6": frenet_path.hpp
+    "4": hybrid_astar.hpp
+    "5": hybrid_astar.hpp
+    "6": hybrid_astar.hpp
     "7": frenet_path.hpp
     "8": frenet_path.hpp
     "9": roundabout_merge.hpp

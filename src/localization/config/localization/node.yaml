@@ -1,6 +1,6 @@
 execution: {mode: periodic, frequency_hz: 50.0, reference_input: imu, queue_capacity: 8, max_health_checks: 10}
 section_topic: /section_annotation
-max_skew_sec: 0.06
+max_skew_sec: 0.1
 inputs:
   gps:
     type: sensor_msgs/NavSatFix

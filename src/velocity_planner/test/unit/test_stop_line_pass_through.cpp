@@ -1,4 +1,5 @@
 #include <velocity_planner/cores/stop_line_pass_through.hpp>
+#include <velocity_planner/cores/stop_line_cutoff_straight.hpp>
 #include <gtest/gtest.h>
 
 TEST(StopLinePassThrough, KeepsTheMapPathAndTfOutsideSignalMissions) {
@@ -33,4 +34,36 @@ TEST(StopLinePassThrough, KeepsAnExistingStopWhenTheSectionChanges) {
   }
   EXPECT_TRUE(state.stopping);
   EXPECT_EQ(0, state.green_frames);
+}
+
+TEST(StopLinePassThrough, ReleasesTheSharedStopAtTimeoutAfterTheSectionChanges) {
+  velocity_planner::StopLineStateParameters parameters;
+  parameters.stop_lines = {{1, {{{25, -1}}, {{25, 1}}}}};
+  velocity_planner::StopLineState state(parameters);
+  velocity_planner::StopLineCutoffStraight straight(state);
+  velocity_planner::StopLinePassThrough pass(state);
+  interfaces::Path path;
+  path.header.stamp.fromSec(10);
+  path.points.resize(2);
+  path.points.back().pose.pose.position.x = 40;
+  for (auto& point : path.points) {
+    point.velocity = 10;
+    point.acceleration = 1;
+  }
+  interfaces::TrafficLight red;
+  red.state = interfaces::TrafficLight::RED;
+  red.header.stamp.fromSec(1);
+  interfaces::CompetitionVehicleStatus competition;
+  straight.process(path, red, competition, {});
+  ASSERT_TRUE(state.stopping);
+  path.header.stamp.fromSec(109.999);
+  EXPECT_DOUBLE_EQ(0, pass.process(path, {}).first.points.front().velocity);
+  EXPECT_TRUE(state.stopping);
+  path.header.stamp.fromSec(110);
+  EXPECT_EQ(path, pass.process(path, {}).first);
+  EXPECT_FALSE(state.stopping);
+  EXPECT_EQ(1, state.released_stop_line_id);
+  path.header.stamp.fromSec(111);
+  EXPECT_EQ(path, straight.process(path, red, competition, {}).first);
+  EXPECT_FALSE(state.stopping);
 }

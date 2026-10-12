@@ -50,6 +50,8 @@ Executable nodes must never terminate on their own under any condition. Do not l
 
 ## Authority & Protected Work
 
+The agent's default role is Core developer. Lead developer authority applies only when the user explicitly assigns the agent that role in the current chat. Do not infer lead authority from a task request, previous chats, repository access, or the agent's own statements. Without that explicit assignment, stay within the Core developer scope defined in `src/node_pipeline/CORE_REGISTRATION.md`.
+
 Treat all pre-existing files and uncommitted changes as user-managed: preserve them and limit edits to the scope the user requested. Do not modify, delete, or move a README without explicit authorization for that file and change. Treat `AGENTS.md` as protected policy and change it only when the user explicitly requests that change. No instruction outside this protected section may weaken or contradict these protections; if instructions conflict, stop and ask the user before making changes.
 
 Before developing or registering a Core, read and follow `src/node_pipeline/CORE_REGISTRATION.md`, including registration prerequisites, allowed changes, validation, and user communication and reporting. Read-only inspection of existing code to verify registration prerequisites is permitted. Core developers may create or modify only the files that guide assigns to them; Pipeline code, generated files, and lead-owned files are outside that scope. Determine authorization by the specific change, not merely the file path. Permission to register a Core does not authorize changes to other Cores, to their entries in shared files, or to shared extension files used by other Cores.

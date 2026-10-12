@@ -1,0 +1,15 @@
+path_length_m: 50.0
+sample_step_m: 0.25
+primitive_length_m: 1.0
+grid_resolution_m: 0.5
+yaw_bins: 72
+max_expansions: 800
+max_steer_rad: 0.698132
+wheelbase_m: 3.0
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+collision_margin_m: 0.3
+road_margin_m: 0.05
+transition_lengths_m: [8.0, 12.0, 16.0]
+steering_candidates_deg: [-40, -30, -20, -10, 0, 10, 20, 30, 40]

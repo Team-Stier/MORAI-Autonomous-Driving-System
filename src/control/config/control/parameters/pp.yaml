@@ -1,0 +1,16 @@
+wheelbase_m: 3.0
+lookahead_min_m: 2.0
+lookahead_max_m: 15.0
+lookahead_time_sec: 0.6
+steering_rate_limit_radps: 1.0471975512
+control_period_sec: 0.05
+speed_kp: 1.2
+speed_ki: 0.25
+speed_kd: 0.05
+integral_limit_mps_sec: 4.0
+acceleration_gain_mps2: 5.74
+braking_gain_mps2: 18.76
+maximum_accel: 0.70
+maximum_brake: 0.60
+stop_speed_mps: 0.10
+hold_brake: 0.20

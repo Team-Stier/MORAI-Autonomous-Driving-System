@@ -1,0 +1,6 @@
+map_file: ../map/kcity_lanelet2.osm
+forward_distance_m: 50.0
+left_inflation_m: 0.5
+right_inflation_m: 1.0
+z_min_m: 0.2
+z_max_m: 2.0

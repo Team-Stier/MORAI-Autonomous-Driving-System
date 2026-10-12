@@ -2,4 +2,5 @@ x_m: 5.0
 y_m: 100.0
 z_mps2: 3.0
 n_frames: 3
+stop_timeout_sec: 100.0
 map_file: ../map/kcity_lanelet2.osm

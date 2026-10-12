@@ -14,7 +14,7 @@
 | 구독 | `/section_annotation` | interfaces/SectionAnnotation | section 선택 |
 | 발행 | `/localization/ego` | nav_msgs/Odometry | map 위치·자세, base_link 3축 선속도·각속도, IMU 추정 시각 |
 
-UNKNOWN을 포함한 모든 section은 `full_ekf.hpp`에 매핑한다. GPS·IMU·competition_status 세 입력에 issue가 하나도 없을 때만 Core를 호출한다.
+GPS·IMU·competition_status 세 입력에 issue가 하나도 없을 때만 Core를 호출한다.
 주기 조립 기준은 최신 IMU(`reference_input: imu`)이며 발행 stamp도 그 IMU 시각이다. 점군은 입력 큐에만 보관하며 조립 기준 시각이나 자세·위치의 대체 입력으로 사용하지 않는다.
 
 등록된 `tunnel_wall.hpp`는 수평화 점군의 roll·pitch를 다시 적용하지 않고 map 벽 위치를 계산한다.
@@ -37,12 +37,12 @@ frame·NaN/Inf·stamp·stale·수신 timeout·세 입력 간 시차는 공통 �
 
 ## 임시 EKF
 
-상태는 map 축 기준 `[x, y, 상대 고도, vx, vy, vz]`다. GT 자세로 회전한 IMU의 수평 가속도로 예측하며 GPS x·y·상대 고도와 GT 전방 속도 관측으로 보정한다.
-상대 고도는 GPS 장착 높이를 자세로 보정한 첫 고도를 원점으로 사용한다. 수직은 등속 모델로 예측한다.
+상태는 map 축 기준 `[x, y, 절대 고도, vx, vy, vz]`다. GT 자세로 회전한 IMU의 수평 가속도로 예측하며 GPS x·y·절대 고도와 GT 전방 속도 관측으로 보정한다.
+절대 고도는 GPS 고도에서 자세로 회전한 장착 높이를 보정한 값이며 첫 GPS 고도를 차감하지 않는다. 수직은 등속 모델로 예측한다.
 공개 3축 선속도는 상태 속도를 GT 자세로 base_link에 회전해 계산한다. `child_frame_id=base_link`다.
 `pose.covariance`와 `twist.covariance`는 미제공이며 기본값 0 배열로 발행하고 구독자는 사용하지 않는다.
 동일 stamp의 IMU 예측·GPS 및 GT 관측을 중복 융합하지 않는다. Core 상태와 공분산은 호출 사이에 유지한다.
-공개 quaternion은 GT roll·pitch·yaw로 계산하며 UTM 격자 heading 오프셋을 적용한다. `position.z=0`이다.
+공개 quaternion은 GT roll·pitch·yaw로 계산하며 UTM 격자 heading 오프셋을 적용한다. `position.z`는 상태의 절대 고도다.
 GPS는 EPSG:32652에서 `(302595.0, 4124145.0)`을 차감한다. GPS 장착 높이 1.2 m를 GT 자세로 회전해 안테나 위치에서 차량 기준점으로 XYZ를 보정한다.
 입력별 stale·수신 timeout은 `config/localization/node.yaml`의 `inputs`에서 지정한다.
 

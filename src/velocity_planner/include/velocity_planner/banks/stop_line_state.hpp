@@ -14,6 +14,7 @@ struct StopLineStateParameters {
   double y_m = 100.0;
   double z_mps2 = 3.0;
   int n_frames = 3;
+  double stop_timeout_sec = 100.0;
   std::vector<StopLine> stop_lines;
 };
 
@@ -22,6 +23,8 @@ struct StopLineState {
   StopLineStateParameters parameters;
   bool stopping = false;
   std::int64_t stop_line_id = 0;
+  double stopping_started_sec = 0.0;
+  std::int64_t released_stop_line_id = 0;
   std::uint64_t last_light_stamp_ns = 0;
   int green_frames = 0;
   bool accepts_circular_green = true;

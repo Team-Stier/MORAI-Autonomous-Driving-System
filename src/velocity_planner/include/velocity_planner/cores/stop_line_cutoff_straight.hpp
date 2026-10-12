@@ -20,6 +20,13 @@ class StopLineCutoffStraight {
       const interfaces::CompetitionVehicleStatus& competition, const tf2_msgs::TFMessage& tf) {
     interfaces::Path output = path;
     const auto& parameters = state_.parameters;
+    if (state_.stopping &&
+        path.header.stamp.toSec() - state_.stopping_started_sec >= parameters.stop_timeout_sec) {
+      state_.released_stop_line_id = state_.stop_line_id;
+      state_.stopping = false;
+      state_.stop_line_id = 0;
+      state_.green_frames = 0;
+    }
     const auto signal = signalFor(light.state);
     const bool accepts_circular_green = signalFor(interfaces::TrafficLight::GREEN) == Signal::Go;
     if (state_.accepts_circular_green != accepts_circular_green) {
@@ -46,12 +53,14 @@ class StopLineCutoffStraight {
       station[i] = station[i - 1] + std::hypot(to.x - from.x, to.y - from.y);
     }
     const auto contact = firstContact(path, station);
+    if (contact.id != state_.released_stop_line_id) state_.released_stop_line_id = 0;
     const double stop_station_m = contact.station_m - parameters.x_m;
     const double speed_mps = std::abs(static_cast<double>(competition.signed_velocity_mps));
-    if (!state_.stopping && contact.id != 0 &&
+    if (!state_.stopping && contact.id != 0 && contact.id != state_.released_stop_line_id &&
         (signal == Signal::Stop ||
          (signal == Signal::Yellow && speed_mps * speed_mps / (2 * parameters.z_mps2) <= stop_station_m))) {
       state_.stopping = true;
+      state_.stopping_started_sec = path.header.stamp.toSec();
       state_.stop_line_id = contact.id;
       state_.green_frames = 0;
     }

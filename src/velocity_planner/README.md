@@ -16,14 +16,14 @@ map 경로에 속도를 주입하고 신호등 정지를 적용한 뒤 base_link
 | `cutoff` | path·light·competition·tf | 정지 프로파일을 적용한 map path·tf |
 | `transform` | path·tf | base_link path |
 
-- `inject`는 섹션 11·12에서 `curvature_velocity100.hpp`, 나머지에서 `curvature_velocity60.hpp`를 사용한다. 속도가 NaN인 point에만 각각 100/3.6, 60/3.6 m/s 상한 안에서 곡률 기반 속도와 가속도 0 m/s²를 채운다. 모든 `inject` Core는 0을 포함한 기존 속도와 해당 point의 가속도를 유지한다.
-- `cutoff`는 현재 체크포인트 CSV 기준 섹션 3·4·5에서 `stop_line_cutoff_straight.hpp`, 7에서 `stop_line_cutoff_left.hpp`, 나머지에서 `stop_line_pass_through.hpp`를 사용한다.
-- 두 정지 Core는 신호 매핑만 다르다. 직진용은 GREEN 포함, 좌회전용은 LEFT 포함 상태를 진행 신호로 사용한다. 진행 신호 없이 YELLOW가 포함되면 제동거리를 판정하고, 나머지 인식 상태는 정지한다. UNKNOWN·OFF는 새 정지를 요구하지 않으며 기존 정지를 해제하지 않는다.
+- `curvature_velocity100.hpp`와 `curvature_velocity60.hpp`는 속도가 NaN인 point에만 각각 100/3.6, 60/3.6 m/s 상한 안에서 곡률 기반 속도와 가속도 0 m/s²를 채운다. 모든 `inject` Core는 0을 포함한 기존 속도와 해당 point의 가속도를 유지한다.
+- 두 정지 Core는 신호 매핑만 다르다. 직진용은 GREEN 포함, 좌회전용은 LEFT 포함 상태를 진행 신호로 사용한다. 진행 신호 없이 YELLOW가 포함되면 제동거리를 판정하고, 나머지 인식 상태는 정지한다. UNKNOWN·OFF는 새 정지를 요구하지 않으며 진행 신호 확인 횟수를 초기화한다.
 - 정지선은 OSM의 `type=stop_line` way 중 현재 경로가 최초 접촉하는 선이다. 경로 첫 점은 차량의 경로 투영점이다.
 - `stop_line_state.yaml`의 `x_m`만큼 정지선 앞을 목표점으로 잡는다. 목표점 이후 속도는 0, 목표점 이전 `y_m` 구간은 시작점 속도에서 0까지 경로 거리에 비례해 감소한다. 목표점까지 거리가 `y_m` 미만이면 전체 속도를 0으로 채운다.
 - 노란불은 `signed_velocity_mps² / (2 × z_mps2)`가 목표점까지의 경로 거리 이하이면 정지한다.
-- 정지 상태는 두 Core의 Bank에서 공유한다. 해당 방향의 진행 신호가 서로 다른 영상 stamp로 연속 `n_frames`회 관측되면 해제한다. UNKNOWN·OFF·정지 신호는 확인 횟수를 초기화하며, Core의 진행 신호 매핑이 바뀌어도 확인 횟수를 초기화한다.
-- `stop_line_pass_through.hpp`는 기존 정지 상태를 유지하고 확인 횟수를 초기화한다. 정지 해제는 해당 방향의 정지 Core에서 수행한다.
+- 정지 상태와 시작 시각은 세 cutoff Core의 Bank에서 공유한다. 해당 방향의 진행 신호가 서로 다른 영상 stamp로 연속 `n_frames`회 관측되거나, 경로 stamp 기준 정지 시작 후 `stop_timeout_sec`(기본 100초)가 지나면 해제한다. 정지 신호·진행 신호 매핑 변경은 확인 횟수를 초기화한다.
+- 시간 만료로 해제한 정지선은 경로의 최초 접촉 정지선이 달라지거나 접촉이 사라질 때까지 재정지하지 않는다.
+- `stop_line_pass_through.hpp`는 진행 신호 확인 횟수를 초기화하고 시간 만료 전까지 기존 정지 상태를 유지한다.
 - `transform`의 `tf.hpp`는 map→base_link 역변환을 모든 pose에 적용하고 점 순서·속도·가속도를 유지한다. Validator가 필요한 TF와 pose 계약을 검사한다.
 - 출력 path와 각 point의 stamp는 입력 값을 상속한다. 최종 frame 헤더는 Pipeline이 주입한다.
 - `inject`의 모든 Core는 Policy `missing_light_unknown.hpp`로 Missing light에 `TrafficLight::UNKNOWN` (`frame_id=camera_7_optical_frame`, `stamp=0`)을 채운다. 다른 입력의 Missing과 값·stamp·frame 오류 및 이미 수신한 light의 Stale·ReceiveTimeout은 보정하지 않고 거부한다.

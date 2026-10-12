@@ -11,8 +11,8 @@ lateral:
   traj_resample_dist: 0.5
   vehicle_model_wheelbase: 3.0
   steer_lim_deg: 40.0
-  morai_steer_rate_limit_deg: 60.0
-  mpc_prediction_horizon: 30
+  morai_steer_rate_limit_deg: 120.0
+  mpc_prediction_horizon: 45
   mpc_prediction_sampling_time: 0.1
   mpc_weight_lat_error: 30.0
   mpc_weight_heading_error: 3.0
@@ -25,19 +25,19 @@ lateral:
   mpc_zero_ff_steer_deg: 0.0
   steering_lpf_cutoff_hz: 3.0
   qpoases_max_iter: 500
-  morai_min_prediction_length_m: 8.0
-  morai_max_prediction_horizon: 45
+  morai_min_prediction_length_m: 40.0
+  morai_max_prediction_horizon: 75
   morai_use_output_steering_filter: false
   morai_straight_lat_weight_scale: 0.3
   morai_curve_steer_weight_scale: 0.25
   morai_weight_curvature_low: 0.005
   morai_weight_curvature_high: 0.03
   morai_weight_first_steer_change: 2.0
-  morai_weight_front_point_error: 0.0
+  morai_weight_front_point_error: 10.0
   morai_front_overhang_m: 0.845
 longitudinal:
   solver: "osqp"
-  horizon_steps: 2
+  horizon_steps: 6
   optimizer_iterations: 10
   line_search_steps: 8
   prediction_dt_sec: 0.05
@@ -47,9 +47,9 @@ longitudinal:
   coordinate_initial_step: 0.20
   coordinate_minimum_step: 0.01
   command_step_decay: 0.5
-  maximum_accel_command: 0.70
-  maximum_brake_command: 0.60
-  command_rate_limit_per_sec: 2.0
+  maximum_accel_command: 0.15
+  maximum_brake_command: 1.0
+  command_rate_limit_per_sec: 20.0
   acceleration_gain_mps2: 5.74
   braking_gain_mps2: 18.76
   actuator_time_constant_sec: 0.30
@@ -68,6 +68,6 @@ longitudinal:
   terminal_speed_weight: 240.0
 # Shared actuator delay/tau/gain for prediction and the lateral vehicle model.
 steering_prediction:
-  delay_sec: 0.18
-  time_constant_sec: 0.03
-  gain: 0.83
+  delay_sec: 0.10
+  time_constant_sec: 0.05
+  gain: 0.75

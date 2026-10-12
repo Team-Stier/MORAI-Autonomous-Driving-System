@@ -173,11 +173,12 @@ Control은 이 프로젝트의 Bridge 계약에 맞춰 조향각을 정규화해
   구독자는 공분산을 사용하지 않는다. 0을 오차가 없다는 의미로 해석하지 않는다.
 - `/localization/ego`는 `nav_msgs/Odometry`를 사용한다. `header.frame_id=map`,
   `child_frame_id=base_link`, `header.stamp`는 추정 기준 IMU 시각이다.
-  `pose.pose`는 차량 뒷차축 중심의 map 위치·자세이며 `position.z=0`이다.
+  `pose.pose`는 차량 뒷차축 중심의 map 위치·자세다. `position.z`는 GPS 장착
+  높이를 자세로 보정한 절대 고도의 EKF 추정값이다.
   `twist.twist.linear.{x,y,z}`는 EKF로 추정한 base_link 기준 전방·좌측·위쪽
   속도(m/s), `twist.twist.angular.{x,y,z}`는 차량 상태의 GT 각속도(rad/s)다.
   자세는 차량 상태의 GT roll·pitch·yaw에 UTM 격자 heading 보정을 적용한다.
-  수직속도는 GPS 고도 변화로 추정하며 절대 고도를 map z로 사용하지 않는다.
+  수직속도는 GPS 고도 변화로 추정한다.
 - TODO: `/vehicle/competition_status`의 노드별 사용 필드.
 - TODO: 센서 시각, 유효성, 입력 만료 및 결과 발행 조건.
 - TODO: 구간 미확정 시 초기 동작과 구간 전환 조건.
@@ -402,7 +403,7 @@ flowchart TD
 | `/tf_static` | 센서 고정 장착 변환 | `tf2_msgs/TFMessage` | `base_link` → 센서 frame (`velodyne`, `imu_link`, `gps_link`, 카메라 optical frame) | 0 (조립 기준 입력 없음) | 시작 시 1회 (latched) |
 | `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 입력 조립 기준 stamp(전체 입력 큐의 최대 stamp); 각 point pose stamp도 동일 | 20 Hz 주기 |
 | `/local_path/velocity_injected` | 속도 프로파일이 주입된 경로 | `interfaces/Path` | `base_link`; 각 point의 pose도 `base_link` | 입력 경로 및 각 point pose stamp 유지 | `/local_path` 콜백마다 |
-| `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | `/local_path/velocity_injected` 콜백마다 |
+| `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | 20 Hz 주기; 유효 입력 조립 시 |
 | `/morai_udp_bridge/control_cmd` | 최종 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; Bridge가 수신 시각 기록 | `/control_cmd` 콜백마다 |
 
 

@@ -11,7 +11,6 @@
 | 실행 | `/velodyne_points` 입력마다 |
 | Stage | `level`: `process(cloud, competition, tf_static)` → 수평화한 cloud |
 
-- section을 구독하지 않으므로 UNKNOWN=0에 매핑한 `roll_pitch_leveler.hpp`를 사용한다.
 - `base_link_level`은 뒷차축 중심과 차량 yaw를 유지하고 roll·pitch가 0인 좌표계다. 도로 경사 자체는 보존한다.
 - 등록된 `pass_through.hpp`, `pass_through_roi.hpp`, `roll_pitch_roi_leveler.hpp`도 같은 수평화 좌표 계약을 따른다.
 - Policy `remove_invalid.hpp`는 값·stamp·frame 오류 입력을 제거한다. cloud의 Stale·ReceiveTimeout·Skew는 허용 issue다.

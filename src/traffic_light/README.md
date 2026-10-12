@@ -1,6 +1,6 @@
 # traffic_light
 
-camera_7 영상으로 신호등을 인식하는 노드다. 현재 모든 섹션은 `yolo_traffic_light_mac.hpp`를 사용한다.
+camera_7 영상으로 신호등을 인식하는 노드다.
 노드 구성은 `config/traffic_light/`, 확장점은 `include/traffic_light/`에 둔다.
 
 | 항목 | 내용 |

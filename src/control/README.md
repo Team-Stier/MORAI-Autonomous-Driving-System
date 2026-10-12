@@ -1,6 +1,6 @@
 # control
 
-기본 `morai_mpc.hpp` Core로 경로 추종 제어 명령을 만든다. 입력에 문제가 있으면 `safe_stop.hpp` Core로 교체해 안전 정지 명령을 발행한다.
+기본 `morai_mpc.hpp` Core로 경로 추종 제어 명령을 만든다.
 노드 구성은 `config/control/`, 확장점은 `include/control/`에 둔다.
 
 ## 입출력
@@ -25,7 +25,7 @@ MPC의 모델 속도 제약과 페달·조향 제약은 Core 계산에 적용한
 ## 실행과 설정
 
 `launch.sh`는 ROS·워크스페이스 환경을 준비하고 이 노드만 실행한다.
-전체 bringup은 루트 `run.sh`를 사용한다. `/local_path/velocity_injected` 입력마다 계산한다.
+전체 bringup은 루트 `run.sh`를 사용한다. 20 Hz 주기로 조립한 입력으로 계산·발행한다.
 기본 Core의 파라미터는 `config/control/parameters/morai_mpc.yaml`에서 설정하고 노드를 재시작해 반영한다.
 횡방향은 qpOASES 기반 MPC, 종방향은 OSQP 기반 MPC를 사용한다.
 계산 간격은 경로 stamp 차이이며 첫 호출은 `lateral.ctrl_period`를 사용하고,
@@ -33,16 +33,16 @@ MPC의 모델 속도 제약과 페달·조향 제약은 Core 계산에 적용한
 등록 후보 `path_tracking.hpp`는 `parameters/path_tracking.yaml`로 MPC·Hybrid·Stanley·Pure Pursuit 및 PID를 설정한다.
 `autoware_universe.hpp`도 등록 후보이며 `parameters/autoware_universe.yaml`을 사용한다.
 
-| Core | 입력 | 선택 |
-| --- | --- | --- |
-| `morai_mpc.hpp` | path·ego·competition | UNKNOWN=0과 섹션 1~16 |
-| `path_tracking.hpp` | path·ego·competition | 등록 후보 |
-| `autoware_universe.hpp` | path·ego·competition·imu | 등록 후보 |
-| `safe_stop.hpp` | 없음 | path·ego·competition 중 하나가 Missing이면 health 매핑으로 교체 |
+| Core | 입력 |
+| --- | --- |
+| `morai_mpc.hpp` | path·ego·competition |
+| `path_tracking.hpp` | path·ego·competition |
+| `autoware_universe.hpp` | path·ego·competition·imu |
+| `safe_stop.hpp` | 없음 |
 
 공통 검사층이 frame·NaN/Inf·stamp·stale·수신 timeout·입력 시차를, 기본 Core의 Validator `mpc_inputs.hpp`가 경로점 수·형상·quaternion·point frame·목표속도 범위와 ego `child_frame_id`를 검사한다.
 목표속도 범위는 `config/control/node.yaml`의 path `range`다.
-Policy `remove_all.hpp`는 issue가 있는 입력을 제거해 Missing으로 만들고, 이어서 `safe_stop.hpp`가 선택된다.
+Policy `remove_all.hpp`는 issue가 있는 입력을 제거해 Missing으로 만든다. 필수 입력이 Missing이면 Core 호출과 발행을 거부한다.
 `safe_stop.hpp`는 accel=0·steering=0·설정 brake(`config/control/parameters/safe_stop.yaml`)의 CtrlCmd를 반환한다.
 CtrlCmd에는 Header가 없으므로 헤더를 주입하지 않는다. 출력 검사와 payload 변경은 수행하지 않는다.
 

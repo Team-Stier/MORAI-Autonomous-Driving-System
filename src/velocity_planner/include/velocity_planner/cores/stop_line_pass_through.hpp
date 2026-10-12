@@ -12,6 +12,12 @@ class StopLinePassThrough {
       const interfaces::Path& path, const tf2_msgs::TFMessage& tf) {
     interfaces::Path output = path;
     state_.green_frames = 0;
+    if (state_.stopping && path.header.stamp.toSec() - state_.stopping_started_sec >=
+        state_.parameters.stop_timeout_sec) {
+      state_.released_stop_line_id = state_.stop_line_id;
+      state_.stopping = false;
+      state_.stop_line_id = 0;
+    }
     if (state_.stopping) {
       for (auto& point : output.points) {
         point.velocity = 0;

@@ -251,6 +251,69 @@ TEST(StopLineCutoff, UsesPathArcLengthOnACurve) {
   EXPECT_DOUBLE_EQ(0, output.first.points[3].velocity);
 }
 
+TEST(StopLineCutoff, ReleasesAtDefaultTimeoutWithoutRelatchingTheSameRedStopLine) {
+  for (const bool left_turn : {false, true}) {
+    velocity_planner::StopLineState state(makeParameters());
+    velocity_planner::StopLineCutoffStraight straight(state);
+    velocity_planner::StopLineCutoffLeft left(state);
+    auto path = makePath();
+    const auto red = makeLight(interfaces::TrafficLight::RED, 1);
+    const auto process = [&]() {
+      return left_turn ? left.process(path, red, makeStatus(), {})
+                       : straight.process(path, red, makeStatus(), {});
+    };
+    process();
+    path.header.stamp.fromSec(109.999);
+    process();
+    EXPECT_TRUE(state.stopping);
+    path.header.stamp.fromSec(110);
+    EXPECT_EQ(path, process().first);
+    EXPECT_FALSE(state.stopping);
+    path.header.stamp.fromSec(111);
+    EXPECT_EQ(path, process().first);
+    EXPECT_FALSE(state.stopping);
+  }
+}
+
+TEST(StopLineCutoff, CustomTimeoutDoesNotExpireOnARewoundPathStamp) {
+  auto parameters = makeParameters();
+  parameters.stop_timeout_sec = 3;
+  velocity_planner::StopLineState state(parameters);
+  velocity_planner::StopLineCutoffStraight core(state);
+  auto path = makePath();
+  const auto red = makeLight(interfaces::TrafficLight::RED, 1);
+  core.process(path, red, makeStatus(), {});
+  EXPECT_DOUBLE_EQ(10, state.stopping_started_sec);
+  for (const double stamp_sec : {1.0, 12.999}) {
+    path.header.stamp.fromSec(stamp_sec);
+    core.process(path, red, makeStatus(), {});
+    EXPECT_TRUE(state.stopping);
+  }
+  path.header.stamp.fromSec(13);
+  EXPECT_EQ(path, core.process(path, red, makeStatus(), {}).first);
+  EXPECT_FALSE(state.stopping);
+  EXPECT_EQ(1, state.released_stop_line_id);
+}
+
+TEST(StopLineCutoff, ContactDisappearanceAllowsTheSameStopLineToStopAgain) {
+  velocity_planner::StopLineState state(makeParameters());
+  velocity_planner::StopLineCutoffStraight core(state);
+  auto path = makePath();
+  const auto red = makeLight(interfaces::TrafficLight::RED, 1);
+  core.process(path, red, makeStatus(), {});
+  path.header.stamp.fromSec(110);
+  core.process(path, red, makeStatus(), {});
+  ASSERT_FALSE(state.stopping);
+  auto no_contact = makePath(20);
+  no_contact.header.stamp.fromSec(111);
+  core.process(no_contact, red, makeStatus(), {});
+  EXPECT_EQ(0, state.released_stop_line_id);
+  path.header.stamp.fromSec(112);
+  core.process(path, red, makeStatus(), {});
+  EXPECT_TRUE(state.stopping);
+  EXPECT_DOUBLE_EQ(112, state.stopping_started_sec);
+}
+
 TEST(StopLineInputs, DeclaresPathContentPrerequisites) {
   velocity_planner::StopLineInputs validator;
   node_pipeline::HealthLimits limits;

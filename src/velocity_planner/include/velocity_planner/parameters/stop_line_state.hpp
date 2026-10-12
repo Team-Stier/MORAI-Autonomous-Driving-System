@@ -16,10 +16,12 @@ inline StopLineStateParameters loadStopLineStateParameters(const node_pipeline::
   result.y_m = params.number("y_m");
   result.z_mps2 = params.number("z_mps2");
   const auto n_frames = params.integer("n_frames");
+  if (params.has("stop_timeout_sec")) result.stop_timeout_sec = params.number("stop_timeout_sec");
   if (!std::isfinite(result.x_m) || result.x_m < 0 || !std::isfinite(result.y_m) || result.y_m <= 0 ||
       !std::isfinite(result.z_mps2) || result.z_mps2 <= 0 || n_frames < 1 ||
-      n_frames > std::numeric_limits<int>::max())
-    throw std::invalid_argument("invalid stop_line_state x_m/y_m/z_mps2/n_frames");
+      n_frames > std::numeric_limits<int>::max() || !std::isfinite(result.stop_timeout_sec) ||
+      result.stop_timeout_sec <= 0)
+    throw std::invalid_argument("invalid stop_line_state x_m/y_m/z_mps2/n_frames/stop_timeout_sec");
   result.n_frames = static_cast<int>(n_frames);
 
   const auto map_data = params.asset("map_file");

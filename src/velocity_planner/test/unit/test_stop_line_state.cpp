@@ -41,6 +41,7 @@ TEST(StopLineStateLoader, LoadsAllUnlinkedStopLinesFromRealMap) {
   EXPECT_DOUBLE_EQ(100, result.y_m);
   EXPECT_DOUBLE_EQ(3, result.z_mps2);
   EXPECT_EQ(3, result.n_frames);
+  EXPECT_DOUBLE_EQ(100, result.stop_timeout_sec);
   ASSERT_EQ(97u, result.stop_lines.size());
   EXPECT_EQ(3, result.stop_lines.front().id);
   ASSERT_EQ(2u, result.stop_lines.front().points.size());
@@ -51,11 +52,12 @@ TEST(StopLineStateLoader, LoadsAllUnlinkedStopLinesFromRealMap) {
 TEST(StopLineStateLoader, UsesLocalCoordinatesAndIgnoresOtherWays) {
   const MapAsset asset("<osm>" + nodes + line + "<way id='10'><tag k='type' v='virtual'/></way></osm>");
   const auto result = velocity_planner::loadStopLineStateParameters(asset.parameters(
-      "x_m: 0\ny_m: 40\nz_mps2: 2.5\nn_frames: 1\n"));
+      "x_m: 0\ny_m: 40\nz_mps2: 2.5\nn_frames: 1\nstop_timeout_sec: 2.5\n"));
   EXPECT_DOUBLE_EQ(0, result.x_m);
   EXPECT_DOUBLE_EQ(40, result.y_m);
   EXPECT_DOUBLE_EQ(2.5, result.z_mps2);
   EXPECT_EQ(1, result.n_frames);
+  EXPECT_DOUBLE_EQ(2.5, result.stop_timeout_sec);
   ASSERT_EQ(1u, result.stop_lines.size());
   EXPECT_EQ(9, result.stop_lines.front().id);
   ASSERT_EQ(2u, result.stop_lines.front().points.size());
@@ -94,7 +96,11 @@ INSTANTIATE_TEST_SUITE_P(StopLineStateLoader, InvalidCoefficients, testing::Valu
     "x_m: 5\ny_m: 100\nz_mps2: .inf\nn_frames: 3\n",
     "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 0\n",
     "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 1.5\n",
-    "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 2147483648\n"));
+    "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 2147483648\n",
+    "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 3\nstop_timeout_sec: 0\n",
+    "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 3\nstop_timeout_sec: -1\n",
+    "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 3\nstop_timeout_sec: .nan\n",
+    "x_m: 5\ny_m: 100\nz_mps2: 3\nn_frames: 3\nstop_timeout_sec: .inf\n"));
 
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
