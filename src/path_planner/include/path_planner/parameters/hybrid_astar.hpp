@@ -20,7 +20,10 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   p.vehicle_half_width_m = params.number("vehicle_half_width_m");
   p.collision_margin_m = params.number("collision_margin_m");
   p.road_margin_m = params.number("road_margin_m");
+  if (params.has("prediction_acceleration_mps2"))
+    p.prediction_acceleration_mps2 = params.number("prediction_acceleration_mps2");
   p.transition_lengths_m = params.numbers("transition_lengths_m");
+  if (params.has("lateral_offsets_m")) p.lateral_offsets_m = params.numbers("lateral_offsets_m");
   p.steering_candidates_deg = params.numbers("steering_candidates_deg");
   const auto yaw_bins = params.integer("yaw_bins");
   const auto max_expansions = params.integer("max_expansions");
@@ -32,7 +35,8 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   p.max_expansions = static_cast<int>(max_expansions);
   for (double value : {p.path_length_m, p.sample_step_m, p.primitive_length_m,
                        p.grid_resolution_m, p.max_steer_rad, p.wheelbase_m,
-                       p.vehicle_front_m, p.vehicle_rear_m, p.vehicle_half_width_m})
+                       p.vehicle_front_m, p.vehicle_rear_m, p.vehicle_half_width_m,
+                       p.prediction_acceleration_mps2})
     if (!std::isfinite(value) || value <= 0.0)
       throw std::invalid_argument("hybrid_astar lengths and steering must be finite and positive");
   for (double value : {p.collision_margin_m, p.road_margin_m})
@@ -48,6 +52,12 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   for (double value : p.transition_lengths_m)
     if (!std::isfinite(value) || value <= 0.0 || value > p.path_length_m)
       throw std::invalid_argument("transition_lengths_m must be positive and within path_length_m");
+  if (p.lateral_offsets_m.empty() || p.lateral_offsets_m.size() > 33 ||
+      std::find(p.lateral_offsets_m.begin(), p.lateral_offsets_m.end(), 0.0) == p.lateral_offsets_m.end())
+    throw std::invalid_argument("lateral_offsets_m needs at most 33 candidates including 0");
+  for (double value : p.lateral_offsets_m)
+    if (!std::isfinite(value) || std::abs(value) > p.path_length_m)
+      throw std::invalid_argument("lateral_offsets_m must be finite and within path_length_m");
   if (p.steering_candidates_deg.empty() || p.steering_candidates_deg.size() > 33)
     throw std::invalid_argument("steering_candidates_deg needs between 1 and 33 candidates");
   std::unordered_set<double> steering_candidates;
