@@ -160,18 +160,21 @@ class HybridAstar {
         const double length = pathLength(candidate);
         const double progress = project(center_reference.line, xy(candidate.points.back())).station - origin;
         const double side_cost = !left_lane_change && ref.offset_m > 0.0 ? 4*ref.offset_m*ref.offset_m : 0.0;
-        const double cost = routeCost(candidate, center_reference.line) + 64*roadCost(candidate, roads) + transition + side_cost +
+        const double cost = routeCost(candidate, center_reference.line) + 64*roadCost(candidate, roads) +
+            steeringCost(candidate, start.steer) + side_cost +
             4*std::pow(ref.offset_m - previous_offset_m_, 2);
         const bool complete = length >= parameters_.path_length_m - 0.01;
+        const bool anchored = transition == anchored_transition;
         const bool stable_side = previous_offset_m_ != 0.0 && ref.offset_m == previous_offset_m_ &&
             progress >= std::max(10.0, 2.0*prediction_speed_mps_ + parameters_.vehicle_front_m);
         const bool better = (complete && !full) || (complete == full &&
-            (complete ? cost < best_cost : progress > best_progress + 1e-6 ||
+            (complete ? (anchored && !selected_anchor) ||
+                (anchored == selected_anchor && cost < best_cost) : progress > best_progress + 1e-6 ||
                 (std::abs(progress - best_progress) <= 1e-6 && cost < best_cost)));
         if ((stable_side && !retained_side) || ((!retained_side || stable_side) && better)) {
           best = candidate; best_progress = progress; best_cost = cost;
           selected_reference = i; selected_transition = transition; full = complete;
-          selected_anchor = transition == anchored_transition;
+          selected_anchor = anchored;
         }
         retained_side = retained_side || stable_side;
       }
@@ -453,10 +456,11 @@ class HybridAstar {
     }
     return true;
   }
-  bool clear(const State& from, const State& to, const std::vector<Occupancy>& obstacles) const {
+  bool clear(const State& from, const State& to, const std::vector<Occupancy>& obstacles,
+             bool emergency_prefix = false) const {
     const double offset = std::abs(parameters_.vehicle_front_m - parameters_.vehicle_rear_m)/2;
     const auto margin = [&](const State& state) {
-      return parameters_.collision_margin_m*std::min(1.0, state.distance/3.0);
+      return parameters_.collision_margin_m*(emergency_prefix ? std::min(1.0, state.distance/3.0) : 1.0);
     };
     const auto sweep = sweptBox(egoBox(from, margin(from)), egoBox(to, margin(to)), offset);
     const double root = std::sqrt(prediction_speed_mps_*prediction_speed_mps_ +
@@ -500,13 +504,14 @@ class HybridAstar {
     if (path.points.size() == 1 && !clear(start, advance(start, step), obstacles)) {
       double distance = step;
       for (int halve = 0; halve < 16; ++halve) {
-        distance *= 0.5;
         const auto next = advance(start, distance);
-        if (clear(start, next, obstacles)) {
+        if (clear(start, next, obstacles, true)) {
           path.points.push_back(output(next));
           emergency_stopping_ = true;
-          break;
+          for (auto& point : path.points) point.velocity = point.acceleration = 0.0;
+          return path;
         }
+        distance *= 0.5;
       }
     }
     const double length = pathLength(path);
@@ -550,6 +555,18 @@ class HybridAstar {
     for (std::size_t i = 0; i < path.points.size(); i += 4, ++count)
       cost += project(reference, xy(path.points[i])).distance_squared;
     return cost / count;
+  }
+  double steeringCost(const interfaces::Path& path, double previous_steer) const {
+    double cost = 0.0;
+    for (std::size_t i = 1; i < path.points.size(); ++i) {
+      const double distance = (xy(path.points[i]) - xy(path.points[i - 1])).norm();
+      const double curvature = wrap(poseYaw(path.points[i].pose.pose) -
+          poseYaw(path.points[i - 1].pose.pose))/distance;
+      const double steer = std::atan(parameters_.wheelbase_m*curvature);
+      cost += std::pow(steer - previous_steer, 2)/distance;
+      previous_steer = steer;
+    }
+    return cost;
   }
   double roadCost(const interfaces::Path& path, const std::vector<lanelet::BasicPolygon2d>& roads) const {
     double cost = 0.0;
