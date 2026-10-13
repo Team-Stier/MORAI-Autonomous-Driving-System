@@ -194,11 +194,11 @@ class HybridAstar {
     if (retained_side) {
       remember(reference, obstacle_distance, anchorFor(reference), center_reference.line);
       has_merge_anchor_ = false;
-      return emergencyStop(std::move(best), obstacles);
+      return emergencyStop(std::move(best), start, obstacles);
     }
     best = search(start, reference, center_reference.line, obstacles, std::move(best), best_progress);
     has_merge_anchor_ = false;
-    return emergencyStop(std::move(best), obstacles);
+    return emergencyStop(std::move(best), start, obstacles);
   }
 
  private:
@@ -485,7 +485,30 @@ class HybridAstar {
     for (std::size_t i = 1; i < path.points.size(); ++i) length += (xy(path.points[i]) - xy(path.points[i - 1])).norm();
     return length;
   }
-  interfaces::Path emergencyStop(interfaces::Path path, const std::vector<Occupancy>& obstacles) {
+  interfaces::Path emergencyStop(interfaces::Path path, const State& start,
+                                  const std::vector<Occupancy>& obstacles) {
+    const auto advance = [&](const State& from, double distance) {
+      const double curvature = std::tan(from.steer)/parameters_.wheelbase_m;
+      const double angle = curvature*distance;
+      const double chord = std::abs(angle) < 1e-8 ? distance : 2*std::sin(angle/2)/curvature;
+      State next = from;
+      next.position.head<2>() += chord*unit(from.heading + angle/2);
+      next.heading = wrap(from.heading + angle); next.distance += chord;
+      return next;
+    };
+    const double step = std::min(parameters_.sample_step_m, 0.25);
+    if (path.points.size() == 1 && !clear(start, advance(start, step), obstacles)) {
+      double distance = step;
+      for (int halve = 0; halve < 16; ++halve) {
+        distance *= 0.5;
+        const auto next = advance(start, distance);
+        if (clear(start, next, obstacles)) {
+          path.points.push_back(output(next));
+          emergency_stopping_ = true;
+          break;
+        }
+      }
+    }
     const double length = pathLength(path);
     const double stopping_distance = prediction_speed_mps_*prediction_speed_mps_/
         (2*parameters_.emergency_deceleration_mps2) + 0.05*prediction_speed_mps_;
@@ -502,13 +525,9 @@ class HybridAstar {
     const double curvature = wrap(poseYaw(pose) - poseYaw(previous))/ds;
     State end{{pose.position.x, pose.position.y, pose.position.z}, poseYaw(pose),
               std::atan(curvature*parameters_.wheelbase_m), length};
-    State next = end;
-    const double step = std::min(parameters_.sample_step_m, 0.25);
-    const double angle = curvature*step;
-    const double chord = std::abs(angle) < 1e-8 ? step : 2*std::sin(angle/2)/curvature;
-    next.position.head<2>() += chord*unit(end.heading + angle/2);
-    next.heading = wrap(end.heading + angle); next.distance += chord;
-    emergency_stopping_ = !clear(end, next, obstacles);
+    const auto next = advance(end, step);
+    emergency_stopping_ = !clear(end, next, obstacles) || (emergency_stopping_ &&
+        length < std::max(parameters_.primitive_length_m, stopping_distance));
     if (emergency_stopping_) {
       // Finite values are reserved for emergency braking; the downstream controller requires both.
       for (auto& point : path.points) point.velocity = point.acceleration = 0.0;
