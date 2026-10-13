@@ -191,12 +191,11 @@ class HybridAstar {
       if (full && i == 0) break;
     }
     if (full) {
-      const bool recovering = previous_offset_m_ != 0.0;
       const auto& ref = references[selected_reference];
       remember(ref, obstacle_distance, anchorFor(ref), center_reference.line);
       // Finish the merge at a fixed world point instead of moving its end ahead on every replan.
       merge_anchor_ = sample(ref.line, ref.start_s + selected_transition).position.head<2>();
-      has_merge_anchor_ = selected_anchor || (ref.offset_m == 0.0 && recovering) ||
+      has_merge_anchor_ = selected_anchor || ref.offset_m == 0.0 ||
           (ref.offset_m != 0.0 && selected_transition >= ramp_end);
       emergency_stopping_ = false;
       return best;
@@ -535,6 +534,9 @@ class HybridAstar {
         }
         distance *= 0.5;
       }
+      emergency_stopping_ = true;
+      path.points.front().velocity = path.points.front().acceleration = 0.0;
+      return path;
     }
     const double length = pathLength(path);
     const double stopping_distance = prediction_speed_mps_*prediction_speed_mps_/
