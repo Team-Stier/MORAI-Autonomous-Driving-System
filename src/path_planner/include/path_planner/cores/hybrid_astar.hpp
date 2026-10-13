@@ -47,9 +47,17 @@ class HybridAstar {
     const double traveled = has_previous_position_ ?
         motion_dt*(previous_speed_mps_ + std::max(0.0, speed))/2 : 0.0;
     previous_motion_stamp_ = ego.header.stamp; previous_speed_mps_ = std::max(0.0, speed);
-    const double steer = speed > 0.25 ? std::max(-parameters_.max_steer_rad,
-        std::min(parameters_.max_steer_rad,
-            std::atan(parameters_.wheelbase_m*ego.twist.twist.angular.z/speed))) : 0.0;
+    double steer = 0.0;
+    if (speed > 0.25) {
+      double curvature = has_previous_position_ ? std::tan(previous_steer_rad_)/parameters_.wheelbase_m :
+          ego.twist.twist.angular.z/speed;
+      // Keep the merge curvature consistent with the observed orientation motion.
+      if (has_previous_position_ && traveled > 1e-3)
+        curvature = wrap(heading - previous_heading_rad_)/traveled;
+      steer = std::max(-parameters_.max_steer_rad, std::min(parameters_.max_steer_rad,
+          std::atan(parameters_.wheelbase_m*curvature)));
+    }
+    previous_heading_rad_ = heading; previous_steer_rad_ = steer;
     const State start{{p.x, p.y, p.z}, heading, steer};
     if (has_previous_position_)
       avoidance_remaining_m_ = std::max(0.0, avoidance_remaining_m_ - traveled);
@@ -425,6 +433,20 @@ class HybridAstar {
     for (const auto& observed : observed_boxes)
       result.push_back({observed.second, -std::numeric_limits<double>::infinity(),
                         std::numeric_limits<double>::infinity()});
+    // Include observed motion alongside the supplied forecasts in the collision envelope.
+    for (const auto& object : objects.objects) {
+      if (!object.velocity_available) continue;
+      const Vec2 velocity{object.velocity.x, object.velocity.y};
+      if (velocity.squaredNorm() < 1e-12) continue;
+      Box previous_box = observed_boxes.find(object.id)->second;
+      for (std::size_t i = 0; i < predictions.size(); ++i) {
+        Box next_box = previous_box;
+        next_box.center += 0.5*velocity;
+        result.push_back({sweptBox(previous_box, next_box), 0.5*i,
+            i + 1 == predictions.size() ? std::numeric_limits<double>::infinity() : 0.5*(i + 1)});
+        previous_box = next_box;
+      }
+    }
     const interfaces::Objects* previous = &objects;
     double begin = 0.0;
     for (const auto& prediction : predictions) {
@@ -747,6 +769,7 @@ class HybridAstar {
   double previous_offset_m_ = 0.0, avoidance_remaining_m_ = 0.0;
   ros::Time previous_motion_stamp_;
   double previous_speed_mps_ = 0.0;
+  double previous_heading_rad_ = 0.0, previous_steer_rad_ = 0.0;
   Vec2 bypass_anchor_ = Vec2::Zero();
   bool has_bypass_anchor_ = false;
   Vec2 merge_anchor_ = Vec2::Zero();
