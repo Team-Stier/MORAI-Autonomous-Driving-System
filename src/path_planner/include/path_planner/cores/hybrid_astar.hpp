@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <queue>
@@ -23,6 +24,8 @@ struct HybridAstarParameters {
   double vehicle_front_m = 3.845008, vehicle_rear_m = 0.79, vehicle_half_width_m = 1.080418;
   double collision_margin_m = 1.2, road_margin_m = 0.05;
   double prediction_acceleration_mps2 = 6.0;
+  double emergency_deceleration_mps2 = 6.0;
+  double occupancy_history_sec = 0.8;
   std::vector<double> transition_lengths_m{8.0, 12.0, 16.0};
   std::vector<double> lateral_offsets_m{0.0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5, -6.0, 6.0, -7.5};
   std::vector<double> steering_candidates_deg{-40, -35, -30, -25, -20, -15, -10, -5,
@@ -55,7 +58,7 @@ class HybridAstar {
     const auto current = match(start, *route);
     std::vector<Reference> references;
     extend(current, start, *route, references);
-    const auto obstacles = occupancy(objects, predictions);
+    const auto obstacles = occupancy(objects, predictions, ego.header.stamp);
     prediction_speed_mps_ = std::max(0.0, speed);
     observation_age_sec_ = std::max(0.0, (ego.header.stamp - objects.header.stamp).toSec());
     for (const auto& object : objects.objects)
@@ -174,12 +177,6 @@ class HybridAstar {
       }
       // Keep a usable bypass prefix instead of asking the controller to switch sides abruptly.
       if (retained_side) break;
-      // Use the clear lane prefix before a far obstacle instead of leaving the lane immediately.
-      if (i == 0 && !full && previous_offset_m_ == 0.0 &&
-          best_progress >= std::max(10.0, 2.0*prediction_speed_mps_ + parameters_.vehicle_front_m)) {
-        has_merge_anchor_ = false;
-        return best;
-      }
       if (full && i == 0) break;
     }
     if (full) {
@@ -190,17 +187,18 @@ class HybridAstar {
       merge_anchor_ = sample(ref.line, ref.start_s + selected_transition).position.head<2>();
       has_merge_anchor_ = selected_anchor || (ref.offset_m == 0.0 && recovering) ||
           (ref.offset_m != 0.0 && selected_transition >= ramp_end);
+      emergency_stopping_ = false;
       return best;
     }
     const auto& reference = references[selected_reference];
     if (retained_side) {
       remember(reference, obstacle_distance, anchorFor(reference), center_reference.line);
       has_merge_anchor_ = false;
-      return best;
+      return emergencyStop(std::move(best), obstacles);
     }
     best = search(start, reference, center_reference.line, obstacles, std::move(best), best_progress);
     has_merge_anchor_ = false;
-    return best;
+    return emergencyStop(std::move(best), obstacles);
   }
 
  private:
@@ -215,6 +213,7 @@ class HybridAstar {
   struct Projection { double station = 0.0, distance_squared = std::numeric_limits<double>::infinity(); };
   struct State { Vec3 position; double heading, steer; double distance = 0.0; };
   struct Box { Vec2 center; double heading, half_length, half_width; };
+  struct ObservedBox { std::uint32_t id; ros::Time stamp; Box box; };
   struct Occupancy { Box box; double begin_sec, end_sec; };
   struct Node {
     State state;
@@ -387,10 +386,41 @@ class HybridAstar {
         std::max(a.half_length, b.half_length) + std::abs(delta.dot(forward))/2 + pad,
         std::max(a.half_width, b.half_width) + std::abs(delta.dot(side))/2 + pad};
   }
-  static std::vector<Occupancy> occupancy(const interfaces::Objects& objects, const PredictedObjects& predictions) {
+  static Box enclose(const Box& a, const Box& b) {
+    const Vec2 forward = unit(a.heading), side = normal(a.heading);
+    const Vec2 delta = b.center - a.center;
+    const double x = delta.dot(forward), y = delta.dot(side);
+    const double length = b.half_length*std::abs(unit(b.heading).dot(forward)) +
+        b.half_width*std::abs(normal(b.heading).dot(forward));
+    const double width = b.half_length*std::abs(unit(b.heading).dot(side)) +
+        b.half_width*std::abs(normal(b.heading).dot(side));
+    const double x_min = std::min(-a.half_length, x - length), x_max = std::max(a.half_length, x + length);
+    const double y_min = std::min(-a.half_width, y - width), y_max = std::max(a.half_width, y + width);
+    return {a.center + 0.5*(x_min + x_max)*forward + 0.5*(y_min + y_max)*side,
+            a.heading, 0.5*(x_max - x_min), 0.5*(y_max - y_min)};
+  }
+  std::vector<Occupancy> occupancy(const interfaces::Objects& objects, const PredictedObjects& predictions,
+                                   const ros::Time& stamp) {
+    observation_history_.erase(std::remove_if(observation_history_.begin(), observation_history_.end(),
+        [&](const ObservedBox& observed) {
+          return (stamp - observed.stamp).toSec() > parameters_.occupancy_history_sec;
+        }), observation_history_.end());
+    if (objects.header.stamp != previous_objects_stamp_) {
+      for (const auto& object : objects.objects)
+        observation_history_.push_back({object.id, objects.header.stamp, objectBox(object)});
+      previous_objects_stamp_ = objects.header.stamp;
+    }
+    std::map<std::uint32_t, Box> observed_boxes;
+    for (const auto& object : objects.objects) observed_boxes.emplace(object.id, objectBox(object));
+    // Recent world footprints survive a narrow view or a brief detection dropout.
+    for (const auto& observed : observation_history_) {
+      const auto found = observed_boxes.find(observed.id);
+      if (found == observed_boxes.end()) observed_boxes.emplace(observed.id, observed.box);
+      else found->second = enclose(found->second, observed.box);
+    }
     std::vector<Occupancy> result;
-    for (const auto& object : objects.objects)
-      result.push_back({objectBox(object), -std::numeric_limits<double>::infinity(),
+    for (const auto& observed : observed_boxes)
+      result.push_back({observed.second, -std::numeric_limits<double>::infinity(),
                         std::numeric_limits<double>::infinity()});
     const interfaces::Objects* previous = &objects;
     double begin = 0.0;
@@ -454,6 +484,36 @@ class HybridAstar {
     double length = 0.0;
     for (std::size_t i = 1; i < path.points.size(); ++i) length += (xy(path.points[i]) - xy(path.points[i - 1])).norm();
     return length;
+  }
+  interfaces::Path emergencyStop(interfaces::Path path, const std::vector<Occupancy>& obstacles) {
+    const double length = pathLength(path);
+    const double stopping_distance = prediction_speed_mps_*prediction_speed_mps_/
+        (2*parameters_.emergency_deceleration_mps2) + 0.05*prediction_speed_mps_;
+    if (path.points.size() < 2) return path;
+    if (length >= parameters_.path_length_m - 0.01) {
+      emergency_stopping_ = false;
+      return path;
+    }
+    if (!emergency_stopping_ &&
+        length > std::max(parameters_.primitive_length_m, stopping_distance)) return path;
+    const auto& pose = path.points.back().pose.pose;
+    const auto& previous = path.points[path.points.size() - 2].pose.pose;
+    const double ds = (xy(path.points.back()) - xy(path.points[path.points.size() - 2])).norm();
+    const double curvature = wrap(poseYaw(pose) - poseYaw(previous))/ds;
+    State end{{pose.position.x, pose.position.y, pose.position.z}, poseYaw(pose),
+              std::atan(curvature*parameters_.wheelbase_m), length};
+    State next = end;
+    const double step = std::min(parameters_.sample_step_m, 0.25);
+    const double angle = curvature*step;
+    const double chord = std::abs(angle) < 1e-8 ? step : 2*std::sin(angle/2)/curvature;
+    next.position.head<2>() += chord*unit(end.heading + angle/2);
+    next.heading = wrap(end.heading + angle); next.distance += chord;
+    emergency_stopping_ = !clear(end, next, obstacles);
+    if (emergency_stopping_) {
+      // Finite values are reserved for emergency braking; the downstream controller requires both.
+      for (auto& point : path.points) point.velocity = point.acceleration = 0.0;
+    }
+    return path;
   }
   void remember(const Reference& ref, double obstacle_distance, const Vec2& anchor, const Line& center_line) {
     const bool continuing = has_bypass_anchor_ && previous_offset_m_ == ref.offset_m;
@@ -644,6 +704,9 @@ class HybridAstar {
   lanelet::traffic_rules::TrafficRulesPtr rules_;
   lanelet::routing::RoutingGraphUPtr graph_;
   double prediction_speed_mps_ = 0.0, observation_age_sec_ = 0.0;
+  std::vector<ObservedBox> observation_history_;
+  ros::Time previous_objects_stamp_;
+  bool emergency_stopping_ = false;
   bool has_previous_position_ = false;
   double previous_offset_m_ = 0.0, avoidance_remaining_m_ = 0.0;
   ros::Time previous_motion_stamp_;

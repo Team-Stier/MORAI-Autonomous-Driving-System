@@ -22,6 +22,10 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   p.road_margin_m = params.number("road_margin_m");
   if (params.has("prediction_acceleration_mps2"))
     p.prediction_acceleration_mps2 = params.number("prediction_acceleration_mps2");
+  if (params.has("emergency_deceleration_mps2"))
+    p.emergency_deceleration_mps2 = params.number("emergency_deceleration_mps2");
+  if (params.has("occupancy_history_sec"))
+    p.occupancy_history_sec = params.number("occupancy_history_sec");
   p.transition_lengths_m = params.numbers("transition_lengths_m");
   if (params.has("lateral_offsets_m")) p.lateral_offsets_m = params.numbers("lateral_offsets_m");
   p.steering_candidates_deg = params.numbers("steering_candidates_deg");
@@ -36,10 +40,10 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   for (double value : {p.path_length_m, p.sample_step_m, p.primitive_length_m,
                        p.grid_resolution_m, p.max_steer_rad, p.wheelbase_m,
                        p.vehicle_front_m, p.vehicle_rear_m, p.vehicle_half_width_m,
-                       p.prediction_acceleration_mps2})
+                       p.prediction_acceleration_mps2, p.emergency_deceleration_mps2})
     if (!std::isfinite(value) || value <= 0.0)
       throw std::invalid_argument("hybrid_astar lengths and steering must be finite and positive");
-  for (double value : {p.collision_margin_m, p.road_margin_m})
+  for (double value : {p.collision_margin_m, p.road_margin_m, p.occupancy_history_sec})
     if (!std::isfinite(value) || value < 0.0)
       throw std::invalid_argument("hybrid_astar margins must be finite and nonnegative");
   if (p.path_length_m > 500.0 || p.sample_step_m < 0.05 ||
