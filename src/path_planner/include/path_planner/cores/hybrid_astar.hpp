@@ -386,6 +386,25 @@ class HybridAstar {
       for (const auto& point : next->centerline3d()) append(ref.line, {point.x(), point.y(), point.z()});
       ref.lanes.push_back(*next);
     }
+    // A finite route list can end before the connected forward lane does.
+    while (next == route.end() && ref.line.stations.back() - ref.start_s <
+           parameters_.path_length_m + parameters_.vehicle_front_m) {
+      auto following = graph_->following(ref.lanes.back(), false);
+      following.erase(std::remove_if(following.begin(), following.end(), [&](const auto& lane) {
+        return std::find(ref.lanes.begin(), ref.lanes.end(), lane) != ref.lanes.end();
+      }), following.end());
+      if (following.empty()) break;
+      const Vec2 tangent = (ref.line.points.back() - ref.line.points[ref.line.points.size() - 2]).head<2>().normalized();
+      const auto rank = [&](const lanelet::ConstLanelet& lane) {
+        const auto line = center(lane);
+        const Vec2 direction = (line.points[1] - line.points.front()).head<2>().normalized();
+        return std::make_pair(1.0 - tangent.dot(direction), lane.id());
+      };
+      const auto successor = *std::min_element(following.begin(), following.end(),
+          [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
+      for (const auto& point : successor.centerline3d()) append(ref.line, {point.x(), point.y(), point.z()});
+      ref.lanes.push_back(successor);
+    }
     result.push_back(std::move(ref));
   }
   static Box objectBox(const interfaces::Object& object) {
