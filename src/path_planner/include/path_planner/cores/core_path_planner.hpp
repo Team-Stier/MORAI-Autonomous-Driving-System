@@ -539,8 +539,34 @@ class PathGenerationCore {
     // On a curve the front outer corner can project farther than the center of
     // the bumper. Reserve its rear-axle radius, then still validate the polygon.
     const double front_reserve=requested_horizon>0 ? std::hypot(p_.vehicle.front_m,p_.vehicle.width_m/2) : p_.vehicle.front_m;
-    const double horizon=std::min({maximum_horizon,reference.length()-origin.s-front_reserve-p_.road_margin_m-1e-6,
+    double horizon=std::min({maximum_horizon,reference.length()-origin.s-front_reserve-p_.road_margin_m-1e-6,
                                   geometric_only ? maximum_horizon : progressAt(schedule,available_time)});
+    // Arc station minus a bumper radius alone is insufficient on a curve:
+    // the finite road polygon ends in a straight cap. Reserve the padded
+    // footprint's SUPPORT along that cap's normal, without moving the road
+    // or the rear-axle output. Lateral/rotated paths still require full checks.
+    const auto end=reference.at(reference.length(),true);
+    const Vec2 end_direction=geometry::unit(end.yaw);
+    const auto behind_end=[&](double progress) {
+      const auto r=reference.at(origin.s+progress);
+      const auto before=reference.at(origin.s+std::max(0.0,progress-p_.output_step_m));
+      const auto box=geometry::sweptEgoEnvelope({before.position,before.yaw},{r.position,r.yaw},
+                                               p_.vehicle,p_.road_margin_m);
+      return geometry::dot(geometry::sub(box.pose.position,end.position),end_direction)+
+             geometry::extent(box,end_direction)<-std::max(1e-5,2*p_.qp_tolerance);
+    };
+    const double remaining=reference.length()-origin.s-horizon;
+    // A distant terminal supporting plane can cut through another winding
+    // section of the road. Only apply it in the terminal station neighborhood.
+    if(horizon>0 && remaining<=front_reserve+p_.road_margin_m+1e-5 && !behind_end(horizon)) {
+      double lo=std::max(0.0,horizon-front_reserve),hi=horizon;
+      if(!behind_end(lo)) return {};
+      for(int iteration=0;iteration<40;++iteration) {
+        const double mid=(lo+hi)/2;
+        if(behind_end(mid)) lo=mid; else hi=mid;
+      }
+      horizon=lo;
+    }
     if (horizon+1e-9<std::max(p_.min_horizon_m,2.0*p_.output_step_m)) return {};
     const auto boundary=reference.boundary(p_.road_boundary_step_m);
     const Context c{reference,predictions_map,schedule,boundary,origin.s,prediction_offset,geometric_only};
@@ -548,6 +574,33 @@ class PathGenerationCore {
     if (initial_metric<=0.05)
       return {};
     const double initial_dl=initial_metric*std::tan(heading_error);
+
+    // A clear centerline with a smooth initial recovery is the nominal
+    // solution, not a weighted compromise with an old lateral bias. Keep the rear-axle
+    // contract and all footprint/timing checks; a blocked centerline still
+    // goes through the existing lateral DP/QP. Integrated timing is checked
+    // separately by planSpeed after matching the measured initial curvature.
+    {
+      std::vector<PathPoint> nominal;
+      const int count=std::max(2,static_cast<int>(std::ceil(horizon/p_.output_step_m)));
+      // Zero-slope quintic recovery peaks at 1.875*|offset|/extent.
+      // Leave room under the same sampled lateral-slope bound as the QP;
+      // a nonzero initial heading still needs the explicit check below.
+      const double recovery=std::min(horizon,std::max(p_.dp_step_m,
+                                     2*std::abs(origin.l)/p_.max_lateral_slope+p_.output_step_m));
+      for(int i=0;i<=count;++i) {
+        const double progress=horizon*i/count;
+        const auto r=reference.at(origin.s+progress);
+        const double l=progress<recovery ? quintic(origin.l,0,initial_dl,0,recovery,progress/recovery) : 0;
+        nominal.push_back({{geometry::add(r.position,geometry::mul(geometry::normal(r.yaw),l)),r.yaw},
+                           progress,timeAt(schedule,progress),r.curvature});
+      }
+      setGeometry(nominal);
+      nominal.front().pose=ego.pose;
+      nominal=withScheduleKnots(nominal,schedule);
+      if(lateralSlopeClear(c,nominal) && checkPath(c,nominal) &&
+         (geometric_only || sampledGeometryClear(nominal,false))) return nominal;
+    }
 
     struct Node { double l=0.0; double dl=0.0; double cost=std::numeric_limits<double>::infinity(); int parent=-1; };
     const int layers=std::max(1,static_cast<int>(std::ceil(horizon/p_.dp_step_m)));
@@ -567,6 +620,15 @@ class PathGenerationCore {
       }
       offsets.push_back(geometry::clamp(0.0,lower,upper));
       offsets.push_back(geometry::clamp(origin.l,lower,upper));
+      // Keep the existing avoidance grid, but also represent the smallest
+      // rear-axle correction that fits the asymmetric Ioniq5 footprint.
+      // A whole-body constraint, not a fixed inward shift or a body-center
+      // change to the output coordinate contract, determines this candidate.
+      for(const auto& interval:roadLateralIntervals(c,road,road.yaw,lower,upper)) {
+        const double centered=geometry::clamp(0.0,interval.first,interval.second);
+        offsets.push_back(centered);
+        offsets.push_back((centered+geometry::clamp(origin.l,interval.first,interval.second))/2);
+      }
       std::sort(offsets.begin(),offsets.end());
       offsets.erase(std::unique(offsets.begin(),offsets.end(),[](double a,double b){return std::abs(a-b)<1e-8;}),offsets.end());
       const double prior=previousL(reference,origin.s+i*dp_ds,previous_path_map);
@@ -628,6 +690,17 @@ class PathGenerationCore {
       const auto road=reference.at(origin.s+i*ds);
       const Vec2 normal=geometry::normal(road.yaw);
       const auto own=geometry::egoBox(guide_path[static_cast<std::size_t>(i)].pose,p_.vehicle);
+      // Linearize the full footprint around the DP guide's heading. Preserve
+      // its connected road component, just as the obstacle constraints below
+      // preserve its avoidance side. The final rotated/swept path is still
+      // checked after QP; this local constraint is not a safety certificate.
+      const auto intervals=roadLateralIntervals(c,road,guide_path[static_cast<std::size_t>(i)].pose.yaw_rad,
+                                               lower[i],upper[i]);
+      const auto interval=std::find_if(intervals.begin(),intervals.end(),[&](const std::pair<double,double>& range) {
+        return guide[i]>=range.first && guide[i]<=range.second;
+      });
+      if(interval==intervals.end()) return {};
+      lower[i]=interval->first; upper[i]=interval->second;
       for (std::size_t j=0;!geometric_only && j<predictions_map.current.size();++j) {
         const auto other=geometry::objectBox(samplePrediction(predictions_map,j,
             prediction_offset+guide_path[static_cast<std::size_t>(i)].time_sec),p_.obstacle_margin_m);
@@ -664,8 +737,17 @@ class PathGenerationCore {
     if (std::abs(geometry::wrap(result.front().pose.yaw_rad-ego.pose.yaw_rad))>0.05) return {};
     result.front().pose=ego.pose;
     result=withScheduleKnots(result,schedule);
-    if (!checkPath(c,result)) return {};
-    return result;
+    if (checkPath(c,result)) return result;
+    // A fixed-heading QP bound cannot certify its newly rotated footprint.
+    // Keep the CURRENT DP proposal as another numerical candidate when the
+    // converged refinement is unusable, but recheck its complete geometry and
+    // timing. Never substitute an old path or relax any collision/road limit.
+    // Solver nonconvergence still returns empty above, not an approved result.
+    guide_path=withScheduleKnots(guide_path,schedule);
+    if(lateralSlopeClear(c,guide_path) && checkPath(c,guide_path) &&
+       (geometric_only || sampledGeometryClear(guide_path,false)))
+      return guide_path;
+    return {};
   }
 
  public:
@@ -732,6 +814,33 @@ class PathGenerationCore {
         if (!std::isfinite(next)) throw std::invalid_argument("reference station arithmetic overflow");
         station.push_back(next);
       }
+      // Interpolate the map knots with a C2 natural cubic, rather than using
+      // averages of unit chord directions as Hermite derivatives. Those
+      // shortened derivatives systematically pull sparse curves inward and
+      // leave curvature jumps at joins. Preserve the original road polygon
+      // separately below: improving the target must not expand lane permission.
+      const std::size_t n=points.size();
+      std::vector<Vec2> second(n),rhs(n);
+      std::vector<double> upper(n,0.0);
+      const auto direction=[&](std::size_t i) {
+        return geometry::mul(geometry::sub(points[i+1].position,points[i].position),
+                             1.0/(station[i+1]-station[i]));
+      };
+      for(std::size_t i=1;i+1<n;++i) {
+        const double before=station[i]-station[i-1],after=station[i+1]-station[i];
+        const double diagonal=2*(before+after)-before*upper[i-1];
+        upper[i]=after/diagonal;
+        rhs[i]=geometry::mul(geometry::sub(geometry::mul(geometry::sub(direction(i),direction(i-1)),6),
+                                          geometry::mul(rhs[i-1],before)),1.0/diagonal);
+      }
+      for(std::size_t i=n-1;i>1;--i)
+        second[i-1]=geometry::sub(rhs[i-1],geometry::mul(second[i],upper[i-1]));
+      tangents.resize(n);
+      for(std::size_t i=0;i+1<n;++i)
+        tangents[i]=geometry::sub(direction(i),geometry::mul(geometry::add(geometry::mul(second[i],2),second[i+1]),
+                                  (station[i+1]-station[i])/6));
+      tangents.back()=geometry::add(direction(n-2),geometry::mul(geometry::add(second[n-2],geometry::mul(second[n-1],2)),
+                                       (station[n-1]-station[n-2])/6));
     }
     double length() const { return station.back(); }
     // The allowed road is the resulting piecewise-linear closed polygon.
@@ -739,7 +848,7 @@ class PathGenerationCore {
     std::vector<Vec2> boundary(double step) const {
       std::vector<Vec2> left,right;
       const auto append=[&](double s) {
-        const auto r=at(s);
+        const auto r=at(s,true);
         const Vec2 normal=geometry::normal(r.yaw);
         left.push_back(geometry::add(r.position,geometry::mul(normal,r.upper)));
         right.push_back(geometry::add(r.position,geometry::mul(normal,r.lower)));
@@ -768,17 +877,19 @@ class PathGenerationCore {
       }
       return polygon;
     }
-    RoadSample at(double s) const {
+    RoadSample at(double s,bool road_boundary=false) const {
       s=geometry::clamp(s,0.0,length());
       const std::size_t i=segment(s);
       const double u=(s-station[i])/(station[i+1]-station[i]);
       const double h=station[i+1]-station[i];
       const Vec2 direction=geometry::mul(geometry::sub(points[i+1].position,points[i].position),1.0/h);
-      if (geometry::norm(geometry::sub(tangent(i),direction))<1e-12 &&
-          geometry::norm(geometry::sub(tangent(i+1),direction))<1e-12)
+      const Vec2 first=road_boundary ? boundaryTangent(i) : tangents[i];
+      const Vec2 last=road_boundary ? boundaryTangent(i+1) : tangents[i+1];
+      if (geometry::norm(geometry::sub(first,direction))<1e-12 &&
+          geometry::norm(geometry::sub(last,direction))<1e-12)
         return {geometry::lerp(points[i].position,points[i+1].position,u),std::atan2(direction.y,direction.x),
                 geometry::lerp(points[i].min_l_m,points[i+1].min_l_m,u),geometry::lerp(points[i].max_l_m,points[i+1].max_l_m,u)};
-      const Vec2 m0=geometry::mul(tangent(i),h),m1=geometry::mul(tangent(i+1),h);
+      const Vec2 m0=geometry::mul(first,h),m1=geometry::mul(last,h);
       const Vec2 delta=geometry::sub(points[i+1].position,points[i].position);
       const double u2=u*u,u3=u2*u;
       // Local differences avoid cancellation at large map/UTM coordinates.
@@ -828,13 +939,17 @@ class PathGenerationCore {
    private:
     std::vector<ReferencePoint> points;
     std::vector<double> station;
-    Vec2 tangent(std::size_t i) const {
-      const auto segment_direction=[&](std::size_t j) {
-        return geometry::mul(geometry::sub(points[j+1].position,points[j].position),1.0/(station[j+1]-station[j]));
+    std::vector<Vec2> tangents;
+    // Lane permission remains the prior map-knot/chord-Hermite polygon.
+    // It is independent of the smoothed nominal target's interpolation.
+    Vec2 boundaryTangent(std::size_t i) const {
+      const auto direction=[&](std::size_t j) {
+        return geometry::mul(geometry::sub(points[j+1].position,points[j].position),
+                             1.0/(station[j+1]-station[j]));
       };
-      if (i==0) return segment_direction(0);
-      if (i+1==points.size()) return segment_direction(i-1);
-      return geometry::mul(geometry::add(segment_direction(i-1),segment_direction(i)),0.5);
+      if(i==0) return direction(0);
+      if(i+1==points.size()) return direction(i-1);
+      return geometry::mul(geometry::add(direction(i-1),direction(i)),.5);
     }
     std::size_t segment(double s) const {
       auto it=std::upper_bound(station.begin(),station.end(),s);
@@ -1650,7 +1765,22 @@ class PathGenerationCore {
     for (std::size_t i=0;i<points.size();++i) {
       const auto before=points[i==0 ? 0 : i-1].pose.position;
       const auto after=points[i+1==points.size() ? i : i+1].pose.position;
-      const auto d=geometry::sub(after,before);
+      auto d=geometry::sub(after,before);
+      // A one-sided chord lags a curve's endpoint tangent by half a sample.
+      // That rotates the long front overhang toward the road boundary even
+      // when the rear axle fits. Use a one-sided quadratic derivative in
+      // reference progress; preserve nonuniform station spacing as well.
+      if(points.size()>2 && (i==0 || i+1==points.size())) {
+        const std::size_t first=i==0 ? 0 : points.size()-3;
+        const double h0=points[first+1].progress_m-points[first].progress_m;
+        const double h1=points[first+2].progress_m-points[first+1].progress_m;
+        if(h0>1e-12 && h1>1e-12) {
+          const Vec2 a=geometry::mul(geometry::sub(points[first+1].pose.position,points[first].pose.position),1/h0);
+          const Vec2 b=geometry::mul(geometry::sub(points[first+2].pose.position,points[first+1].pose.position),1/h1);
+          d=i==0 ? geometry::sub(geometry::mul(a,(2*h0+h1)/(h0+h1)),geometry::mul(b,h0/(h0+h1))) :
+                   geometry::sub(geometry::mul(b,(2*h1+h0)/(h0+h1)),geometry::mul(a,h1/(h0+h1)));
+        }
+      }
       points[i].pose.yaw_rad=std::atan2(d.y,d.x);
       if (i>0 && i+1<points.size()) points[i].curvature_inv_m=geometry::curvature(before,points[i].pose.position,after);
     }
@@ -1683,6 +1813,68 @@ class PathGenerationCore {
       }
     }
     return l;
+  }
+  std::vector<std::pair<double,double>> roadLateralIntervals(const Context& c,const RoadSample& road,
+                                     double heading,double lower,double upper) const {
+    auto box=geometry::egoBox({road.position,heading},p_.vehicle);
+    box.half_length+=p_.road_margin_m; box.half_width+=p_.road_margin_m;
+    const Vec2 direction=geometry::normal(road.yaw);
+    const double separation=std::max(1e-6,2*p_.qp_tolerance);
+    std::vector<std::pair<double,double>> intervals{{lower,upper}};
+    // SAT between each road segment and the translated rectangle gives an
+    // exact forbidden interval for a FIXED heading. Subtract all of them;
+    // concave notches must not be reduced to four corner-distance tests.
+    for(std::size_t i=0,j=c.boundary.size()-1;i<c.boundary.size();j=i++) {
+      const Vec2 edge=geometry::sub(c.boundary[i],c.boundary[j]);
+      const double length=geometry::norm(edge);
+      if(length<1e-12) continue;
+      const Vec2 segment_normal{-edge.y/length,edge.x/length};
+      double enter=-std::numeric_limits<double>::infinity(),leave=std::numeric_limits<double>::infinity();
+      bool intersects=true;
+      for(Vec2 axis:{geometry::unit(heading),geometry::normal(heading),segment_normal}) {
+        const double a=geometry::dot(geometry::sub(c.boundary[j],box.pose.position),axis);
+        const double b=geometry::dot(geometry::sub(c.boundary[i],box.pose.position),axis);
+        const double lo=std::min(a,b),hi=std::max(a,b);
+        const double radius=geometry::extent(box,axis)+1e-9;
+        const double coefficient=geometry::dot(direction,axis);
+        if(std::abs(coefficient)<1e-12) {
+          if(lo>radius || hi<-radius) { intersects=false; break; }
+        } else {
+          double first=(lo-radius)/coefficient,last=(hi+radius)/coefficient;
+          if(first>last) std::swap(first,last);
+          enter=std::max(enter,first); leave=std::min(leave,last);
+          if(enter>leave) { intersects=false; break; }
+        }
+      }
+      if(!intersects) continue;
+      std::vector<std::pair<double,double>> remaining;
+      for(const auto& range:intervals) {
+        if(leave<range.first || enter>range.second) { remaining.push_back(range); continue; }
+        if(range.first<enter-separation) remaining.emplace_back(range.first,std::min(range.second,enter-separation));
+        if(range.second>leave+separation) remaining.emplace_back(std::max(range.first,leave+separation),range.second);
+      }
+      intervals=std::move(remaining);
+      if(intervals.empty()) return intervals;
+    }
+    // No boundary intersection also describes rectangles entirely outside
+    // the polygon. Admit only components whose interior is inside the road.
+    intervals.erase(std::remove_if(intervals.begin(),intervals.end(),[&](const std::pair<double,double>& range) {
+      auto translated=box;
+      translated.pose.position=geometry::add(box.pose.position,geometry::mul(direction,(range.first+range.second)/2));
+      return !geometry::polygonContainsBox(c.boundary,translated);
+    }),intervals.end());
+    return intervals;
+  }
+  bool lateralSlopeClear(const Context& c,const std::vector<PathPoint>& path) const {
+    double previous=0;
+    for(std::size_t i=0;i<path.size();++i) {
+      const auto r=c.reference.at(c.start_s+path[i].progress_m);
+      const double offset=geometry::dot(geometry::sub(path[i].pose.position,r.position),geometry::normal(r.yaw));
+      if(i>0 && std::abs(offset-previous)>
+          (p_.max_lateral_slope+2*p_.qp_tolerance)*(path[i].progress_m-path[i-1].progress_m)) return false;
+      previous=offset;
+    }
+    return true;
   }
   bool roadClear(const Context& c,Pose2 first,Pose2 last,int depth=0) const {
     if (geometry::polygonContainsBox(c.boundary,
