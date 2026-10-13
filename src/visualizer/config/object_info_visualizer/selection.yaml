@@ -1,0 +1,4 @@
+render:
+  section_core_map:
+    '0': object_info.hpp
+  health_core_map: []

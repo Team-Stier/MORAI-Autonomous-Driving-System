@@ -1,0 +1,22 @@
+execution:
+  mode: on_input
+  trigger_input: source
+  queue_capacity: 1
+inputs:
+  source:
+    type: interfaces/TrafficLight
+    topic: /traffic_light
+    frame: camera_7_optical_frame
+    numbers: [state]
+    range: [0, 16]
+    stale_after_sec: 0.6
+    receive_timeout_sec: 0.6
+    check_skew: false
+stages:
+- name: render
+  outputs:
+  - name: marker
+    type: visualization_msgs/Marker
+output:
+  topic: /visualizer/traffic_light
+  frame_id: base_link

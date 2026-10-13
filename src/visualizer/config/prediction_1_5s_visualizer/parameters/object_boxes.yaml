@@ -1,0 +1,2 @@
+prediction_horizon: 2
+flatten_z: false

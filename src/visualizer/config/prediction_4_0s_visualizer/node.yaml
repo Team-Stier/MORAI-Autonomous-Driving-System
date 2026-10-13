@@ -1,0 +1,20 @@
+execution:
+  mode: on_input
+  trigger_input: source
+  queue_capacity: 1
+inputs:
+  source:
+    type: interfaces/Objects
+    topic: /visualizer/predicted_objects_4_0s
+    frame: map
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
+    check_skew: false
+stages:
+- name: render
+  outputs:
+  - name: marker
+    type: visualization_msgs/Marker
+output:
+  topic: /visualizer/predicted_objects_4_0s_markers
+  frame_id: map

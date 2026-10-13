@@ -1,0 +1,5 @@
+stage: render
+inputs:
+- source
+- ego
+validator: object_info_geometry.hpp

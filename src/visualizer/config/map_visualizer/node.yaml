@@ -1,0 +1,10 @@
+execution:
+  mode: latched
+stages:
+- name: render
+  outputs:
+  - name: marker
+    type: visualization_msgs/Marker
+output:
+  topic: /visualizer/map
+  frame_id: map

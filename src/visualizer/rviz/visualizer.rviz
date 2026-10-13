@@ -1,0 +1,151 @@
+Panels:
+- Class: rviz/Displays
+  Name: Displays
+- Class: rviz/Views
+  Name: Views
+Visualization Manager:
+  Class: ''
+  Global Options:
+    Background Color: 24; 28; 34
+    Fixed Frame: map
+    Frame Rate: 30
+  Displays:
+  - Class: rviz/Grid
+    Name: Grid
+    Enabled: true
+    Cell Size: 10
+    Plane Cell Count: 200
+    Color: 55; 60; 68
+    Reference Frame: map
+  - Class: rviz/Marker
+    Name: Lanes white / center lines yellow
+    Enabled: true
+    Marker Topic: /visualizer/map
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Global route lanelets (yellow)
+    Enabled: true
+    Marker Topic: /visualizer/route
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Ego GT (orange)
+    Enabled: true
+    Marker Topic: /visualizer/ego_gt
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Ego localization (cyan)
+    Enabled: true
+    Marker Topic: /visualizer/ego
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Local path (speed colors, follows ego TF)
+    Enabled: true
+    Marker Topic: /visualizer/local_path
+    Queue Size: 1
+  - Class: visualizer/TrafficSignalOverlay
+    Name: Traffic light state (top right)
+    Enabled: true
+  - Class: rviz/MarkerArray
+    Name: Frenet candidate paths
+    Enabled: true
+    Marker Topic: /visualizer/frenet_candidates
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Detected objects (magenta)
+    Enabled: true
+    Marker Topic: /visualizer/objects
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +0.5s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_0_5s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +1.0s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_1_0s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +1.5s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_1_5s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +2.0s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_2_0s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +2.5s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_2_5s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +3.0s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_3_0s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +3.5s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_3_5s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +4.0s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_4_0s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +4.5s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_4_5s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Prediction +5.0s
+    Enabled: true
+    Marker Topic: /visualizer/predicted_objects_5_0s_markers
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Object Info verified boxes / model origins
+    Enabled: true
+    Marker Topic: /visualizer/morai_objects
+    Queue Size: 1
+  - Class: rviz/TF
+    Name: TF
+    Enabled: false
+    Show Arrows: true
+    Show Axes: true
+    Show Names: true
+  - Class: rviz/PointCloud2
+    Name: LiDAR in base_link_level
+    Enabled: true
+    Topic: /velodyne_points/leveled
+    Queue Size: 1
+    Size (m): 0.05
+    Style: Points
+    Color Transformer: Intensity
+    Decay Time: 0.0
+  Tools:
+  - Class: rviz/Interact
+  - Class: rviz/MoveCamera
+  - Class: rviz/Select
+  Views:
+    Current:
+      Class: rviz/TopDownOrtho
+      Name: Ego top view
+      Target Frame: base_link
+      Scale: 8
+      Angle: 0
+      X: 0
+      Y: 0
+    Saved:
+    - Class: rviz/TopDownOrtho
+      Name: Whole map
+      Target Frame: map
+      Scale: 0.7
+      Angle: 0
+      X: 180
+      Y: -80
+Window Geometry:
+  Width: 1440
+  Height: 1000

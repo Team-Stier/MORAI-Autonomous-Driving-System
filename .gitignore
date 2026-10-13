@@ -8,5 +8,4 @@ src/CMakeLists.txt
 __pycache__/
 *.pyc
 .DS_Store
-/src/visualizer/
 /src/morai_test/
