@@ -66,7 +66,8 @@ class HybridAstar {
     const auto current = match(start, *route);
     std::vector<Reference> references;
     extend(current, start, *route, references);
-    const auto obstacles = occupancy(objects, predictions, ego.header.stamp);
+    auto obstacles = occupancy(objects, predictions, ego.header.stamp);
+    permitDeparture(start, obstacles);
     prediction_speed_mps_ = std::max(0.0, speed);
     observation_age_sec_ = std::max(0.0, (ego.header.stamp - objects.header.stamp).toSec());
     for (const auto& object : objects.objects) {
@@ -231,7 +232,14 @@ class HybridAstar {
   struct State { Vec3 position; double heading, steer; double distance = 0.0; };
   struct Box { Vec2 center; double heading, half_length, half_width; };
   struct ObservedBox { std::uint32_t id; ros::Time stamp; Box box; };
-  struct Occupancy { Box box; double begin_sec, end_sec; };
+  struct Occupancy {
+    Box box; double begin_sec, end_sec;
+    std::uint32_t id;
+    bool departing = false;
+    Vec2 departure_axis = Vec2::Zero();
+    double departure_plane = 0.0;
+  };
+  struct Departure { Vec2 axis; double plane, boundary; };
   struct Node {
     State state;
     double length = 0.0, cost = 0.0, progress = 0.0;
@@ -457,7 +465,7 @@ class HybridAstar {
     std::vector<Occupancy> result;
     for (const auto& observed : observed_boxes)
       result.push_back({observed.second, -std::numeric_limits<double>::infinity(),
-                        std::numeric_limits<double>::infinity()});
+                        std::numeric_limits<double>::infinity(), observed.first});
     // Include observed motion alongside the supplied forecasts in the collision envelope.
     for (const auto& object : objects.objects) {
       if (!object.velocity_available) continue;
@@ -468,7 +476,7 @@ class HybridAstar {
         Box next_box = previous_box;
         next_box.center += 0.5*velocity;
         result.push_back({sweptBox(previous_box, next_box), 0.5*i,
-            i + 1 == predictions.size() ? std::numeric_limits<double>::infinity() : 0.5*(i + 1)});
+            i + 1 == predictions.size() ? std::numeric_limits<double>::infinity() : 0.5*(i + 1), object.id});
         previous_box = next_box;
       }
     }
@@ -480,7 +488,8 @@ class HybridAstar {
         const auto from = std::find_if(previous->objects.begin(), previous->objects.end(),
             [&](const auto& candidate) { return candidate.id == object.id; });
         result.push_back({from == previous->objects.end() ? box : sweptBox(objectBox(*from), box),
-                          begin, &prediction == &predictions.back() ? std::numeric_limits<double>::infinity() : begin + 0.5});
+                          begin, &prediction == &predictions.back() ? std::numeric_limits<double>::infinity() : begin + 0.5,
+                          object.id});
       }
       previous = &prediction; begin += 0.5;
     }
@@ -503,6 +512,41 @@ class HybridAstar {
     }
     return true;
   }
+  static double projectedRadius(const Box& box, const Vec2& axis) {
+    return box.half_length*std::abs(unit(box.heading).dot(axis)) +
+        box.half_width*std::abs(normal(box.heading).dot(axis));
+  }
+  void permitDeparture(const State& start, std::vector<Occupancy>& obstacles) const {
+    const auto initial = egoBox(start, 0.0);
+    const auto guarded = egoBox(start, parameters_.collision_margin_m);
+    std::map<std::uint32_t, Departure> departures;
+    for (const auto& obstacle : obstacles) {
+      if (obstacle.begin_sec != -std::numeric_limits<double>::infinity() ||
+          overlaps(initial, obstacle.box) || !overlaps(guarded, obstacle.box)) continue;
+      double greatest_gap = -std::numeric_limits<double>::infinity();
+      Vec2 separation_axis = Vec2::Zero();
+      for (auto axis : {unit(initial.heading), normal(initial.heading),
+                        unit(obstacle.box.heading), normal(obstacle.box.heading)}) {
+        const double delta = (initial.center - obstacle.box.center).dot(axis);
+        if (delta < 0.0) axis = -axis;
+        const double gap = std::abs(delta) - projectedRadius(initial, axis) - projectedRadius(obstacle.box, axis);
+        if (gap > greatest_gap) { greatest_gap = gap; separation_axis = axis; }
+      }
+      departures.emplace(obstacle.id, Departure{separation_axis,
+          initial.center.dot(separation_axis) - projectedRadius(initial, separation_axis),
+          obstacle.box.center.dot(separation_axis) + projectedRadius(obstacle.box, separation_axis)});
+    }
+    for (auto& obstacle : obstacles) {
+      const auto departure = departures.find(obstacle.id);
+      if (departure == departures.end()) continue;
+      const auto& anchor = departure->second;
+      if (obstacle.box.center.dot(anchor.axis) + projectedRadius(obstacle.box, anchor.axis) >
+          anchor.boundary + 1e-8) continue;
+      obstacle.departing = true;
+      obstacle.departure_axis = anchor.axis;
+      obstacle.departure_plane = anchor.plane;
+    }
+  }
   bool clear(const State& from, const State& to, const std::vector<Occupancy>& obstacles,
              bool emergency_prefix = false) const {
     const double offset = std::abs(parameters_.vehicle_front_m - parameters_.vehicle_rear_m)/2;
@@ -518,7 +562,16 @@ class HybridAstar {
     const double end = observation_age_sec_ + to.distance/std::max(0.25, prediction_speed_mps_/2);
     for (const auto& obstacle : obstacles) {
       if (end < obstacle.begin_sec - 0.25 || begin > obstacle.end_sec + 0.25) continue;
-      if (overlaps(sweep, obstacle.box)) return false;
+      if (!overlaps(sweep, obstacle.box)) continue;
+      // Leave an existing close footprint without reducing its initial separating gap.
+      if (obstacle.departing && !emergency_prefix &&
+          overlaps(egoBox(from, parameters_.collision_margin_m), obstacle.box)) {
+        const auto raw_sweep = sweptBox(egoBox(from, 0.0), egoBox(to, 0.0), offset);
+        if (!overlaps(raw_sweep, obstacle.box) &&
+            raw_sweep.center.dot(obstacle.departure_axis) - projectedRadius(raw_sweep, obstacle.departure_axis) >=
+            obstacle.departure_plane - 1e-8) continue;
+      }
+      return false;
     }
     return true;
   }
