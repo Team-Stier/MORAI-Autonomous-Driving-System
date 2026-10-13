@@ -579,14 +579,16 @@ class HybridAstar {
     return cost / count;
   }
   double steeringCost(const interfaces::Path& path, double previous_steer) const {
-    double cost = 0.0;
+    double cost = 0.0, previous_distance = 0.0;
     for (std::size_t i = 1; i < path.points.size(); ++i) {
       const double distance = (xy(path.points[i]) - xy(path.points[i - 1])).norm();
       const double curvature = wrap(poseYaw(path.points[i].pose.pose) -
           poseYaw(path.points[i - 1].pose.pose))/distance;
       const double steer = std::atan(parameters_.wheelbase_m*curvature);
-      cost += std::pow(steer - previous_steer, 2)/distance;
+      // Segment steering is measured at its midpoint; the seed is at the path start.
+      cost += std::pow(steer - previous_steer, 2)/(0.5*(previous_distance + distance));
       previous_steer = steer;
+      previous_distance = distance;
     }
     return cost;
   }
