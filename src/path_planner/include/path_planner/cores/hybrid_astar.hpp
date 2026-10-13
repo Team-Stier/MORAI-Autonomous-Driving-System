@@ -69,8 +69,15 @@ class HybridAstar {
     const auto obstacles = occupancy(objects, predictions, ego.header.stamp);
     prediction_speed_mps_ = std::max(0.0, speed);
     observation_age_sec_ = std::max(0.0, (ego.header.stamp - objects.header.stamp).toSec());
-    for (const auto& object : objects.objects)
-      if (overlaps(egoBox(start, 0.0), objectBox(object))) return {};
+    for (const auto& object : objects.objects) {
+      if (overlaps(egoBox(start, 0.0), objectBox(object))) {
+        interfaces::Path stop;
+        stop.points.push_back(output(start));
+        stop.points.front().velocity = stop.points.front().acceleration = 0.0;
+        emergency_stopping_ = true;
+        return stop;
+      }
+    }
     fit(references.front().line);
     const auto center_reference = references.front();
     const bool left_lane_change = static_cast<bool>(graph_->left(center_reference.lanes.front()));
