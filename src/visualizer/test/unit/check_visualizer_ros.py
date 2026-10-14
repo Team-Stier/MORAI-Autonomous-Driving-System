@@ -174,7 +174,7 @@ def main():
             struct.pack_into("<6f", packet, 77, x + 0.5, y + 0.5, 28.5, 0, 0, 90)
             object_packet = bytearray(2160)
             object_packet[:14] = b"#MoraiObjInfo$"
-            struct.pack_into("<I", object_packet, 14, 2120)
+            struct.pack_into("<I", object_packet, 14, 2128)
             struct.pack_into("<hh7f", object_packet, 38, 51, 1, x - 4, y + 12, 28.5, 90, 4.5, 2, 1.5)
             object_packet[-2:] = b"\r\n"
             stamp = rospy.Time.now()

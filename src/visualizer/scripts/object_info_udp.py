@@ -12,7 +12,7 @@ import struct
 def decode_objects(packet):
     # Header 14 + length 4 + aux 12 + timestamp 8; twenty slots and CRLF.
     if (len(packet) not in (1400, 2160) or packet[:14] != b"#MoraiObjInfo$"
-            or struct.unpack_from("<I", packet, 14)[0] != len(packet) - 40
+            or struct.unpack_from("<I", packet, 14)[0] != len(packet) - 32
             or packet[-2:] != b"\r\n"):
         raise ValueError("expected timestamped MORAI Object Info with 20 records (68 or 106 bytes)")
     record_size = (len(packet) - 40) // 20

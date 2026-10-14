@@ -21,7 +21,7 @@ def decode_stamp(packet, offset):
 def decode_objects(packet):
     # Twenty slots: legacy 68-byte or current 106-byte records with link ID.
     if (len(packet) not in (1400, 2160) or packet[:14] != b"#MoraiObjInfo$"
-            or struct.unpack_from("<i", packet, 14)[0] != len(packet) - 40
+            or struct.unpack_from("<i", packet, 14)[0] != len(packet) - 32
             or packet[-2:] != b"\r\n"):
         raise ValueError("expected timestamped MORAI Object Info (1400 or 2160 bytes)")
     seconds, nanoseconds = decode_stamp(packet, 30)

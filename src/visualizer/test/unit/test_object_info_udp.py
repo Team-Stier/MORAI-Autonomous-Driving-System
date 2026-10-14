@@ -14,7 +14,7 @@ module.loader.exec_module(object_info_udp)
 def packet_with_object(record_size=106):
     packet = bytearray(40 + 20 * record_size)
     packet[:14] = b"#MoraiObjInfo$"
-    struct.pack_into("<I", packet, 14, 20 * record_size)
+    struct.pack_into("<I", packet, 14, 8 + 20 * record_size)
     struct.pack_into("<II", packet, 30, 100, 123456789)
     struct.pack_into("<hh7f", packet, 38, 51, 1, -12.5, 22.25, 28.5, 90, 4.5, 2, 1.5)
     packet[-2:] = b"\r\n"

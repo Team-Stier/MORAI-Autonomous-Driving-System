@@ -24,7 +24,7 @@ def record(sim_id=42, kind=1):
 def objects_packet(records, stride=68):
     packet = bytearray(40 + 20 * stride)
     packet[:14] = b"#MoraiObjInfo$"
-    struct.pack_into("<i", packet, 14, len(packet) - 40)
+    struct.pack_into("<i", packet, 14, len(packet) - 32)
     struct.pack_into("<ii", packet, 30, 12, 345)
     for index, values in enumerate(records):
         struct.pack_into("<hh16f", packet, 38 + index * stride, *values)
