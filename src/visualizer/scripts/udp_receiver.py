@@ -24,6 +24,7 @@ def receive(default_port, handle, timestamp_offset):
             if not 1 <= port <= 65535:
                 raise ValueError("UDP port must be between 1 and 65535")
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 sock.bind((bind_ip, port))
                 sock.settimeout(0.2)
                 rospy.loginfo("Visualization UDP listening on %s:%d", bind_ip, port)

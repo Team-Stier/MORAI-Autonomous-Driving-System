@@ -93,6 +93,7 @@ def receive(converter):
         raise ValueError("object_port must be a UDP port between 1 and 65535")
     publisher = rospy.Publisher("/objects", Objects, queue_size=1)
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as objects_sock:
+        objects_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         objects_sock.bind((bind_ip, object_port))
         objects_sock.settimeout(0.2)
         rospy.loginfo("MORAI test objects: Object_Info UDP %s:%d -> /objects (map)", bind_ip, object_port)
