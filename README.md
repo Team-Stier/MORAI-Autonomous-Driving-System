@@ -469,6 +469,11 @@ map
 파일을 직접 호출하지 않는다. 해당 패키지의 `launch.sh`만 호출한다. Velodyne은 공식
 드라이버의 제공 launch 파일을 사용한다.
 
+개발 단계에서는 임시 패키지 `morai_test`가 MORAI Object Info UDP를 받아 `/objects`를 발행하며,
+`run.sh`가 `object_detector` 대신 실행한다. `morai_test`는 `/objects` 발행 외에 다른 노드·토픽과
+연결하지 않는다. 제거할 때는 `run.sh`의 패키지 실행 항목을 `object_detector`로 되돌리고
+`src/morai_test/`를 제거하면 된다.
+
 ### 실행 순서
 
 `run.sh`는 아래 순서로 실행 패키지의 `launch.sh`를 호출한다. Velodyne은 공식 드라이버
@@ -483,7 +488,7 @@ map
 | 4 | `lidar_leveler` |
 | 5 | `localization` |
 | 6 | `section_annotator` |
-| 7 | `object_detector` |
+| 7 | `morai_test` (개발 단계 임시 `/objects` 발행기; `object_detector` 대체) |
 | 8 | `traffic_light` |
 | 9 | `path_planner` |
 | 10 | `velocity_planner` |

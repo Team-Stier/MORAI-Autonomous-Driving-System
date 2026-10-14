@@ -171,7 +171,7 @@ start_package tf_publisher
 start_package lidar_leveler
 start_package localization
 start_package section_annotator
-start_package object_detector
+start_package morai_test
 start_package traffic_light
 start_package path_planner
 start_package velocity_planner
