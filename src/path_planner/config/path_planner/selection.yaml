@@ -74,8 +74,8 @@ local:
     "8": frenet_path.hpp
     "9": roundabout_merge.hpp
     "10": frenet_path.hpp
-    "11": frenet_speed_path.hpp
-    "12": frenet_speed_path.hpp
+    "11": frenet_path.hpp
+    "12": frenet_path.hpp
     "13": frenet_path.hpp
     "14": frenet_path.hpp
     "15": frenet_path.hpp
