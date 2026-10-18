@@ -5,9 +5,9 @@ max_acceleration_mps2: 2.0
 max_deceleration_mps2: 4.0
 max_jerk_mps3: 4.0
 max_lateral_acceleration_mps2: 2.0
-time_step_sec: 0.25
+time_step_sec: 0.5
 command_step_sec: 0.2
-beam_width: 64
+beam_width: 16
 collision_margin_m: 0.5
 prediction_uncertainty_mps: 0.2
 vehicle_front_m: 3.845008
