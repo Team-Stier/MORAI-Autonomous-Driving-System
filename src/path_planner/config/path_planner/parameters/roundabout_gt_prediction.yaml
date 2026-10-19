@@ -1,0 +1,4 @@
+acceleration_persistence_sec: 1.0
+max_longitudinal_acceleration_mps2: 3.0
+max_turn_rate_radps: 0.8
+turning_speed_threshold_mps: 0.5

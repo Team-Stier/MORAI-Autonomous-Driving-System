@@ -1,0 +1,48 @@
+# Official global-path.txt, map metres from (302595, 4124145), CP8 -> CP9.
+# Reference stations include approach and departure overlap; common assets are read-only.
+global_path_file: ../map/2026_molit_comp_global_path.txt
+reference_start_m: 820.0
+reference_end_m: 980.0
+control_step_m: 2.0
+integration_step_m: 0.05
+sample_step_m: 0.25
+local_path_length_m: 40.0
+# Rightward clearance for the Ioniq5 front-left corner, applied to spline controls.
+entry_shift_m: 0.15
+entry_shift_center_m: 886.0
+entry_shift_half_length_m: 7.0
+exit_shift_m: 0.4
+exit_shift_center_m: 914.0
+exit_shift_half_length_m: 9.0
+# Traffic speed planning, all speed values are m/s.
+desired_speed_mps: 5.0
+max_acceleration_mps2: 2.0
+max_deceleration_mps2: 4.0
+max_jerk_mps3: 4.0
+max_lateral_acceleration_mps2: 2.0
+time_step_sec: 0.25
+command_step_sec: 0.8
+beam_width: 32
+collision_margin_m: 0.7
+prediction_uncertainty_mps: 0.2
+following_time_gap_sec: 1.2
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+# OSM stop line 11921, rear-axle target = line - front extent - margin.
+entry_line_station_m: 885.1006875594753
+entry_stop_margin_m: 0.8
+entry_decision_distance_m: 2.0
+# Require the rear axle beyond the entry line, with 1.35 m additional clearance.
+entry_check_length_m: 6.0
+entry_gap_confirmation_sec: 0.1
+approach_speed_mps: 3.0
+# Reserve lateral tracking margin for the speed controller on curved geometry.
+curve_speed_ratio: 0.75
+
+# Search horizon; the 10 prediction frames still cover 0.5 through 5.0 s.
+planning_horizon_sec: 3.0
+
+# After crossing the entry line, publish rolling targets, including infeasible-plan cases.
+# This requested non-stop mode cannot guarantee obstacle clearance when no moving plan exists.
+entered_min_speed_mps: 1.0

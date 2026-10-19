@@ -49,7 +49,7 @@ prediction:
     "6": core_prediction.hpp
     "7": core_prediction.hpp
     "8": core_prediction.hpp
-    "9": npc_history_prediction.hpp
+    "9": roundabout_gt_prediction.hpp
     "10": core_prediction.hpp
     "11": core_prediction.hpp
     "12": core_prediction.hpp
@@ -72,7 +72,7 @@ local:
     "6": hybrid_astar.hpp
     "7": frenet_path.hpp
     "8": frenet_path.hpp
-    "9": roundabout_merge.hpp
+    "9": roundabout_reference.hpp
     "10": frenet_path.hpp
     "11": frenet_speed_path.hpp
     "12": frenet_speed_path.hpp

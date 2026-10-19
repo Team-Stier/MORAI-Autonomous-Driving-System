@@ -8,3 +8,8 @@ src/CMakeLists.txt
 __pycache__/
 *.pyc
 .DS_Store
+/run_test.sh
+/src/visualizer/launch_test.sh
+/src/visualizer/launch/visualizer_test.launch
+/src/morai_test/launch_test.sh
+/src/morai_test/scripts/object_info_objects_test.py

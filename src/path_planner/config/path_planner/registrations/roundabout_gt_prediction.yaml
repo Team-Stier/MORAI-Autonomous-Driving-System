@@ -1,0 +1,4 @@
+stage: prediction
+inputs: [ego, competition, objects, tf, imu, route]
+validator: prediction_motion_inputs.hpp
+policy: remove_invalid.hpp
