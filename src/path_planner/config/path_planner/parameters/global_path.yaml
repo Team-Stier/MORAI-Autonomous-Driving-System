@@ -1,0 +1,5 @@
+# #ADJACENT_CHECKPOINT_PASSAGE
+# 주도로 12번 체크포인트만 기존 위치의 통과 반경 안에서 합법적 옆 차선을 허용한다.
+# 다른 체크포인트·지도·원본 CSV와 실제 섹션 판정 반경은 바꾸지 않는다.
+adjacent_checkpoint_lanelet_ids: [97498]
+section_parameters_file: ../section_annotator/config/section_annotator/parameters/checkpoint_sections.yaml

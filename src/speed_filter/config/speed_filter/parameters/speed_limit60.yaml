@@ -1,4 +1,7 @@
 speed_limit_kph: 60.0
+# 공식 A2256W000411 시작~A2256W000153 끝의 동일 방향 연결 Link 목록.
+# 섹션 선택 반경과 속도 예외 경계를 혼용하지 않는다.
+speed_exemption_links_file: ../path_planner/models/competition_speed_exemption_links.txt
 stop_tolerance_sec: 30.0
 start_duration_sec: 1.0
 start_accel: 0.2

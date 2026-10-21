@@ -14,7 +14,16 @@ obstacle_margin_m: 0.25
 road_margin_m: 0.05
 max_curvature_inv_m: 0.18
 max_lateral_accel_mps2: 2.0
-max_speed_mps: 20.0
+# 추종 오차를 위한 곡선 속도 비용 목표. 위 최종 허용 한도는 유지한다.
+preferred_lateral_accel_mps2: 1.8
+# #REGULATION_SPEED_TRANSITION
+# 20m/s 시험 상한을 제거한다. 고주로 100km/h는 기존 팀 운용 목표이며,
+# 일반 60km/h와 공식 예외 Link를 기존 설정/정적 자산에서 주입한다.
+max_speed_mps: 27.77777777777778
+normal_speed_parameters_file: ../velocity_planner/config/velocity_planner/parameters/curvature_velocity60.yaml
+exception_speed_parameters_file: ../velocity_planner/config/velocity_planner/parameters/curvature_velocity100.yaml
+speed_exemption_links_file: models/competition_speed_exemption_links.txt
+speed_limit_response_sec: 0.5
 max_lateral_slope: 0.8
 max_initial_heading_error_rad: 0.5
 max_initial_distance_m: 5.0
@@ -37,4 +46,14 @@ speed_beam_width: 128
 speed_tracking_weight: 1.0
 acceleration_weight: 0.15
 longitudinal_jerk_weight: 0.05
-trajectory_horizon_m: 100.0
+# 같은 방향 앞차와 범퍼 간격에 따른 추종 목표. 기존 충돌 검사는 별도 유지한다.
+following_time_headway_sec: 1.5
+following_min_gap_m: 2.0
+# 100km/h의 5초 예측 거리(약139m)를 같은 0.25m 공간 표본으로 포함한다.
+trajectory_horizon_m: 150.0
+# 전방 도로 주변 보행자 접근 비교 시험. 물리 bbox·관측 속도·충돌 한도는 유지한다.
+pedestrian_caution_speed_mps: 8.333333333333334  # 보행자 감지 시 30km/h 상한
+pedestrian_caution_distance_m: 80.0
+
+# 가까운 보행자 접근 비용 목표(21.6km/h). 30km/h 상한과 기존 안전 제약은 별도 유지.
+pedestrian_near_preferred_speed_mps: 6.0

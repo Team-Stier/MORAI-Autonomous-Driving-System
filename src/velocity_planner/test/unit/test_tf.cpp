@@ -128,6 +128,31 @@ TEST(TfInputs, DeclaresTransformAndPosePrerequisites) {
   EXPECT_EQ(node_pipeline::Kind::FrameMismatch, issues.front());
 }
 
+TEST(Tf, CarriesActualFrameWithoutRetimingTheTrajectory) {
+  interfaces::Path path;path.header.frame_id="map";path.header.stamp=ros::Time(100);
+  path.points.resize(2);
+  for(std::size_t i=0;i<path.points.size();++i) {
+    auto& point=path.points[i];point.pose.header=path.header;
+    point.pose.pose.orientation.w=1;point.pose.pose.position.x=i;
+    point.velocity=2+i;point.acceleration=.1;
+    point.time_from_start=ros::Duration(.25*i);
+  }
+  tf2_msgs::TFMessage transforms;transforms.transforms.resize(1);
+  auto& frame=transforms.transforms[0];frame.header.frame_id="map";
+  frame.header.stamp=ros::Time(100,40000000);frame.child_frame_id="base_link";
+  frame.transform.translation.x=.08;frame.transform.rotation.w=1;
+  const auto result=velocity_planner::Tf{}.process(path,transforms);
+  EXPECT_EQ(result.map_from_path_frame,frame);
+  EXPECT_EQ(result.header,path.header);
+  for(std::size_t i=0;i<path.points.size();++i) {
+    EXPECT_EQ(result.points[i].pose.header,path.points[i].pose.header);
+    EXPECT_EQ(result.points[i].time_from_start,path.points[i].time_from_start);
+    EXPECT_EQ(result.points[i].velocity,path.points[i].velocity);
+    EXPECT_EQ(result.points[i].acceleration,path.points[i].acceleration);
+    EXPECT_NEAR(result.points[i].pose.pose.position.x,path.points[i].pose.pose.position.x-.08,1e-12);
+  }
+}
+
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();

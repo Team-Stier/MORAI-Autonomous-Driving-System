@@ -325,6 +325,7 @@ TEST(EgoCompensatedPrediction, PredictsMapTurnIndependentlyOfVehiclePoseAndStatu
 }
 
 TEST(CorePathPlanner, UsesImuAccelerationAndReturnsMapPathPayload) {
+  ros::Time::init();
   lanelet::Lanelet lane(1,
     lanelet::LineString3d(2, {lanelet::Point3d(4, -10, 5, 10), lanelet::Point3d(5, 100, 5, 10)}),
     lanelet::LineString3d(3, {lanelet::Point3d(6, -10, -5, 10), lanelet::Point3d(7, 100, -5, 10)}));
@@ -344,8 +345,11 @@ TEST(CorePathPlanner, UsesImuAccelerationAndReturnsMapPathPayload) {
   parameters.speed_beam_width = 16;
   parameters.speed_time_step_sec = 1.0;
   pp::CorePathPlanner core(parameters);
-  const auto path = core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
-                                tf2_msgs::TFMessage{}, imu, route, predictions);
+  interfaces::CompetitionVehicleStatus competition;
+  competition.header=ego.header;
+  competition.velocity_x_mps=ego.twist.twist.linear.x;
+  const auto path = core.process(ego, competition, objects,
+                                tf2_msgs::TFMessage{}, imu, route, predictions, ego.header.stamp);
   ASSERT_GE(path.points.size(), 2u);
   EXPECT_DOUBLE_EQ(path.points.front().velocity, 2.0);
   EXPECT_DOUBLE_EQ(path.points.front().acceleration, 0.3);
@@ -359,6 +363,7 @@ TEST(CorePathPlanner, UsesImuAccelerationAndReturnsMapPathPayload) {
 }
 
 TEST(CorePathPlanner, PitchedStandstillSensorRoundingStillProducesPath) {
+  ros::Time::init();
   lanelet::Lanelet lane(1,
     lanelet::LineString3d(2, {lanelet::Point3d(4, -10, 5, 10), lanelet::Point3d(5, 100, 5, 10)}),
     lanelet::LineString3d(3, {lanelet::Point3d(6, -10, -5, 10), lanelet::Point3d(7, 100, -5, 10)}));
@@ -384,8 +389,11 @@ TEST(CorePathPlanner, PitchedStandstillSensorRoundingStillProducesPath) {
     ego.twist.twist.linear.x = speed_mps;
     ego.twist.twist.angular.z = 0.0000005652157;
     pp::CorePathPlanner core(parameters);
-    const auto path = core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
-                                  tf2_msgs::TFMessage{}, imu, route, predictions);
+    interfaces::CompetitionVehicleStatus competition;
+    competition.header=ego.header;
+    competition.velocity_x_mps=ego.twist.twist.linear.x;
+    const auto path = core.process(ego, competition, objects,
+                                  tf2_msgs::TFMessage{}, imu, route, predictions, ego.header.stamp);
     ASSERT_GE(path.points.size(), 2u);
     EXPECT_DOUBLE_EQ(path.points.front().velocity, 0.0);
     EXPECT_DOUBLE_EQ(path.points.front().acceleration, 0.0);
@@ -394,6 +402,7 @@ TEST(CorePathPlanner, PitchedStandstillSensorRoundingStillProducesPath) {
 }
 
 TEST(CorePathPlanner, GravityCompensationPreservesMovingDecelerationAndInfeasibleStop) {
+  ros::Time::init();
   lanelet::Lanelet lane(1,
     lanelet::LineString3d(2, {lanelet::Point3d(4, -10, 5, 10), lanelet::Point3d(5, 100, 5, 10)}),
     lanelet::LineString3d(3, {lanelet::Point3d(6, -10, -5, 10), lanelet::Point3d(7, 100, -5, 10)}));
@@ -415,8 +424,11 @@ TEST(CorePathPlanner, GravityCompensationPreservesMovingDecelerationAndInfeasibl
   ego.twist.twist.linear.x = 2.0;
   imu.linear_acceleration.x = -0.3 - 9.81 * std::sin(pitch_rad);
   pp::CorePathPlanner core(parameters);
-  const auto path = core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
-                                tf2_msgs::TFMessage{}, imu, route, predictions);
+  interfaces::CompetitionVehicleStatus competition;
+  competition.header=ego.header;
+  competition.velocity_x_mps=ego.twist.twist.linear.x;
+  const auto path = core.process(ego, competition, objects,
+                                tf2_msgs::TFMessage{}, imu, route, predictions, ego.header.stamp);
   ASSERT_GE(path.points.size(), 2u);
   EXPECT_DOUBLE_EQ(path.points.front().velocity, 2.0);
   EXPECT_NEAR(path.points.front().acceleration, -0.3, 1e-12);
@@ -424,8 +436,9 @@ TEST(CorePathPlanner, GravityCompensationPreservesMovingDecelerationAndInfeasibl
     SCOPED_TRACE(state.first);
     ego.twist.twist.linear.x = state.first;
     imu.linear_acceleration.x = state.second - 9.81 * std::sin(pitch_rad);
-    EXPECT_TRUE(core.process(ego, interfaces::CompetitionVehicleStatus{}, objects,
-                            tf2_msgs::TFMessage{}, imu, route, predictions).points.empty());
+    competition.velocity_x_mps=state.first;
+    EXPECT_TRUE(core.process(ego, competition, objects,
+                            tf2_msgs::TFMessage{}, imu, route, predictions, ego.header.stamp).points.empty());
   }
 }
 

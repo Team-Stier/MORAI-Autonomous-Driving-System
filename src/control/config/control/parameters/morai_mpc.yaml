@@ -3,7 +3,7 @@ maximum_control_dt_sec: 0.06
 lateral:
   ctrl_period: 0.05
   enable_path_smoothing: false
-  enable_yaw_recalculation: true
+  enable_yaw_recalculation: false
   path_filter_moving_ave_num: 35
   path_smoothing_times: 1
   curvature_smoothing_num: 3
@@ -36,38 +36,43 @@ lateral:
   morai_weight_front_point_error: 10.0
   morai_front_overhang_m: 0.845
 longitudinal:
-  solver: "osqp"
-  horizon_steps: 6
+  solver: osqp
+  horizon_steps: 40
   optimizer_iterations: 10
   line_search_steps: 8
   prediction_dt_sec: 0.05
   gradient_epsilon: 0.001
   gradient_step: 0.08
-  gradient_tolerance: 1.0e-5
-  coordinate_initial_step: 0.20
+  gradient_tolerance: 1.0e-05
+  coordinate_initial_step: 0.2
   coordinate_minimum_step: 0.01
   command_step_decay: 0.5
-  maximum_accel_command: 0.15
+  maximum_accel_command: 0.3
   maximum_brake_command: 1.0
   command_rate_limit_per_sec: 20.0
   acceleration_gain_mps2: 5.74
   braking_gain_mps2: 18.76
-  actuator_time_constant_sec: 0.30
+  actuator_time_constant_sec: 0.075
   physical_rollout: true
-  constant_drag_mps2: 0.0408
-  quadratic_drag_per_m: 0.007326
+  constant_drag_mps2: 0.17
+  quadratic_drag_per_m: 0.0026
   maximum_acceleration_mps2: 6.0
   maximum_deceleration_mps2: 15.0
   maximum_jerk_mps3: 3.0
-  acceleration_estimate_filter_time_constant_sec: 0.10
+  acceleration_estimate_filter_time_constant_sec: 0.1
   speed_weight: 80.0
-  acceleration_weight: 0.20
+  acceleration_weight: 0.2
   jerk_weight: 0.08
   command_weight: 0.08
   command_rate_weight: 0.3
   terminal_speed_weight: 240.0
-# Shared actuator delay/tau/gain for prediction and the lateral vehicle model.
+  # 테스트 차량 실측 제동 응답. 6m/s 이하는 기존 계수, 강한 제동은 기존 계수로 연속 복귀.
+  strong_brake_transition_low: 0.18
+  strong_brake_transition_high: 0.42
+  high_speed_braking_gain_mps2: 9.23456506625
+  braking_gain_transition_low_mps: 6.0
+  braking_gain_transition_high_mps: 6.5
 steering_prediction:
-  delay_sec: 0.10
-  time_constant_sec: 0.05
-  gain: 0.75
+  delay_sec: 0.08
+  time_constant_sec: 0.04
+  gain: 0.82

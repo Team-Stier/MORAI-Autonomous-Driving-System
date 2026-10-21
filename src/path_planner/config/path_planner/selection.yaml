@@ -49,7 +49,7 @@ prediction:
     "6": core_prediction.hpp
     "7": core_prediction.hpp
     "8": core_prediction.hpp
-    "9": npc_history_prediction.hpp
+    "9": core_prediction.hpp
     "10": core_prediction.hpp
     "11": core_prediction.hpp
     "12": core_prediction.hpp
@@ -63,27 +63,21 @@ prediction:
       core: prediction_pass_through.hpp
 local:
   section_core_map:
-    "0": frenet_path.hpp
-    "1": frenet_path.hpp
-    "2": frenet_path.hpp
-    "3": frenet_path.hpp
-    "4": hybrid_astar.hpp
-    "5": hybrid_astar.hpp
-    "6": hybrid_astar.hpp
-    "7": frenet_path.hpp
-    "8": frenet_path.hpp
-    "9": roundabout_merge.hpp
-    "10": frenet_path.hpp
-    "11": frenet_speed_path.hpp
-    "12": frenet_speed_path.hpp
-    "13": frenet_path.hpp
-    "14": frenet_path.hpp
-    "15": frenet_path.hpp
-    "16": frenet_path.hpp
-  health_core_map:
-    - when: [{input: objects, issue: Missing}]
-      priority: 110
-      core: frenet_path.hpp
-    - when: [{input: predictions, issue: Missing}]
-      priority: 100
-      core: frenet_path.hpp
+    "0": core_path_planner.hpp
+    "1": core_path_planner.hpp
+    "2": core_path_planner.hpp
+    "3": core_path_planner.hpp
+    "4": core_path_planner.hpp
+    "5": core_path_planner.hpp
+    "6": core_path_planner.hpp
+    "7": core_path_planner.hpp
+    "8": core_path_planner.hpp
+    "9": core_path_planner.hpp
+    "10": core_path_planner.hpp
+    "11": core_path_planner.hpp
+    "12": core_path_planner.hpp
+    "13": core_path_planner.hpp
+    "14": core_path_planner.hpp
+    "15": core_path_planner.hpp
+    "16": core_path_planner.hpp
+  health_core_map: []

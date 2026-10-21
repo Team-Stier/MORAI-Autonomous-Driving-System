@@ -6,8 +6,8 @@ inputs:
   source:
     type: interfaces/Path
     topic: /local_path/velocity_injected
-    frame: base_link
-    stale_after_sec: 0.3
+    frame: map
+    stale_after_sec: 5.0
     receive_timeout_sec: 0.3
     check_skew: false
 stages:
@@ -17,4 +17,4 @@ stages:
     type: visualization_msgs/Marker
 output:
   topic: /visualizer/local_path
-  frame_id: base_link
+  frame_id: map

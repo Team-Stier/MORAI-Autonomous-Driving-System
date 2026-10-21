@@ -16,6 +16,8 @@ class Tf {
     tf2::fromMsg(match->transform, map_from_base);
     const auto base_from_map = map_from_base.inverse();
     interfaces::Path message = path;
+    // #EXACT_PATH_FRAME: 계획 stamp·속도·예정 시각을 유지하고 실제 좌표 기준만 동봉한다.
+    message.map_from_path_frame = *match;
     for (auto& point : message.points) {
       tf2::Transform pose;
       tf2::fromMsg(point.pose.pose, pose);

@@ -1,6 +1,7 @@
 #pragma once
 #include <ros/console.h>
 #include <osqp.h>
+#include <Eigen/Eigenvalues>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
 
@@ -11,8 +12,10 @@ enum class LongitudinalState { kAccel, kCoast, kBrake };
 }}  // namespace control::autoware_ai_mpc
 
 
+#include <deque>
 #include <limits>
 #include <string>
+#include <sstream>
 #include <vector>
 
 
@@ -35,6 +38,11 @@ struct LongitudinalMpcConfig {
   double command_rate_limit_per_sec{2.0};
   double acceleration_gain_mps2{3.0};
   double braking_gain_mps2{6.0};
+  double high_speed_braking_gain_mps2{0.0};  // 0: original constant braking gain.
+  double braking_gain_transition_low_mps{0.0};
+  double braking_gain_transition_high_mps{0.0};
+  double strong_brake_transition_low{0.0};
+  double strong_brake_transition_high{0.0};
   double actuator_time_constant_sec{0.25};
   bool physical_rollout{false};
   double constant_drag_mps2{0.0};
@@ -49,6 +57,16 @@ struct LongitudinalMpcConfig {
   double command_weight{0.08};
   double command_rate_weight{2.5};
   double terminal_speed_weight{24.0};
+};
+
+// #MPC_HORIZON_REFERENCE
+// 호출자는 각 예측 상태 시각(t + (k+1)*prediction_dt_sec)의 계획 속도(m/s)와
+// 가속도(m/s²)를 전달한다. 경로점 번호를 시간으로 가정해서는 안 된다.
+// 속도·가속도 오차만 시간별 참조로 바꾸며 기존 모델과 페달·변화율 제약은 유지한다.
+// ROS 경로의 예정 시각 계약을 연결하기 전에는 기존 scalar 호출을 그대로 사용한다.
+struct LongitudinalReference {
+  double speed_mps{0.0};
+  double acceleration_mps2{0.0};
 };
 
 struct LongitudinalMpcResult {
@@ -67,6 +85,10 @@ class LongitudinalMpc {
   explicit LongitudinalMpc(const LongitudinalMpcConfig& config);
   LongitudinalMpcResult update(double target_speed_mps,
                                double measured_speed_mps, double dt_sec);
+  // references는 유효한 horizon_steps개의 예측 상태 참조다.
+  LongitudinalMpcResult updateReference(
+      const std::vector<LongitudinalReference>& references,
+      double measured_speed_mps, double dt_sec);
   void reset();
 
  private:
@@ -77,9 +99,9 @@ class LongitudinalMpc {
 
   void project(std::vector<double>* commands) const;
   RolloutResult rollout(const std::vector<double>& commands,
-                        double target_speed_mps,
+                        const std::vector<LongitudinalReference>& references,
                         double measured_speed_mps) const;
-  void solve(double target_speed_mps, double measured_speed_mps,
+  void solve(const std::vector<LongitudinalReference>& references, double measured_speed_mps,
              std::vector<double>* commands, double* cost,
              double* predicted_maximum_speed_mps, int* iterations) const;
 
@@ -265,6 +287,7 @@ inline double moraiCurvatureWeightBlend(double curvature, double low, double hig
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <vector>
 
@@ -331,21 +354,61 @@ inline OsqpSqpResult solveWithOsqpSqp(
               (config.finite_difference_epsilon * config.finite_difference_epsilon));
       diagonal[static_cast<std::size_t>(index)] = curvature;
     }
-    for (int index = 0; index < variables; ++index) {
-      q[static_cast<std::size_t>(index)] = static_cast<c_float>(
-          gradient[static_cast<std::size_t>(index)] -
-          diagonal[static_cast<std::size_t>(index)] *
-              result.solution[static_cast<std::size_t>(index)]);
+    // #MPC_LONGITUDINAL_COUPLING
+    // 각 미래 페달은 이후 여러 시점의 속도·가속도에 함께 영향을 준다.
+    // 대각 곡률만 사용하면 이 상호작용을 잃어 같은 참조에서도 시작값에 따라
+    // 불필요한 제동이 남는다. 기존 목적함수의 혼합 편미분을 계산하여
+    // QP의 전체 이차항에 넣는다. 모델·가중치·페달·변화율 제약은 유지한다.
+    Eigen::MatrixXd hessian(variables, variables);
+    const double epsilon = config.finite_difference_epsilon;
+    for (int row = 0; row < variables; ++row) {
+      hessian(row, row) = diagonal[static_cast<std::size_t>(row)];
+      for (int column = 0; column < row; ++column) {
+        auto plus_plus = result.solution;
+        auto plus_minus = result.solution;
+        auto minus_plus = result.solution;
+        auto minus_minus = result.solution;
+        plus_plus[row] += epsilon;
+        plus_plus[column] += epsilon;
+        plus_minus[row] += epsilon;
+        plus_minus[column] -= epsilon;
+        minus_plus[row] -= epsilon;
+        minus_plus[column] += epsilon;
+        minus_minus[row] -= epsilon;
+        minus_minus[column] -= epsilon;
+        const double mixed = (objective(plus_plus) - objective(plus_minus) -
+            objective(minus_plus) + objective(minus_minus)) /
+            (4.0 * epsilon * epsilon);
+        hessian(row, column) = mixed;
+        hessian(column, row) = mixed;
+      }
     }
-
-    std::vector<c_float> p_values(diagonal.begin(), diagonal.end());
-    std::vector<c_int> p_rows(static_cast<std::size_t>(variables));
-    std::vector<c_int> p_columns(static_cast<std::size_t>(variables + 1));
-    for (int index = 0; index < variables; ++index) {
-      p_rows[static_cast<std::size_t>(index)] = index;
-      p_columns[static_cast<std::size_t>(index)] = index;
+    // 가속·제동 전환과 비선형 모델의 국소 곡률을 OSQP가 수용하는
+    // 양의 정부호 이차항으로 정규화한다. 실제 목적함수의 기존 line search로
+    // 개선된 해만 채택하며, 도로·객체 판단이나 속도 참조는 바꾸지 않는다.
+    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eigen(hessian);
+    hessian = eigen.eigenvectors() *
+        eigen.eigenvalues().cwiseMax(config.hessian_regularization).asDiagonal() *
+        eigen.eigenvectors().transpose();
+    for (int row = 0; row < variables; ++row) {
+      double linear = gradient[static_cast<std::size_t>(row)];
+      for (int column = 0; column < variables; ++column) {
+        linear -= hessian(row, column) * result.solution[column];
+      }
+      q[static_cast<std::size_t>(row)] = static_cast<c_float>(linear);
     }
-    p_columns[static_cast<std::size_t>(variables)] = variables;
+    // OSQP의 P 행렬은 CSC 형식의 상삼각 성분만 전달한다.
+    std::vector<c_float> p_values;
+    std::vector<c_int> p_rows;
+    std::vector<c_int> p_columns;
+    for (int column = 0; column < variables; ++column) {
+      p_columns.push_back(static_cast<c_int>(p_values.size()));
+      for (int row = 0; row <= column; ++row) {
+        p_values.push_back(static_cast<c_float>(hessian(row, column)));
+        p_rows.push_back(row);
+      }
+    }
+    p_columns.push_back(static_cast<c_int>(p_values.size()));
     std::vector<c_float> lower(lower_bounds.begin(), lower_bounds.end());
     std::vector<c_float> upper(upper_bounds.begin(), upper_bounds.end());
     csc* p_matrix = csc_matrix(variables, variables,
@@ -439,7 +502,8 @@ inline void LongitudinalMpc::project(std::vector<double>* commands) const {
 }
 
 inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
-    const std::vector<double>& commands, double target_speed_mps,
+    const std::vector<double>& commands,
+    const std::vector<LongitudinalReference>& references,
     double measured_speed_mps) const {
   RolloutResult result;
   result.cost = 0.0;
@@ -450,10 +514,38 @@ inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
   const double dt = config_.prediction_dt_sec;
   const double actuator_alpha =
       1.0 - std::exp(-dt / config_.actuator_time_constant_sec);
-  for (double command : commands) {
+  for (std::size_t index = 0; index < commands.size(); ++index) {
+    const double command = commands[index];
+    const auto& reference = references[index];
+    // #SPEED_DEPENDENT_BRAKING_MODEL
+    // MORAI의 일정 제동 입력 측정에서 6~8m/s와 4~5m/s의 응답이 달랐다.
+    // 5~6m/s의 전환 응답은 불확실하여 기존 계수를 유지하고 실측한 상부 영역만
+    // 연결한다. 높은 속도의 제동 효과를 저속 계수로 계산하면 작은 페달로 충분히
+    // 감속한다고 예측하여 실제 차량이 곡선 진입 전에 속도를 줄이지 못한다.
+    // 별도 계수를 설정한 physical rollout에서만, 각 예측 상태의 전방 속도로
+    // 두 계수를 속도와 제동 크기의 C1 연속 smoothstep으로 보간한다.
+    // 별도의 0.3 제동 실측에서 작은 제동보다 큰 효과를 확인했다. 강한 제동은
+    // 원래 계수로 연속 복귀시켜 작은 제동 계수를 모든 페달에 적용하지 않는다.
+    // 기존 최대 페달 자체는 바꾸지 않는다. 실제 속도를 임계값으로 자르거나
+    // 참조 속도·가속도에 값을 더하지 않는다. 높은 속도 계수 0은 원래 식이다.
+    // Coast·가속 모델과 페달/변화율 한도·정지 유지·Watchdog은 그대로다.
+    // 이 계수는 시뮬레이터의 유한 속도 범위 실측에 근거한 모델이며, 다른
+    // 차량·넓은 속도 범위에는 재측정이 필요하다. GT 객체/ID와는 독립적이다.
+    double braking_gain = config_.braking_gain_mps2;
+    if (command < 0.0 && config_.physical_rollout &&
+        config_.high_speed_braking_gain_mps2 > 0.0) {
+      const double ratio = clamp((speed - config_.braking_gain_transition_low_mps) /
+          (config_.braking_gain_transition_high_mps - config_.braking_gain_transition_low_mps), 0.0, 1.0);
+      const double blend = ratio * ratio * (3.0 - 2.0 * ratio);
+      const double pressure_ratio = clamp((-command - config_.strong_brake_transition_low) /
+          (config_.strong_brake_transition_high - config_.strong_brake_transition_low), 0.0, 1.0);
+      const double pressure_blend = pressure_ratio * pressure_ratio * (3.0 - 2.0 * pressure_ratio);
+      braking_gain += blend * (1.0 - pressure_blend) *
+          (config_.high_speed_braking_gain_mps2 - braking_gain);
+    }
     double requested_acceleration =
         command >= 0.0 ? config_.acceleration_gain_mps2 * command
-                       : config_.braking_gain_mps2 * command;
+                       : braking_gain * command;
     if (config_.physical_rollout) {
       requested_acceleration -= config_.constant_drag_mps2 +
           config_.quadratic_drag_per_m * speed * speed;
@@ -471,12 +563,13 @@ inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
     }  // Physical rollout must not silently clip the plant to comfort limits.
     speed = std::max(0.0, speed + next_acceleration * dt);
     result.maximum_speed_mps = std::max(result.maximum_speed_mps, speed);
-    const double speed_error = target_speed_mps - speed;
+    const double speed_error = reference.speed_mps - speed;
+    const double acceleration_error = next_acceleration - reference.acceleration_mps2;
     const double jerk = (next_acceleration - acceleration) / dt;
     const double command_change = command - previous_command;
     result.cost += config_.speed_weight * speed_error * speed_error +
-                   config_.acceleration_weight * next_acceleration *
-                       next_acceleration +
+                   config_.acceleration_weight * acceleration_error *
+                       acceleration_error +
                    config_.jerk_weight * jerk * jerk +
                    config_.command_weight * command * command +
                    config_.command_rate_weight * command_change *
@@ -484,17 +577,18 @@ inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
     acceleration = next_acceleration;
     previous_command = command;
   }
-  const double terminal_error = target_speed_mps - speed;
+  const double terminal_error = references.back().speed_mps - speed;
   result.cost += config_.terminal_speed_weight * terminal_error * terminal_error;
   return result;
 }
 
-inline void LongitudinalMpc::solve(double target_speed_mps, double measured_speed_mps,
+inline void LongitudinalMpc::solve(const std::vector<LongitudinalReference>& references,
+                            double measured_speed_mps,
                             std::vector<double>* commands, double* cost,
                             double* predicted_maximum_speed_mps,
                             int* iterations) const {
   project(commands);
-  RolloutResult best = rollout(*commands, target_speed_mps, measured_speed_mps);
+  RolloutResult best = rollout(*commands, references, measured_speed_mps);
   *iterations = 0;
   if (config_.solver == "osqp") {
     const int horizon = static_cast<int>(commands->size());
@@ -526,11 +620,11 @@ inline void LongitudinalMpc::solve(double target_speed_mps, double measured_spee
     solver_config.finite_difference_epsilon = config_.gradient_epsilon;
     const OsqpSqpResult solved = solveWithOsqpSqp(
         [&](const std::vector<double>& candidate) {
-          return rollout(candidate, target_speed_mps, measured_speed_mps).cost;
+          return rollout(candidate, references, measured_speed_mps).cost;
         },
         *commands, matrix, rows, lower, upper, solver_config);
     *commands = solved.solution;
-    best = rollout(*commands, target_speed_mps, measured_speed_mps);
+    best = rollout(*commands, references, measured_speed_mps);
     *iterations = solved.iterations;
   } else if (config_.solver == "coordinate_search") {
     double step = config_.coordinate_initial_step;
@@ -543,7 +637,7 @@ inline void LongitudinalMpc::solve(double target_speed_mps, double measured_spee
           candidate[index] += sign * step;
           project(&candidate);
           const RolloutResult candidate_result =
-              rollout(candidate, target_speed_mps, measured_speed_mps);
+              rollout(candidate, references, measured_speed_mps);
           if (candidate_result.cost < best.cost) {
             best = candidate_result;
             best_commands = candidate;
@@ -572,9 +666,9 @@ inline void LongitudinalMpc::solve(double target_speed_mps, double measured_spee
         gradient[index] = 0.0;
         if (std::abs(denominator) > 1.0e-12) {
           const double plus_cost =
-              rollout(plus, target_speed_mps, measured_speed_mps).cost;
+              rollout(plus, references, measured_speed_mps).cost;
           const double minus_cost =
-              rollout(minus, target_speed_mps, measured_speed_mps).cost;
+              rollout(minus, references, measured_speed_mps).cost;
           if (std::isfinite(plus_cost) && std::isfinite(minus_cost)) {
             gradient[index] = (plus_cost - minus_cost) / denominator;
           }
@@ -593,7 +687,7 @@ inline void LongitudinalMpc::solve(double target_speed_mps, double measured_spee
         }
         project(&candidate);
         const RolloutResult candidate_result =
-            rollout(candidate, target_speed_mps, measured_speed_mps);
+            rollout(candidate, references, measured_speed_mps);
         if (candidate_result.cost < best.cost) {
           best = candidate_result;
           *commands = candidate;
@@ -612,6 +706,16 @@ inline void LongitudinalMpc::solve(double target_speed_mps, double measured_spee
 inline LongitudinalMpcResult LongitudinalMpc::update(double target_speed_mps,
                                               double measured_speed_mps,
                                               double dt_sec) {
+  // 기존 scalar API는 동일한 속도·가속도 0 참조를 반복한다.
+  // 참조를 아직 연결하지 않은 모든 호출자의 계산과 warm start를 보존한다.
+  return updateReference(std::vector<LongitudinalReference>(
+      static_cast<std::size_t>(config_.horizon_steps), {target_speed_mps, 0.0}),
+      measured_speed_mps, dt_sec);
+}
+
+inline LongitudinalMpcResult LongitudinalMpc::updateReference(
+    const std::vector<LongitudinalReference>& references,
+    double measured_speed_mps, double dt_sec) {
   LongitudinalMpcResult result;
   // Competition longitudinal velocity is signed. MPC controls speed magnitude;
   // reverse/gear authority remains with MORAI and the gear interlock.
@@ -630,17 +734,48 @@ inline LongitudinalMpcResult LongitudinalMpc::update(double target_speed_mps,
   has_previous_speed_ = true;
 
   std::vector<double> commands = warm_start_;
-  solve(target_speed_mps, measured_speed_mps, &commands,
+  solve(references, measured_speed_mps, &commands,
                        &result.cost, &result.predicted_maximum_speed_mps,
                        &result.iterations);
   result.estimated_acceleration_mps2 = estimated_acceleration_mps2_;
 
-  double command = commands.front();
+  // #STANDSTILL_HOLD
+  // 예측 구간 전체가 정지 참조이고 실측 속도가 0.05m/s 이내이면 정지를
+  // 유지한다. 기존 저항 모델은 v=0에도 가속 페달을 보상해 재출발시켰다.
+  // 양의 출발 참조가 하나라도 있거나 아직 움직이는 동안에는 원래 MPC를 쓴다.
+  // 제동 목표는 0.05이며 기존 최대 페달과 변화율 한도로 제한한다.
+  // 실제 적용 명령은 previous_signed_command_에 보존한다. 미래 탐색의
+  // warm start는 중립으로 두어 제동 구간에 갇혀 다음 출발이 막히지 않게 한다.
+  const bool stationary_hold = measured_speed_mps <= 0.05 &&
+      std::all_of(references.begin(), references.end(), [](const LongitudinalReference& r) {
+        return r.speed_mps == 0.0 && r.acceleration_mps2 == 0.0;
+      });
+  double command = stationary_hold ? -std::min(0.05,config_.maximum_brake_command) :
+                                    commands.front();
   const double actual_maximum_step = config_.command_rate_limit_per_sec * dt_sec;
   command = clamp(command, previous_signed_command_ - actual_maximum_step,
                   previous_signed_command_ + actual_maximum_step);
   command = clamp(command, -config_.maximum_brake_command,
                   config_.maximum_accel_command);
+  if (stationary_hold) std::fill(commands.begin(),commands.end(),0.0);
+  // #LONGITUDINAL_SNAPSHOT: 제동 0.05 초과의 실제 최적화 입력만 DEBUG로 기록한다.
+  // 참조·추정 가속도·이전 명령·탐색 초기값을 같은 호출에서 보존하여 재생하며,
+  // 계산 상태·반환 명령·한도를 바꾸지 않는다. DEBUG가 꺼지면 문자열도 만들지 않는다.
+  ROS_DEBUG_STREAM_COND_NAMED(command < -0.05 && measured_speed_mps > 2.0,
+      "longitudinal_snapshot", ([&] {
+        std::ostringstream out;out.precision(17);
+        out << "optimizer dt=" << dt_sec << " speed=" << measured_speed_mps
+            << " estimated_acceleration=" << estimated_acceleration_mps2_
+            << " previous_command=" << previous_signed_command_
+            << " selected_command=" << command << " cost=" << result.cost
+            << " iterations=" << result.iterations << " references=";
+        for(const auto& r:references) out << r.speed_mps << ',' << r.acceleration_mps2 << ';';
+        out << " warm_start=";
+        for(double u:warm_start_) out << u << ';';
+        out << " optimized=";
+        for(double u:commands) out << u << ';';
+        return out.str();
+      }()));
   previous_signed_command_ = command;
   result.signed_command = command;
   result.accel = std::max(0.0, command);
@@ -1021,6 +1156,18 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
   // silently reduces achievable slew and adds dynamics absent from the model.
   const double u_filtered = p_.morai_use_output_steering_filter ? lpf_steering_cmd_.filter(u_sat) : u_sat;
 
+  // #MPC_LATERAL_DIAGNOSTIC
+  // 경계 접근 전에 추종 오차·선행 조향과 첫 명령 억제 비용을 실측 기록과 비교한다.
+  // DEBUG가 꺼져 있으면 문자열을 만들지 않으며 계산·명령·제약을 바꾸지 않는다.
+  ROS_DEBUG_STREAM_NAMED("lateral_snapshot", "lateral speed=" << speed_mps
+      << " ey=" << err_lat << " epsi=" << yaw_err
+      << " modeled_steer=" << modeled_steering_rad
+      << " previous=" << previous_steering_rad << " requested=" << u_filtered
+      << " ref_k=" << mpc_resampled_ref_traj.k.front()
+      << " ref_u=" << Urefex(0,0) << " first_change_weight=" << first_change_weight
+      << " H00=" << H(0,0) << " R00=" << Rex(0,0)
+      << " predicted_ey=" << x0(0) << " predicted_epsi=" << x0(1));
+
   // Keep the original optimizer-output delay buffer. The next call's first
   // transition separately references the final bounded Core command.
   if (!input_buffer_.empty()) {
@@ -1051,47 +1198,132 @@ class MoraiMpc {
         steering_(parameters_.steering_prediction.delay_sec,
                   parameters_.steering_prediction.time_constant_sec) {}
 
+  // #MPC_PROFILE_TIME
+  // 최종 velocity_injected를 Path.header.stamp 기준의 시간 궤적으로 읽는다.
+  // 점 간격은 불균일하며 pose.header.stamp는 관측 기준 시각이므로 사용하지 않는다.
+  // v와 a를 끝점으로 갖는 Hermite 보간을 사용하고 끝점 범위를 넘지 않게 제한한다.
+  // 현재 대기 구간은 기존 0속도 제어를 유지한다. 미래 정지점을 넘은 출발 참조는
+  // 그 정지 시각을 지나기 전에는 사용하지 않는다. 계획 끝 밖으로 진행을 외삽하지 않는다.
+  static std::vector<autoware_ai_mpc::LongitudinalReference> referenceHorizon(
+      const interfaces::Path& path, double elapsed_sec,
+      const autoware_ai_mpc::LongitudinalMpcConfig& config) {
+    using Reference = autoware_ai_mpc::LongitudinalReference;
+    std::vector<Reference> references(static_cast<std::size_t>(config.horizon_steps));
+    const auto after = std::upper_bound(path.points.begin(), path.points.end(), elapsed_sec,
+        [](double t, const interfaces::PathPoint& point) {
+          return t < point.time_from_start.toSec();
+        });
+    if (after != path.points.begin() && after != path.points.end() &&
+        (after - 1)->velocity == 0.0 && after->velocity == 0.0)
+      return references;  // 계획상 대기 중에는 이후 출발을 미리 참조하지 않는다.
+    double next_stop_sec = std::numeric_limits<double>::infinity();
+    for (auto it = after; it != path.points.end(); ++it) {
+      if (it->velocity == 0.0) {
+        next_stop_sec = it->time_from_start.toSec();
+        break;
+      }
+    }
+    for (std::size_t k = 0; k < references.size(); ++k) {
+      const double time = elapsed_sec + (k + 1) * config.prediction_dt_sec;
+      if (time >= next_stop_sec || time >= path.points.back().time_from_start.toSec())
+        continue;
+      const auto right = std::upper_bound(path.points.begin(), path.points.end(), time,
+          [](double t, const interfaces::PathPoint& point) {
+            return t < point.time_from_start.toSec();
+          });
+      const auto& a = *(right - 1);
+      const auto& b = *right;
+      const double h = b.time_from_start.toSec() - a.time_from_start.toSec();
+      const double u = (time - a.time_from_start.toSec()) / h;
+      const double u2 = u * u, u3 = u2 * u;
+      const double velocity = (2*u3 - 3*u2 + 1)*a.velocity +
+          (u3 - 2*u2 + u)*h*a.acceleration + (-2*u3 + 3*u2)*b.velocity +
+          (u3 - u2)*h*b.acceleration;
+      const double acceleration = (6*u2 - 6*u)*a.velocity/h +
+          (3*u2 - 4*u + 1)*a.acceleration + (-6*u2 + 6*u)*b.velocity/h +
+          (3*u2 - 2*u)*b.acceleration;
+      references[k] = {
+          std::max(std::min(a.velocity,b.velocity),
+                   std::min(std::max(a.velocity,b.velocity),velocity)),
+          std::max(std::min(a.acceleration,b.acceleration),
+                   std::min(std::max(a.acceleration,b.acceleration),acceleration))};
+    }
+    return references;
+  }
+
   morai_msgs::CtrlCmd process(const interfaces::Path& path, const nav_msgs::Odometry& ego,
-                             const interfaces::CompetitionVehicleStatus& status) {
-    ROS_INFO_ONCE("[control] executing morai_mpc.hpp");
-    const auto stamp = path.header.stamp.toNSec();
+                             const interfaces::CompetitionVehicleStatus& status,
+                             const ros::Time& control_stamp) {
+    ROS_INFO_ONCE("[control] executing morai_mpc.hpp with timed horizon reference");
+    const auto stamp = control_stamp.toNSec();
     const double dt = has_previous_stamp_ ?
         std::max(parameters_.minimum_control_dt_sec,
           std::min(parameters_.maximum_control_dt_sec,
             (static_cast<double>(stamp) - static_cast<double>(previous_stamp_)) * 1e-9)) :
         parameters_.lateral.ctrl_period;
-    const double time_sec = path.header.stamp.toSec();
+    const double time_sec = control_stamp.toSec();
     previous_stamp_ = stamp;
     has_previous_stamp_ = true;
 
-    const auto nearest = std::min_element(path.points.begin(), path.points.end(),
-        [](const auto& a, const auto& b) {
-          const auto& pa = a.pose.pose.position;
-          const auto& pb = b.pose.pose.position;
-          return pa.x * pa.x + pa.y * pa.y < pb.x * pb.x + pb.y * pb.y;
-        });
-    // The source Autoware adapter uses observed odometry speed throughout the
-    // lateral reference. The injected future velocity/acceleration profile is
-    // not a longitudinal horizon reference for this controller.
+    // 횡방향 Autoware 계산에는 기존과 같이 관측 속도를 사용한다.
     const double speed_mps = ego.twist.twist.linear.x;
+    // #FRAME_TIME_ALIGNMENT
+    // 상위가 실제 사용한 map→경로 frame 변환으로 현재 차체 좌표에 재표현한다.
+    // 경로 계획 시각과 TF 시각이 같다고 가정하거나 과거 TF를 추정하지 않는다.
+    // ego 이력은 현재 계산 시각의 자세에만 사용하고 속도·예정 시각은 유지한다.
+    recordEgoPose(ego);
+    tf2::Transform map_from_reference;
+    tf2::fromMsg(path.map_from_path_frame.transform,map_from_reference);
+    const auto current_from_reference=poseAt(time_sec).inverse()*map_from_reference;
     control::autoware_ai_mpc::autoware::Lane waypoints;
     waypoints.waypoints.reserve(path.points.size());
     for (const auto& point : path.points) {
       control::autoware_ai_mpc::autoware::Waypoint waypoint;
       waypoint.pose = point.pose;
+      tf2::Transform reference_from_point;
+      tf2::fromMsg(point.pose.pose,reference_from_point);
+      tf2::toMsg(current_from_reference*reference_from_point,waypoint.pose.pose);
       waypoint.twist.twist.linear.x = std::max(0.5, std::abs(speed_mps));
       waypoints.waypoints.push_back(waypoint);
     }
+    // #MEASURED_LATERAL_STATE
+    // 차체가 이미 회전 중이어도 새 경로가 현재 자세에서 시작하면 횡/방향
+    // 오차는 거의 0이다. 과거 명령만으로 추정한 조향 상태까지 틀리면 실제
+    // 회전을 놓친다. 같은 ego의 body yaw rate와 전방 속도로 뒷차축 운동에
+    // 해당하는 등가 조향 atan(L*r/v)를 구해 기존 kinematic MPC 초기 상태에
+    // 넣는다. 실제 타이어 각도 측정으로 해석하지 않는다. 자세 전파와 같이
+    // 관측 body twist를 계산 시각까지 일정하게 두는 근사이며 새 센서가 없다.
+    // 0.5m/s 미만에서는 yaw/v가 불안정하므로 기존 명령 기반 상태를 사용한다.
+    // 예측 모델·게인·입력 지연 보상·조향/변화율 한도·종방향 계산은 유지한다.
+    // GT 객체나 지도 ID에 의존하지 않아 LiDAR 검출로 바뀌어도 같은 계산이다.
+    const double predicted_steering_rad=steering_.advance(time_sec);
+    const double initial_effective_steering_rad=std::abs(speed_mps)>=.5 ?
+        std::atan(parameters_.lateral.vehicle_model_wheelbase*ego.twist.twist.angular.z/speed_mps) :
+        predicted_steering_rad;
     const double requested = lateral_.calculate(waypoints, speed_mps,
-        steering_.advance(time_sec), previous_steering_rad_);
+        initial_effective_steering_rad, previous_steering_rad_);
     const double limit = parameters_.lateral.steer_lim_deg * autoware_ai_mpc::kPi / 180.0;
     const double step = parameters_.lateral.morai_steer_rate_limit_deg *
                         autoware_ai_mpc::kPi / 180.0 * dt;
     double angle = std::max(-limit, std::min(limit, requested));
     angle = std::max(previous_steering_rad_ - step,
                      std::min(previous_steering_rad_ + step, angle));
-    const auto pedals = longitudinal_.update(nearest->velocity, status.velocity_x_mps, dt);
+    const auto references = referenceHorizon(path, (control_stamp - path.header.stamp).toSec(),
+                                            parameters_.longitudinal);
+    const auto pedals = longitudinal_.updateReference(references, status.velocity_x_mps, dt);
+    ROS_DEBUG_STREAM_COND_NAMED(pedals.brake > 0.05 && status.velocity_x_mps > 2.0,
+        "longitudinal_snapshot", "input_stamps control_ns=" << control_stamp.toNSec()
+        << " path_ns=" << path.header.stamp.toNSec()
+        << " status_ns=" << status.header.stamp.toNSec()
+        << " ego_ns=" << ego.header.stamp.toNSec());
 
+    ROS_DEBUG_STREAM_NAMED("lateral_snapshot", "lateral_input control_ns=" << control_stamp.toNSec()
+        << " path_ns=" << path.header.stamp.toNSec() << " ego_ns=" << ego.header.stamp.toNSec()
+        << " status_ns=" << status.header.stamp.toNSec()
+        << " measured_yaw_rate=" << ego.twist.twist.angular.z
+        << " status_speed=" << status.velocity_x_mps << " bounded=" << angle
+        << " predicted_steer=" << predicted_steering_rad
+        << " initial_effective_steer=" << initial_effective_steering_rad);
     previous_steering_rad_ = angle;
     steering_.sent(time_sec, angle * parameters_.steering_prediction.gain);
     morai_msgs::CtrlCmd command;
@@ -1103,6 +1335,53 @@ class MoraiMpc {
   }
 
  private:
+  struct EgoPoseSample {
+    double time_sec;
+    tf2::Transform map_from_base;
+    geometry_msgs::Twist body_twist;
+  };
+  std::deque<EgoPoseSample> ego_poses_;
+  void recordEgoPose(const nav_msgs::Odometry& ego) {
+    const double stamp=ego.header.stamp.toSec();
+    if(!ego_poses_.empty() && stamp==ego_poses_.back().time_sec) return;
+    // 입력이 이력 범위(1초)보다 오래 끊긴 구간을 양 끝 pose로 보간하지 않는다.
+    // 복귀 뒤에는 첫 관측에서의 기존 body twist 전파 규칙으로 기준을 다시 잡는다.
+    if(!ego_poses_.empty() &&
+       (stamp<ego_poses_.back().time_sec || stamp-ego_poses_.back().time_sec>1.0))
+      ego_poses_.clear();
+    tf2::Transform pose;tf2::fromMsg(ego.pose.pose,pose);
+    ego_poses_.push_back({stamp,pose,ego.twist.twist});
+    while(ego_poses_.size()>2 && ego_poses_[1].time_sec<stamp-1) ego_poses_.pop_front();
+  }
+  static tf2::Transform propagatePose(const EgoPoseSample& sample,double stamp) {
+    const double dt=stamp-sample.time_sec;
+    const auto& twist=sample.body_twist;
+    const tf2::Vector3 velocity(twist.linear.x,twist.linear.y,twist.linear.z);
+    const tf2::Vector3 omega(twist.angular.x,twist.angular.y,twist.angular.z);
+    const double rate=omega.length(),angle=rate*dt;
+    double first=dt*dt/2,second=dt*dt*dt/6;
+    if(std::abs(angle)>1e-5) {
+      first=(1-std::cos(angle))/(rate*rate);
+      second=(angle-std::sin(angle))/(rate*rate*rate);
+    }
+    const auto displacement=velocity*dt+omega.cross(velocity)*first+
+                            omega.cross(omega.cross(velocity))*second;
+    tf2::Quaternion rotation(0,0,0,1);
+    if(rate>0) rotation=tf2::Quaternion(omega/rate,angle);
+    return sample.map_from_base*tf2::Transform(rotation,displacement);
+  }
+  tf2::Transform poseAt(double stamp) const {
+    if(stamp<=ego_poses_.front().time_sec) return propagatePose(ego_poses_.front(),stamp);
+    for(std::size_t i=1;i<ego_poses_.size();++i) {
+      const auto& before=ego_poses_[i-1];const auto& after=ego_poses_[i];
+      if(stamp<=after.time_sec) {
+        const double ratio=(stamp-before.time_sec)/(after.time_sec-before.time_sec);
+        return tf2::Transform(before.map_from_base.getRotation().slerp(after.map_from_base.getRotation(),ratio),
+            before.map_from_base.getOrigin().lerp(after.map_from_base.getOrigin(),ratio));
+      }
+    }
+    return propagatePose(ego_poses_.back(),stamp);
+  }
   autoware_ai_mpc::Parameters parameters_;
   autoware_ai_mpc::AutowareLateral lateral_;
   autoware_ai_mpc::LongitudinalMpc longitudinal_;

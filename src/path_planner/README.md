@@ -37,6 +37,7 @@ Stage별 Core 선택은 `config/path_planner/selection.yaml`에서 관리한다.
 Bank `shared_map.hpp`는 `config/path_planner/parameters/shared_map.yaml`의 `map_file` 지도를 노드당 한 번 읽어 GlobalPath와 등록된 대체 Core LocalPath에 같은 인스턴스로 주입한다. 로더는 `checkpoints_file`의 모든 lanelet_id가 지도에 있는지 시작 시 확인한다.
 
 `global_path.hpp`는 ego로 현재 lanelet을 찾고, 전달받은 체크포인트 중 마지막을 목적지, 나머지를 경유지로 `shortestPathVia`를 계산한다. 반환 경로 앞에는 차선 변경을 제외한 현재 lanelet의 predecessor 중 첫 번째를 포함한다. 체크포인트가 비어 있으면 predecessor와 현재 lanelet을 반환하며, predecessor가 없으면 현재 lanelet부터 반환한다.
+첫 차선 변경은 필수 경유 lanelet을 보존하며, 양쪽 종방향 연결과 합법적인 공유 경계가 확인되는 가장 앞의 병렬 구간으로 당긴다. `parameters/global_path.yaml`로 지정한 주도로 12번 체크포인트는 기존 경로가 바로 다음으로 선택한 합법적인 옆 차선 중심선이 기존 통과 반경 안을 지나면 해당 차선으로 경유한다. 반경은 Section Annotator의 기존 설정에서 읽고, 체크포인트 위치·실제 섹션 판정·다른 필수 경유 차선·최종 목적지는 유지한다. 실제 변경 시각·곡선·속도·객체 간격은 LocalPath가 결정한다.
 현재 lanelet이나 체크포인트 lanelet_id 목록이 바뀔 때만 경로를 다시 계산한다. 경로 중심선은 `/visualizer/global_path`로 발행한다.
 
 ## Prediction·LocalPath

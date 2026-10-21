@@ -83,6 +83,14 @@ inline void validateParameters(const Parameters& parameters) {
       !autoware_ai_mpc::parameter_detail::finitePositive(config.command_rate_limit_per_sec) ||
       !autoware_ai_mpc::parameter_detail::finitePositive(config.acceleration_gain_mps2) ||
       !autoware_ai_mpc::parameter_detail::finitePositive(config.braking_gain_mps2) ||
+      !std::isfinite(config.high_speed_braking_gain_mps2) || config.high_speed_braking_gain_mps2 < 0.0 ||
+      !std::isfinite(config.braking_gain_transition_low_mps) || config.braking_gain_transition_low_mps < 0.0 ||
+      !std::isfinite(config.braking_gain_transition_high_mps) || config.braking_gain_transition_high_mps < 0.0 ||
+      !std::isfinite(config.strong_brake_transition_low) || config.strong_brake_transition_low < 0.0 ||
+      !std::isfinite(config.strong_brake_transition_high) || config.strong_brake_transition_high > 1.0 ||
+      (config.high_speed_braking_gain_mps2 > 0.0 &&
+       (!config.physical_rollout || config.braking_gain_transition_high_mps <= config.braking_gain_transition_low_mps ||
+        config.strong_brake_transition_high <= config.strong_brake_transition_low)) ||
       !autoware_ai_mpc::parameter_detail::finitePositive(config.actuator_time_constant_sec) ||
       !std::isfinite(config.constant_drag_mps2) || config.constant_drag_mps2 < 0.0 ||
       !std::isfinite(config.quadratic_drag_per_m) || config.quadratic_drag_per_m < 0.0 ||
@@ -159,6 +167,13 @@ inline autoware_ai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::P
   p.longitudinal.command_rate_limit_per_sec = params.number("longitudinal/command_rate_limit_per_sec");
   p.longitudinal.acceleration_gain_mps2 = params.number("longitudinal/acceleration_gain_mps2");
   p.longitudinal.braking_gain_mps2 = params.number("longitudinal/braking_gain_mps2");
+  if (params.has("longitudinal/high_speed_braking_gain_mps2")) {
+    p.longitudinal.high_speed_braking_gain_mps2 = params.number("longitudinal/high_speed_braking_gain_mps2");
+    p.longitudinal.braking_gain_transition_low_mps = params.number("longitudinal/braking_gain_transition_low_mps");
+    p.longitudinal.braking_gain_transition_high_mps = params.number("longitudinal/braking_gain_transition_high_mps");
+    p.longitudinal.strong_brake_transition_low = params.number("longitudinal/strong_brake_transition_low");
+    p.longitudinal.strong_brake_transition_high = params.number("longitudinal/strong_brake_transition_high");
+  }
   p.longitudinal.actuator_time_constant_sec = params.number("longitudinal/actuator_time_constant_sec");
   p.longitudinal.physical_rollout = params.flag("longitudinal/physical_rollout");
   p.longitudinal.constant_drag_mps2 = params.number("longitudinal/constant_drag_mps2");

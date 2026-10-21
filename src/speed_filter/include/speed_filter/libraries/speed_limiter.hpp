@@ -40,6 +40,12 @@ class SpeedLimiter {
       start_until_sec_ = -1;
       return output;
     }
+    // 상위 제어기의 명시적 제동은 출발 보조가 덮어쓰지 않는다.
+    if (command.brake > 0) {
+      stopped_since_sec_ = -1;
+      start_until_sec_ = -1;
+      return output;
+    }
     const bool stopped = speed_mps <= parameters_.stop_speed_mps;
     if (start_until_sec_ >= 0 && now_sec >= start_until_sec_) {
       start_until_sec_ = -1;

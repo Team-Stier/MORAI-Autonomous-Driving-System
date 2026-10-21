@@ -38,6 +38,7 @@ template<class Core> void checkFilter() {
   expectCommand(expected, process(13, -20.1));
 
   command.accel = 0;
+  command.brake = 0;
   expectCommand(command, process(20, 0));
   expectCommand(command, process(21.9, -0.05));
   expected = command;
@@ -100,4 +101,68 @@ TEST(SpeedFilter, LoaderReadsAllParametersAndRejectsInvalidAccel) {
 int main(int argc, char** argv) {
   testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
+}
+
+TEST(SpeedFilter, ExplicitBrakeCannotBeReleasedByTimedDepartureAssist) {
+  for (double brake : {0.1, 1.0}) {
+    speed_filter::SpeedLimit60 core;
+    interfaces::CompetitionVehicleStatus status;
+    morai_msgs::CtrlCmd command;
+    command.brake = brake;
+    for (double t : {100.0, 131.0, 161.0, 200.0}) {
+      status.header.stamp.fromSec(t);
+      const auto output = core.process(command, status);
+      EXPECT_DOUBLE_EQ(output.accel, 0);
+      EXPECT_DOUBLE_EQ(output.brake, brake);
+    }
+  }
+}
+
+TEST(SpeedFilter, BrakeInterruptsActiveAssistAndRequiresNewStopInterval) {
+  speed_filter::SpeedFilterParameters parameters;parameters.stop_tolerance_sec=30;
+  speed_filter::SpeedLimit60 core(parameters);
+  interfaces::CompetitionVehicleStatus status;morai_msgs::CtrlCmd command;
+  const auto sample=[&](double t){status.header.stamp.fromSec(t);return core.process(command,status);};
+  EXPECT_DOUBLE_EQ(sample(100).accel,0);
+  EXPECT_GT(sample(131).accel,0);
+  command.brake=1;
+  const auto stop=sample(131.1);
+  EXPECT_DOUBLE_EQ(stop.accel,0);EXPECT_DOUBLE_EQ(stop.brake,1);
+  command.brake=0;
+  EXPECT_DOUBLE_EQ(sample(132).accel,0);
+  EXPECT_DOUBLE_EQ(sample(161.9).accel,0);
+  EXPECT_GT(sample(162).accel,0);
+}
+
+TEST(SpeedFilter, OfficialHighwayExceptionPreservesCommandAtTwentyMetresPerSecond) {
+ speed_filter::SpeedLimit60Parameters parameters;
+ parameters.speed_exemption_link_ids={"A2256W000411","A2256W000153"};
+ speed_filter::SpeedLimit60 core(parameters);interfaces::CompetitionVehicleStatus status;
+ status.header.stamp=ros::Time(10);status.signed_velocity_mps=20.0136;status.link_id="A2256W000411";
+ morai_msgs::CtrlCmd command;command.accel=.1;command.steering=.05;
+ expectCommand(command,core.process(command,status));
+}
+
+TEST(SpeedFilter, OfficialExceptionKeepsExplicitBrakeAndEndsAtTheNextLink) {
+ speed_filter::SpeedLimit60Parameters parameters;
+ parameters.speed_exemption_link_ids={"A2256W000411","A2256W000153"};
+ speed_filter::SpeedLimit60 core(parameters);interfaces::CompetitionVehicleStatus status;
+ status.header.stamp=ros::Time(10);status.signed_velocity_mps=20;
+ morai_msgs::CtrlCmd command;command.brake=.4;command.steering=-.1;
+ for(const std::string id:{"A2256W000411","A2256W000153"}) {
+  status.link_id=id;expectCommand(command,core.process(command,status));
+ }
+ status.link_id="A2256W000451";auto expected=command;expected.brake=1;
+ expectCommand(expected,core.process(command,status));
+ status.link_id="";expectCommand(expected,core.process(command,status));
+ status.signed_velocity_mps=16;expectCommand(command,core.process(command,status));
+}
+TEST(SpeedFilter, LoadsOfficialExceptionLinksAndDoesNotExemptEntryApproachOrExitRoad) {
+ const std::string package=NP_PACKAGE_DIR;
+ const auto p=speed_filter::loadSpeedLimit60Parameters(node_pipeline::ParamReader::fromFile(
+     package+"/config/speed_filter/parameters/speed_limit60.yaml",package));
+ EXPECT_EQ(p.speed_exemption_link_ids.count("A2256W000411"),1u);
+ EXPECT_EQ(p.speed_exemption_link_ids.count("A2256W000153"),1u);
+ EXPECT_EQ(p.speed_exemption_link_ids.count("A2256W000846"),0u);
+ EXPECT_EQ(p.speed_exemption_link_ids.count("A2256W000451"),0u);
 }

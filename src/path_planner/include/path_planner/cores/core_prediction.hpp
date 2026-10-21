@@ -144,7 +144,16 @@ class CorePrediction {
       input.length_m = object.bbox_size.x;
       input.width_m = object.bbox_size.y;
       const double speed_squared = velocity.x*velocity.x + velocity.y*velocity.y;
-      input.turn_rate_radps = speed_squared == 0 ? 0 :
+      // #STANDSTILL_TURN_RATE
+      // map 절대 속도와 가속도로 선회율을 추정할 때 정지 부근에서는 |v|²로
+      // 나누는 계산이 불안정하다. 실제 정지 GT의 µm/s 잔차만으로도 수백 rad/s가
+      // 생겨 정지 차량의 미래 OBB가 회전하고 추종·충돌 판정이 흔들렸다.
+      // 속력 1 mm/s 이하에서는 선회율 추정을 사용하지 않고 원래 CV 전파를 쓴다.
+      // 측정 선속도를 0으로 지우지 않으며 위치는 그 작은 선속도로 계속 전파한다.
+      // 그 이상에서는 기존 CTRV 수식·회전 부호·예측 시각과 bbox 크기를 유지한다.
+      // 실제 정지 제자리 회전이 필요한 객체는 v/a 비율 대신 직접 관측한 yaw rate
+      // 계약이 필요하다. ROI·차선·충돌 여유를 변경해 이 수치 문제를 숨기지 않는다.
+      input.turn_rate_radps = speed_squared <= 1e-6 ? 0 :
         (velocity.x*acceleration.y - velocity.y*acceleration.x) / speed_squared;
       tracked.push_back(input);
     }
