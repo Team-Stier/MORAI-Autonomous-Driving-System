@@ -47,6 +47,11 @@ struct LongitudinalMpcConfig {
   bool physical_rollout{false};
   double constant_drag_mps2{0.0};
   double quadratic_drag_per_m{0.0};
+  double high_speed_acceleration_gain_mps2{0.0};  // 0: original drive model.
+  double high_speed_constant_drag_mps2{0.0};
+  double high_speed_quadratic_drag_per_m{0.0};
+  double drive_model_transition_low_mps{0.0};
+  double drive_model_transition_high_mps{0.0};
   double maximum_acceleration_mps2{2.5};
   double maximum_deceleration_mps2{5.0};
   double maximum_jerk_mps3{3.0};
@@ -543,12 +548,31 @@ inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
       braking_gain += blend * (1.0 - pressure_blend) *
           (config_.high_speed_braking_gain_mps2 - braking_gain);
     }
+    // #SPEED_DEPENDENT_DRIVE_MODEL
+    // 세 번의 Ioniq5 주행에서 6m/s 이상 가속 응답은 기존 5.74보다 작은
+    // 약 2.7m/s²/페달로 관측되었다. 기존 고속 저항 예측도 실제보다 커서,
+    // 감속 참조에 낸 양의 페달이 모델에서는 감속, 실제로는 가속이 되었다.
+    // physical rollout에서 명시한 속도 구간의 smoothstep으로 가속 이득과
+    // 저항을 연속 연결한다. 속도는 예측 차량 상태이고 페달은 정규화 값이다.
+    // 구간 아래의 기존 모델·실측 초기 상태·최적화 참조·게인/한도·제동 이득은
+    // 유지한다. 새 이득 0은 기존 계산이며 다른 차량에는 재측정이 필요하다.
+    // 관측 ID·GT·LiDAR와 무관한 차량 모델 보정으로, 객체나 경로를 수정하지 않는다.
+    double acceleration_gain=config_.acceleration_gain_mps2;
+    double constant_drag=config_.constant_drag_mps2;
+    double quadratic_drag=config_.quadratic_drag_per_m;
+    if(config_.physical_rollout && config_.high_speed_acceleration_gain_mps2>0) {
+      const double ratio=clamp((speed-config_.drive_model_transition_low_mps)/
+          (config_.drive_model_transition_high_mps-config_.drive_model_transition_low_mps),0.0,1.0);
+      const double blend=ratio*ratio*(3-2*ratio);
+      acceleration_gain+=(config_.high_speed_acceleration_gain_mps2-acceleration_gain)*blend;
+      constant_drag+=(config_.high_speed_constant_drag_mps2-constant_drag)*blend;
+      quadratic_drag+=(config_.high_speed_quadratic_drag_per_m-quadratic_drag)*blend;
+    }
     double requested_acceleration =
-        command >= 0.0 ? config_.acceleration_gain_mps2 * command
+        command >= 0.0 ? acceleration_gain * command
                        : braking_gain * command;
     if (config_.physical_rollout) {
-      requested_acceleration -= config_.constant_drag_mps2 +
-          config_.quadratic_drag_per_m * speed * speed;
+      requested_acceleration -= constant_drag + quadratic_drag * speed * speed;
     }
     double next_acceleration =
         acceleration + actuator_alpha * (requested_acceleration - acceleration);

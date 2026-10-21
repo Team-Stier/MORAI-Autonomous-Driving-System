@@ -1836,8 +1836,11 @@ TEST(CorePathCentering, RealKCityMovingCurveDoesNotSkipFeasibleIntermediateWindo
   path_planner::PredictedObjects predictions;predictions.fill(objects);
   const auto route=std::get<5>(global.process(ego,competition,objects,{},imu,checkpoints));
   ASSERT_TRUE(static_cast<bool>(route));
-  const auto parameters=path_planner::loadCorePathPlannerParameters(
+  auto parameters=path_planner::loadCorePathPlannerParameters(
       node_pipeline::ParamReader::fromFile(package_dir+"/config/path_planner/parameters/core_path_planner.yaml",package_dir));
+  // 당시 2.0/1.8m/s² 조건의 수치 회귀를 주행 설정과 독립적으로 보존한다.
+  parameters.max_lateral_accel_mps2=2.0;
+  parameters.preferred_lateral_accel_mps2=1.8;
   path_planner::CorePathPlanner core(parameters);
   const auto path=core.process(ego,competition,objects,{},imu,route,predictions,competition.header.stamp);
   ASSERT_GE(path.points.size(),2u);
@@ -2291,9 +2294,12 @@ TEST(CorePathCentering, UsesTheRepresentedCurvePeakForSpeedMargin) {
   path_planner::SharedMap shared(path_planner::loadSharedMapParameters(reader));
   const auto checkpoints=path_planner::readCheckpoints(reader.asset("checkpoints_file"));
   const path_planner::Checkpoints remaining(checkpoints.begin()+10,checkpoints.end());
-  const auto parameters=path_planner::loadCorePathPlannerParameters(
+  auto parameters=path_planner::loadCorePathPlannerParameters(
       node_pipeline::ParamReader::fromFile(
           package_dir+"/config/path_planner/parameters/core_path_planner.yaml",package_dir));
+  // 당시 2.0/1.8m/s² 조건의 수치 회귀를 주행 설정과 독립적으로 보존한다.
+  parameters.max_lateral_accel_mps2=2.0;
+  parameters.preferred_lateral_accel_mps2=1.8;
   const std::array<double,16> f{{-39.94926048603136,344.1870716673704,-0.004823559878040202,-0.0004145418794970713,-0.032736239290370395,-0.999452300043507,7.35938471627136,-0.08770120580704979,-0.008913299068808556,7.365354537963867,0.3106602132320404,1792332608,487155928,1792332608,496263000,1792332608.5156608}};
   nav_msgs::Odometry ego;ego.header.frame_id="map";ego.child_frame_id="base_link";
   ego.header.stamp=ros::Time(static_cast<uint32_t>(f[11]),static_cast<uint32_t>(f[12]));

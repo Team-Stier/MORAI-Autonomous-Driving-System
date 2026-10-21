@@ -1,0 +1,9 @@
+{
+  "source_run": "r165-drive-model-lane-choice-verification",
+  "source_plan_stamp_ns": 1792563677277830470,
+  "source_time_sec": 182.0049729347229,
+  "format": "little-endian uint64 plan stamp; five uint32 byte-count-prefixed ROS serialized messages: Odometry, CompetitionVehicleStatus, Objects, TFMessage, Imu",
+  "section": 12,
+  "sha256": "a1fb151b92f4365c49a6073e6bd4c2df8cf23b8877f1190eb4aed7c801b96905",
+  "expected": "A validated central geometry must preserve at least 90 percent of initial speed at t=2 sec when a pre-existing shorter-span central candidate avoids the unnecessary initial braking."
+}

@@ -56,6 +56,11 @@ longitudinal:
   physical_rollout: true
   constant_drag_mps2: 0.17
   quadratic_drag_per_m: 0.0026
+  high_speed_acceleration_gain_mps2: 2.7
+  high_speed_constant_drag_mps2: 0.07
+  high_speed_quadratic_drag_per_m: 0.0005
+  drive_model_transition_low_mps: 6.0
+  drive_model_transition_high_mps: 6.5
   maximum_acceleration_mps2: 6.0
   maximum_deceleration_mps2: 15.0
   maximum_jerk_mps3: 3.0
@@ -69,10 +74,10 @@ longitudinal:
   # 테스트 차량 실측 제동 응답. 6m/s 이하는 기존 계수, 강한 제동은 기존 계수로 연속 복귀.
   strong_brake_transition_low: 0.18
   strong_brake_transition_high: 0.42
-  high_speed_braking_gain_mps2: 9.23456506625
+  high_speed_braking_gain_mps2: 10.39476463366459
   braking_gain_transition_low_mps: 6.0
   braking_gain_transition_high_mps: 6.5
 steering_prediction:
   delay_sec: 0.08
   time_constant_sec: 0.04
-  gain: 0.82
+  gain: 0.78

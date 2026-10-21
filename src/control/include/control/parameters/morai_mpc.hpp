@@ -62,6 +62,12 @@ inline void validateParameters(const Parameters& parameters) {
       p.morai_weight_curvature_low < 0. || p.morai_weight_curvature_high <= p.morai_weight_curvature_low)
     throw std::invalid_argument("Invalid curvature weight interval");
   const auto& config = parameters.longitudinal;
+  parameter_detail::nonnegative({config.high_speed_acceleration_gain_mps2,
+      config.high_speed_constant_drag_mps2,config.high_speed_quadratic_drag_per_m,
+      config.drive_model_transition_low_mps,config.drive_model_transition_high_mps});
+  if(config.high_speed_acceleration_gain_mps2>0 && (!config.physical_rollout ||
+      config.drive_model_transition_high_mps<=config.drive_model_transition_low_mps))
+    throw std::invalid_argument("Invalid drive model transition interval");
   const bool solver_valid = config.solver == "osqp" ||
                             config.solver == "projected_gradient" ||
                             config.solver == "coordinate_search";
@@ -178,6 +184,13 @@ inline autoware_ai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::P
   p.longitudinal.physical_rollout = params.flag("longitudinal/physical_rollout");
   p.longitudinal.constant_drag_mps2 = params.number("longitudinal/constant_drag_mps2");
   p.longitudinal.quadratic_drag_per_m = params.number("longitudinal/quadratic_drag_per_m");
+  if(params.has("longitudinal/high_speed_acceleration_gain_mps2")) {
+    p.longitudinal.high_speed_acceleration_gain_mps2=params.number("longitudinal/high_speed_acceleration_gain_mps2");
+    p.longitudinal.high_speed_constant_drag_mps2=params.number("longitudinal/high_speed_constant_drag_mps2");
+    p.longitudinal.high_speed_quadratic_drag_per_m=params.number("longitudinal/high_speed_quadratic_drag_per_m");
+    p.longitudinal.drive_model_transition_low_mps=params.number("longitudinal/drive_model_transition_low_mps");
+    p.longitudinal.drive_model_transition_high_mps=params.number("longitudinal/drive_model_transition_high_mps");
+  }
   p.longitudinal.maximum_acceleration_mps2 = params.number("longitudinal/maximum_acceleration_mps2");
   p.longitudinal.maximum_deceleration_mps2 = params.number("longitudinal/maximum_deceleration_mps2");
   p.longitudinal.maximum_jerk_mps3 = params.number("longitudinal/maximum_jerk_mps3");

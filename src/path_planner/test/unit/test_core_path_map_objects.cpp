@@ -767,3 +767,26 @@ TEST(CorePathPlanner, NearbyPedestrianSlowsBeforeMotionWhilePreservingThirtyKphC
   EXPECT_LE(path.points.back().velocity,6.1);EXPECT_GT(path.points.back().velocity,0);
   EXPECT_GT(path.points.back().pose.pose.position.x,10);
 }
+
+// 옆 차선 뒤차를 먼저 보내려고 감속하지 않고 현재 차선에서 전진한 뒤,
+// 간격이 생긴 다음 재계획에서 합법적 변경을 마치는 native 입출력 회귀다.
+TEST(CorePathPlanner, KeepsSpeedAndCompletesTheChangeWhenTheRearVehicleFallsBehind) {
+ NativeLaneChangeScene scene(true);scene.objects.objects.clear();
+ scene.route=lanelet::routing::LaneletPath({scene.shared.map->laneletLayer.get(101),scene.shared.map->laneletLayer.get(102)});
+ scene.ego.twist.twist.linear.x=10;scene.status.velocity_x_mps=scene.status.signed_velocity_mps=10;
+ path_planner::PathParameters params;path_planner::CorePathPlanner core(params,scene.shared);
+ double elapsed=0,minimum_speed=10;bool completed=false;
+ for(int turn=0;turn<16;++turn) {
+  scene.ego.header.stamp.fromSec(10+elapsed);scene.status.header=scene.ego.header;scene.objects.header=scene.ego.header;
+  interfaces::Object rear;rear.id=2;rear.label="vehicle";rear.position.x=8+12*elapsed;rear.position.y=3.5;rear.bbox_pose.position=rear.position;rear.bbox_pose.orientation.w=1;rear.bbox_size.x=4.6;rear.bbox_size.y=2.1;rear.bbox_size.z=1.6;rear.velocity.x=12;rear.velocity_available=rear.acceleration_available=true;scene.objects.objects={rear};scene.predictions.fill(scene.objects);
+  for(std::size_t j=0;j<scene.predictions.size();++j){auto& q=scene.predictions[j].objects[0];q.position.x+=12*.5*(j+1);q.bbox_pose.position=q.position;}
+  auto path=core.process(scene.ego,scene.status,scene.objects,{},scene.imu,scene.route,scene.predictions,scene.ego.header.stamp);ASSERT_GE(path.points.size(),2u);
+  for(const auto& q:path.points)EXPECT_TRUE(nativeRectanglesSeparated(q,rear.position.x+12*q.time_from_start.toSec(),3.5,4.6,2.1));
+  auto it=std::lower_bound(path.points.begin(),path.points.end(),.5,[](const interfaces::PathPoint& q,double t){return q.time_from_start.toSec()<t;});ASSERT_NE(it,path.points.end());
+  elapsed+=it->time_from_start.toSec();scene.ego.pose.pose=it->pose.pose;scene.status.velocity_x_mps=scene.status.signed_velocity_mps=scene.ego.twist.twist.linear.x=it->velocity;scene.imu.linear_acceleration.x=it->acceleration;
+  const auto& prev=*(it-1);double yaw=2*std::atan2(it->pose.pose.orientation.z,it->pose.pose.orientation.w),old_yaw=2*std::atan2(prev.pose.pose.orientation.z,prev.pose.pose.orientation.w);double ds=std::hypot(it->pose.pose.position.x-prev.pose.pose.position.x,it->pose.pose.position.y-prev.pose.pose.position.y);scene.ego.twist.twist.angular.z=it->velocity*std::remainder(yaw-old_yaw,2*M_PI)/ds;
+  minimum_speed=std::min(minimum_speed,it->velocity);
+  if(it->pose.pose.position.y>3.2){completed=true;break;}
+ }
+ EXPECT_GE(minimum_speed,9.5);EXPECT_TRUE(completed);
+}

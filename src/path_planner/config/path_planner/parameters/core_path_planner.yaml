@@ -13,9 +13,9 @@ corridor_half_width_m: 0.3
 obstacle_margin_m: 0.25
 road_margin_m: 0.05
 max_curvature_inv_m: 0.18
-max_lateral_accel_mps2: 2.0
+max_lateral_accel_mps2: 3.0
 # 추종 오차를 위한 곡선 속도 비용 목표. 위 최종 허용 한도는 유지한다.
-preferred_lateral_accel_mps2: 1.8
+preferred_lateral_accel_mps2: 2.7
 # #REGULATION_SPEED_TRANSITION
 # 20m/s 시험 상한을 제거한다. 고주로 100km/h는 기존 팀 운용 목표이며,
 # 일반 60km/h와 공식 예외 Link를 기존 설정/정적 자산에서 주입한다.

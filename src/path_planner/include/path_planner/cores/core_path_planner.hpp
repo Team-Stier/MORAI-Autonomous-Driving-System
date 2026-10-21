@@ -36,6 +36,7 @@
 #include <path_planner/libraries/types.hpp>
 #include <path_planner/banks/shared_map.hpp>
 #include <lanelet2_routing/RoutingGraph.h>
+#include <lanelet2_core/geometry/Lanelet.h>
 #include <lanelet2_traffic_rules/TrafficRulesFactory.h>
 
 #ifndef STIER_PLANNING_COMMON_TYPES_HPP
@@ -738,7 +739,29 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
   // represented by a physically reachable stop/wait, never a truncated prefix.
   std::vector<PathPoint> plan(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
                                 const Predictions& predictions, const PlanningConstraints& requested_limits,
-                                const std::vector<PathPoint>& previous = {}) const {
+                                const std::vector<PathPoint>& previous = {},bool pending_lane_change=false) const {
+    // #COLLISION_SEARCH_BUDGET
+    // map 객체가 있으면 시간별 swept SAT가 많은 속도 후보에서 반복된다.
+    // 동일한 전체 기하/속도 탐색을 작은 beam으로 먼저 수행하고, 모든 도로·
+    // 충돌·속도·횡가속도·가감속·jerk 검사를 통과한 진행 경로만 채택한다.
+    // 실제 상태 가지치기가 있었고 해가 없거나 종료 정지이면 원래 beam으로
+    // 재탐색한다. 가지치기 전 실패는 큰 beam에서도 같으므로 반복하지 않는다.
+    // 각 실패 기하마다 큰 탐색을 반복하지 않으며, 객체가 없는 곡선은 원래
+    // beam을 유지한다. GT ID·센서·경로 시각·제어 입력 만료는 바꾸지 않는다.
+    constexpr std::size_t fast_beam_width=32;
+    bool truncated=false;
+    if(!predictions.current.empty() && p_.speed_beam_width>fast_beam_width &&
+       requested_limits.maximum_speed_mps>0) {
+      auto quick=planWithBeam(ego,reference_map,predictions,requested_limits,previous,fast_beam_width,truncated,pending_lane_change);
+      if((!quick.empty() && quick.back().speed_mps>0) || !truncated) return quick;
+    }
+    return planWithBeam(ego,reference_map,predictions,requested_limits,previous,p_.speed_beam_width,truncated,pending_lane_change);
+  }
+
+  std::vector<PathPoint> planWithBeam(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
+                                const Predictions& predictions, const PlanningConstraints& requested_limits,
+                                const std::vector<PathPoint>& previous,std::size_t beam_width,bool& truncated,
+                                bool pending_lane_change) const {
     auto limits=requested_limits;
     requireSceneDomain(ego,reference_map,predictions);
     requirePlanningDomain(ego,limits);
@@ -884,11 +907,12 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       }
       const double stop_arc=stopArc(ego,reference,arc,limits);
       if(stop_arc<0 && limits.release_time_sec>0) return {};
-      auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map);
+      auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
       if(!path.empty() && path.back().speed_mps>0 &&
          checkPlannedPath(ego,reference_map,predictions,limits,path)) return path;
       return {};
     };
+    const auto timed_center=[&]() -> std::vector<PathPoint> {
     for(double segment_extent:{p_.horizon_m,2*p_.horizon_m,p_.horizon_m/2,p_.horizon_m/4})
     for(double horizon:{planning_horizon_m,.75*planning_horizon_m,
                         .5*planning_horizon_m,.375*planning_horizon_m}) {
@@ -914,9 +938,43 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         const double ceiling=std::min({p_.max_speed_mps,limits.maximum_speed_mps,limits.preferred_speed_mps});
         if(!alternative.empty() && trajectoryCost(c,alternative,ceiling)<trajectoryCost(c,path,ceiling))
           path=std::move(alternative);
+        // #EXIT_PATH_CONTINUITY
+        // 첫 긴 중앙 후보가 즉시 제동하면 기존 네 공간 창 중 바로 다음 창도
+        // 같은 C2 연결기로 비교한다. 공간 분할의 끝점 차이 때문에 앞차가
+        // 멀어져도 불필요한 초기 제동을 택하는 경우를 줄인다. 새 창이나 계수는
+        // 추가하지 않고, 예측 시간 전체와 차체·도로·객체·동역학 검사 및 기존
+        // 시간 궤적 비용을 유지한다. 더 짧은 창이 실패하거나 비용이 크면
+        // 원래 후보를 보존하며, 정상 가속/순항 후보의 추가 탐색은 하지 않는다.
+        for(double next_horizon:{.75*planning_horizon_m,.5*planning_horizon_m,
+                                 .375*planning_horizon_m}) {
+          if(next_horizon>=horizon || next_horizon<=p_.horizon_m) continue;
+          auto shifted=center_candidate(next_horizon,2*p_.horizon_m);
+          if(!shifted.empty() && trajectoryCost(c,shifted,ceiling)<trajectoryCost(c,path,ceiling))
+            path=std::move(shifted);
+          break;
+        }
       }
       return path;
     }
+    return {};
+    }();
+    // #LANE_CHANGE_SPEED_CHOICE
+    // 현재 뒷차축이 합법 변경의 출발 lanelet 안에 있고 객체가 있을 때,
+    // 즉시 목표 중앙으로 향하는 경로가 첫 시간 격자부터 감속한다면 기존
+    // DP/QP·현재 횡 offset 유지 후보와 전체 시간 궤적 비용을 비교한다.
+    // 옆차의 map 절대 속도와 예측은 원래 swept 충돌 검사에 사용한다.
+    // 현재 차선에서 먼저 전진할 수 있어도 중앙 후보의 조기 반환 때문에
+    // 뒤차를 보내는 감속만 택하던 누락을 없앤다. 감속 없는 변경이 가능하면
+    // 원래 중앙 우선순위를 유지해 간격이 열린 뒤 변경을 계속 미루지 않는다.
+    // 차선 경계를 건넌 뒤에는 출발 차선 유지 선택을 새로 시작하지 않는다.
+    // 도로 합집합·합법 방향·차체·속도·가감속·jerk 한도는 유지하며,
+    // GT ID를 사용하지 않아 같은 계약의 LiDAR 추적 객체에도 적용된다.
+    const bool compare_maneuvers=pending_lane_change && !predictions.current.empty() &&
+        requested_limits.maximum_speed_mps>0 && (timed_center.empty() ||
+        std::any_of(timed_center.begin(),timed_center.end(),[&](const PathPoint& point) {
+          return point.time_sec<=p_.speed_time_step_sec && point.acceleration_mps2<0;
+        }));
+    if(!timed_center.empty() && !compare_maneuvers) return timed_center;
     const double cap=std::min(p_.max_speed_mps,limits.maximum_speed_mps);
     // #STATIC_CREEP_SEARCH_COMPLETENESS
     // 현재 정지한 차량에게 첫 시간 격자 전체의 대기 후 작은 전진을 예약하면
@@ -998,7 +1056,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
           if(std::isfinite(staticStopArc(c,crossing))) continue;
           const double stop_arc=stopArc(ego,reference,arc,limits);
           if(stop_arc<0 && limits.release_time_sec>0) continue;
-          auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map);
+          auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
           if(!path.empty() && path.back().speed_mps>0 && has_initial_progress(path) &&
              checkPlannedPath(ego,reference_map,predictions,limits,path)) return path;
         }
@@ -1070,8 +1128,9 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
             timing,previous,false,proposal_extent,true));
       }
     }
-    double best=std::numeric_limits<double>::infinity();
-    std::vector<PathPoint> result;
+    double best=timed_center.empty() ? std::numeric_limits<double>::infinity() :
+        trajectoryCost(c,timed_center,std::min(cap,limits.preferred_speed_mps));
+    std::vector<PathPoint> result=timed_center;
     for(std::size_t i=0;i<proposals.size();++i) {
       auto& shape=proposals[i];
       if(shape.empty()) continue;
@@ -1093,7 +1152,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       const ArcPath arc(matched);
       const double stop_arc=stopArc(ego,reference,arc,limits);
       if(stop_arc<0 && limits.release_time_sec>0) continue;
-      auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map);
+      auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
       if(path.empty() || !checkPlannedPath(ego,reference_map,predictions,limits,path)) continue;
       // #VERIFIED_CENTER_PRIORITY
       // 중앙 복귀가 실제 시간 계획과 모든 안전 검사를 통과해 계속 전진할 수
@@ -1101,7 +1160,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       // 명목 경로가 장애물 때문에 예측 구간 끝에 정지해야 하는 경우는 기존
       // 회피 후보와 비용 비교를 계속한다. 이 우선순위는 빈 경로나 미검증 형상을
       // 발행하지 않으며 도로·방향·충돌·곡률·속도·가감속·jerk 검사를 모두 유지한다.
-      if(i==0 && path.back().speed_mps>0) return path;
+      if(i==0 && path.back().speed_mps>0 && !compare_maneuvers) return path;
       const double cost=trajectoryCost(c,path,std::min(cap,limits.preferred_speed_mps));
       if(cost<best) { best=cost; result=std::move(path); }
     }
@@ -1194,7 +1253,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         const ArcPath arc(matched);
         const double stop_arc=stopArc(ego,reference,arc,limits);
         if(stop_arc<0 && limits.release_time_sec>0) continue;
-        auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map);
+        auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
         // #SINGLE_CENTER_WINDOW_SEARCH
         // 이 창은 위에서 중앙 C2 형상을 먼저 검사했다. 형상이 없었으면
         // 같은 입력의 중앙 C2 재호출도 비고, 형상이 있었다면 같은 시간 계획을
@@ -1225,7 +1284,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
             const ArcPath arc(matched);
             const double stop_arc=stopArc(ego,reference,arc,limits);
             if(stop_arc<0 && limits.release_time_sec>0) continue;
-            auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map);
+            auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
             if(path.empty() || !checkPlannedPath(ego,reference_map,predictions,limits,path)) continue;
             if(cap==0 || has_initial_progress(path)) {
               result=std::move(path);
@@ -2055,10 +2114,11 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     if(arrival!=best && arrival!=braking) retained.push_back(*arrival);
     cell=std::move(retained);
   }
-  void pruneSpeedLayer(std::vector<SpeedState>& next) const {
+  void pruneSpeedLayer(std::vector<SpeedState>& next,std::size_t beam_width,bool& truncated) const {
     std::stable_sort(next.begin(),next.end(),[](const SpeedState& a,const SpeedState& b){return a.cost<b.cost;});
-    if(next.size()<=p_.speed_beam_width) return;
-    if(p_.speed_beam_width==1) { next.resize(1); return; }
+    if(next.size()<=beam_width) return;
+    if(beam_width<p_.speed_beam_width) truncated=true;
+    if(beam_width==1) { next.resize(1); return; }
     const auto braking=std::min_element(next.begin(),next.end(),[&](const SpeedState& a,const SpeedState& b) {
       return a.s+brakingDistance(a.v,a.a)<b.s+brakingDistance(b.v,b.a);
     });
@@ -2066,7 +2126,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     const std::size_t brake_index=static_cast<std::size_t>(braking-next.begin());
     selected[brake_index]=true;
     std::size_t count=brake_index==0 ? 1 : 2;
-    const std::size_t budget=std::max<std::size_t>(1,p_.speed_beam_width/4);
+    const std::size_t budget=std::max<std::size_t>(1,beam_width/4);
     const std::size_t used=brake_index==0 ? 0 : 1;
     // Same-time progress bands preserve different arrival times. Separate
     // exact waits and acceleration regimes; reserve <=1/4 of the beam, then
@@ -2092,9 +2152,9 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       const std::size_t index=slots==1 ? representatives.size()/2 : k*(representatives.size()-1)/(slots-1);
       selected[representatives[index]]=true; ++count;
     }
-    for(std::size_t i=0;count<p_.speed_beam_width;++i)
+    for(std::size_t i=0;count<beam_width;++i)
       if(!selected[i]) { selected[i]=true; ++count; }
-    std::vector<SpeedState> retained; retained.reserve(p_.speed_beam_width);
+    std::vector<SpeedState> retained; retained.reserve(beam_width);
     for(std::size_t i=0;i<next.size();++i) if(selected[i]) retained.push_back(next[i]);
     next=std::move(retained);
   }
@@ -3134,9 +3194,15 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
 
   std::vector<PathPoint> planSpeed(const Context& c,const ArcPath& arc,const EgoState& ego,
                                  const PlanningConstraints& limits,double duration,double stop_arc,
-                                 const std::vector<ReferencePoint>& reference_map) const {
+                                 const std::vector<ReferencePoint>& reference_map,std::size_t beam_width,bool& truncated) const {
     auto start=arc.points.front(); start.time_sec=0;
     if(!roadClear(c,start.pose,start.pose) || collision(c,start,start)) return {};
+    // #FREE_ROAD_SEARCH_INVARIANCE
+    // GT의 먼 객체가 존재한다는 이유만으로 빈 도로의 속도 탐색을 줄이지 않는다.
+    // 전체 경로·예측 swept 범위가 기존 보수적 선별에서도 분리되면 원래 beam을
+    // 유지한다. 객체는 삭제하지 않으며 LiDAR도 같은 입력/충돌 계약을 따른다.
+    const std::size_t active_beam_width=beam_width<p_.speed_beam_width &&
+        !potentialCollision(c,arc.bounds,0) ? p_.speed_beam_width : beam_width;
     const double cap=std::min(p_.max_speed_mps,limits.maximum_speed_mps);
     const double origin_s=c.reference.project(start.pose.position,0,c.reference.length()).s;
     const auto recovery=ceilingRecovery(ego,limits);
@@ -3279,7 +3345,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
          ego.speed_mps*ego.speed_mps*std::abs(ego.curvature_inv_m)>p_.max_lateral_accel_mps2+1e-6)
         next.erase(std::remove_if(next.begin(),next.end(),[&](const State& q){return q.v>cap+1e-8;}),next.end());
       if(next.empty()) return {};
-      pruneSpeedLayer(next);
+      pruneSpeedLayer(next,active_beam_width,truncated);
       layers.push_back(std::move(next));
     }
     // #RETAINED_SPEED_VALIDATION
@@ -3952,7 +4018,16 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
             p_.normal_speed_limit_mps : p_.exception_target_speed_mps;
       }
     }
-    previous_path_ = plan(state, reference, native_predictions, mission_limits, previous_path_);
+    bool pending_lane_change=false;
+    for(std::size_t i=1;i<body_route->size() && !pending_lane_change;++i) {
+      const auto& source=(*body_route)[i-1];const auto& target=(*body_route)[i];
+      if(!lanelet::geometry::inside(source,lanelet::BasicPoint2d(state.pose.position.x,state.pose.position.y))) continue;
+      for(bool left:{false,true}) {
+        const auto neighbor=legalNeighbor(source,left);
+        if(neighbor && laneKey(*neighbor)==laneKey(target))pending_lane_change=true;
+      }
+    }
+    previous_path_ = plan(state, reference, native_predictions, mission_limits, previous_path_,pending_lane_change);
     // #PLANNING_DIAGNOSTICS: 실패 시 계산에 실제 사용한 초기 조건만 기록한다.
     // 경로·제약을 보정하거나 제어 토픽을 발행하지 않으며 빈 경로의 원인을 추적한다.
     if (previous_path_.empty()) {
