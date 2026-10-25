@@ -3,7 +3,7 @@ project(traffic_light)
 find_package(catkin REQUIRED COMPONENTS node_pipeline interfaces sensor_msgs)
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs dnn)
 find_package(CURL REQUIRED)
-set(ONNXRUNTIME_ROOT "/opt/onnxruntime-gpu/1.19.2" CACHE PATH "ONNX Runtime installation")
+set(ONNXRUNTIME_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src/libraries/camera7_frame_gpu_ort" CACHE PATH "ONNX Runtime installation")
 find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
   HINTS ${ONNXRUNTIME_ROOT} ENV ONNXRUNTIME_ROOT PATH_SUFFIXES include)
 find_library(ONNXRUNTIME_LIBRARY onnxruntime

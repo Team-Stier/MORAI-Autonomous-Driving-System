@@ -1,0 +1,85 @@
+{
+  "runtime": "onnxruntime1.31.0",
+  "plugin": "onnxruntime_ep_webgpu0.4.0",
+  "headers": "official v1.24.4; client C API24 supported by runtime",
+  "files": {
+    "include/onnxruntime_env_config_keys.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_env_config_keys.h",
+      "sha256": "2d531fef7dd4ffd22f35d219e1a795dbaa1c94a4a7fd29397c0982232e4ca332"
+    },
+    "include/environment.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/environment.h",
+      "sha256": "838ab12982fe1574ea29e20a8408bd983c8a489fbcd8e189802cdc82e42ca5bb"
+    },
+    "include/onnxruntime_cxx_api.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_cxx_api.h",
+      "sha256": "5eb8809db561261210ffcafcf9823873f0603fd799542797b6b728bb3f75e5f6"
+    },
+    "include/onnxruntime_ep_c_api.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_ep_c_api.h",
+      "sha256": "e94ac3490697bdb107844fa9d403952ee7136134132a057eae5c1207b57ce352"
+    },
+    "include/onnxruntime_session_options_config_keys.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_session_options_config_keys.h",
+      "sha256": "d34ff56586cae3260d9f9f71bf7f9c4560ee9cfed0e15b67e3603f5c24a0d6e6"
+    },
+    "include/experimental_onnxruntime_cxx_inline.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/experimental_onnxruntime_cxx_inline.h",
+      "sha256": "7f5cf1653e7379f7107ce0148d28499240ac89cf728aa6ac47ffd33a1a888600"
+    },
+    "include/onnxruntime_cxx_inline.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_cxx_inline.h",
+      "sha256": "022f4559009a35b157bc05a1aae9a59a2603a17e535d9410a49d0f9187f18039"
+    },
+    "include/experimental_onnxruntime_cxx_api.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/experimental_onnxruntime_cxx_api.h",
+      "sha256": "0e60a8a69e56982a51e548dab41d6d10c0a1cd98762648dee0d1ea90ce0a0041"
+    },
+    "include/onnxruntime_c_api.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_c_api.h",
+      "sha256": "9ed0d7054a4e74249467365b25b415d36f51a44a6349e2a994a1812e4723d1e2"
+    },
+    "include/onnxruntime_ep_device_ep_metadata_keys.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_ep_device_ep_metadata_keys.h",
+      "sha256": "825b5e3010771fccdf9f6297530a1b1697f3da6837ee47872c82b9c644468c22"
+    },
+    "include/onnxruntime_lite_custom_op.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_lite_custom_op.h",
+      "sha256": "f8c42f24286a94c003fdc76563f9e692f39d560c138bdf23063b1482a201d613"
+    },
+    "include/onnxruntime_float16.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_float16.h",
+      "sha256": "88b242845d25981633a0bbd1c148e273cf8bfb016ea3f57c4af41a06530f72b0"
+    },
+    "include/onnxruntime_run_options_config_keys.h": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_sdk_api24/include/onnxruntime_run_options_config_keys.h",
+      "sha256": "973037c14b0f1af0854ae25cd676776f79dbcfd2a6791f6ee17a5374c2a62550"
+    },
+    "lib/libonnxruntime.so.1.31.0": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_venv/lib/python3.12/site-packages/onnxruntime/capi/libonnxruntime.so.1.31.0",
+      "sha256": "21901b1b02233484b80888c16f4f5473742f796bf5528d5d0c4073dbe9802001"
+    },
+    "lib/libonnxruntime_providers_webgpu.so": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_venv/lib/python3.12/site-packages/onnxruntime_ep_webgpu/libonnxruntime_providers_webgpu.so",
+      "sha256": "9f76e3dc4459421958ad086a9da03bf7e5de9289e9a3a56e28bbb459773dec81"
+    },
+    "licenses/onnxruntime_LICENSE": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_venv/lib/python3.12/site-packages/onnxruntime/LICENSE",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    },
+    "licenses/onnxruntime_ThirdPartyNotices.txt": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_venv/lib/python3.12/site-packages/onnxruntime/ThirdPartyNotices.txt",
+      "sha256": "143764b952fdb1a7c69ce653bfba74a7744d6a8a573bfb73e235fba356c83de3"
+    },
+    "licenses/webgpu_LICENSE": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_venv/lib/python3.12/site-packages/onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/LICENSE",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c"
+    },
+    "licenses/webgpu_ThirdPartyNotices.txt": {
+      "source": "/home/stier/morai_traffic_light_data/local_gpu_only_20261023/ort_webgpu_venv/lib/python3.12/site-packages/onnxruntime_ep_webgpu-0.4.0.dist-info/licenses/ThirdPartyNotices.txt",
+      "sha256": "143764b952fdb1a7c69ce653bfba74a7744d6a8a573bfb73e235fba356c83de3"
+    }
+  },
+  "external_sources_unmodified": true,
+  "wall_ns": 1792764401563337431
+}

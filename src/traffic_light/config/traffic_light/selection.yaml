@@ -1,20 +1,20 @@
 recognize:
   section_core_map:
-    "0": camera7_frame_cpu.hpp
-    "1": camera7_frame_cpu.hpp
-    "2": camera7_frame_cpu.hpp
-    "3": camera7_frame_cpu.hpp
-    "4": camera7_frame_cpu.hpp
-    "5": camera7_frame_cpu.hpp
-    "6": camera7_frame_cpu.hpp
-    "7": camera7_frame_cpu.hpp
-    "8": camera7_frame_cpu.hpp
-    "9": camera7_frame_cpu.hpp
-    "10": camera7_frame_cpu.hpp
-    "11": camera7_frame_cpu.hpp
-    "12": camera7_frame_cpu.hpp
-    "13": camera7_frame_cpu.hpp
-    "14": camera7_frame_cpu.hpp
-    "15": camera7_frame_cpu.hpp
-    "16": camera7_frame_cpu.hpp
+    "0": camera7_frame_gpu.hpp
+    "1": camera7_frame_gpu.hpp
+    "2": camera7_frame_gpu.hpp
+    "3": camera7_frame_gpu.hpp
+    "4": camera7_frame_gpu.hpp
+    "5": camera7_frame_gpu.hpp
+    "6": camera7_frame_gpu.hpp
+    "7": camera7_frame_gpu.hpp
+    "8": camera7_frame_gpu.hpp
+    "9": camera7_frame_gpu.hpp
+    "10": camera7_frame_gpu.hpp
+    "11": camera7_frame_gpu.hpp
+    "12": camera7_frame_gpu.hpp
+    "13": camera7_frame_gpu.hpp
+    "14": camera7_frame_gpu.hpp
+    "15": camera7_frame_gpu.hpp
+    "16": camera7_frame_gpu.hpp
   health_core_map: []

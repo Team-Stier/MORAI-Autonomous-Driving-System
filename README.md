@@ -345,7 +345,7 @@ flowchart TD
 | Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 /localization/ego로 발행한다.         |
 | LiDAR_Leveler_Node | 센서 장착 TF와 차체 roll·pitch로 점군을 수평화해 `base_link_level`의 `/velodyne_points/leveled` 발행. |
 | Object_Detector_Node | 수평화 점군을 클러스터링하고 TF로 map 변환한 뒤 bbox 피팅·추적해 `/objects` 발행. |
-| Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 YOLO 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
+| Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 ResNet-34·ImageNet 기반 모델로 로컬 GPU에서 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
 | Section_Annotator_Node | ego가 맵의 어느 구간에 위치해 있는지 발행. 각 노드는 콜백으로 자신의 모드를 스위치할 수 있다. |
 | TF_Publisher_Node | ego 콜백으로 동적 `map → base_link`와 yaw만 따르는 `map → base_link_level` 발행. |
 | Static_TF_Publisher_Node | 센서 장착 변환을 시작 시 한 번 `/tf_static`으로 latched 발행. TF_Publisher_Node와 같은 `tf_publisher` 패키지에 둔다. |
