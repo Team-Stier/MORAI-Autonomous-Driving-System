@@ -2,7 +2,7 @@
   <!-- reads velodyne_driver's /velodyne_packets (run.sh starts VLP16_points.launch, as in collection) -->
   <node pkg="vlp16_bev" type="vlp16_bev_node.py" name="vlp16_bev" output="screen" respawn="true" respawn_delay="1.0">
     <param name="topic" value="/lidar_bev/scan"/>
-    <param name="yaw_rate_source" value="grid"/>   <!-- grid (training recipe, hold) | grid_trend | imu -->
+    <param name="yaw_rate_source" value="grid_trend"/>   <!-- grid (training recipe, hold) | grid_trend (default, user 10/26) | imu -->
     <param name="yaw_trend_window_sec" value="0.3"/>
   </node>
 </launch>

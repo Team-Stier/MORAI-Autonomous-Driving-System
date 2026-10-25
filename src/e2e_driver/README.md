@@ -49,7 +49,7 @@ MORAI ──UDP 2368 (VLP16)──> velodyne_driver ──/velodyne_packets─�
 | 카메라 | bag JPEG → cv2 decode → `INTER_AREA` 축소 → JPEG q92 → PIL decode | 같은 호출을 같은 Noetic rootfs의 cv2 4.2로 한다(`inputs.reencode`). PIL decode는 서버가 `Episode.jpeg`와 같은 코드로 한다 |
 | 프레임 선택 | τ 목표 t0, −0.1, −0.2, −0.3 s에 `select_distinct` | 같은 함수(`train_copy.py`), 지터 없음. t0는 요청 시각이다. 그래서 가장 새 프레임도 t0 이전이다(학습 행에는 t0 뒤 0.05 s까지의 프레임도 있었다) |
 | 시각 텍스트 | 프레임 τ − t0 | 프레임 수신 시각(브릿지 stamp) − t0 |
-| LiDAR | velodyne_driver의 76패킷 스캔. 패킷 시각에서 `_ego` v, yaw rate를 샘플링해 `scan_bev_stream` | 같은 드라이버의 같은 메시지. v는 competition_status `signed_velocity_mps`, r은 competition_status yaw로 학습과 같은 식(아래 `GridYawRate`)으로 구한다. 서버가 `pack_bev`로 2장을 만든다 |
+| LiDAR | velodyne_driver의 76패킷 스캔. 패킷 시각에서 `_ego` v, yaw rate를 샘플링해 `scan_bev_stream` | 같은 드라이버의 같은 메시지. v는 competition_status `signed_velocity_mps`, r은 competition_status yaw로 학습과 같은 식(아래 `GridYawRate`, 마지막 0.3 s는 추세 외삽)으로 구한다. 서버가 `pack_bev`로 2장을 만든다 |
 | ego 이력 | `_ego` τ 격자의 GT v, yaw를 `ego_trajectory`로 적분 | competition_status 속도와 yaw를 t0 − 1.5 … t0에 선형 보간하고, 서버가 같은 `ego_trajectory`로 적분한다 |
 | nav text | scorer `KMap.progress`의 path_s(GT base_link 자세)를 `build_index.nav_text`로 | `/localization/ego`(같은 map frame의 EKF)를 `KMap.progress`와 같은 창 추적으로 처리한다. 위치가 끊기면(GPS 음영, 터널) competition_status 주행거리로 진행한다 |
 | 토큰화 | `get_preprocess_fn(generation_mode=True)` + `collate_fn` | 같은 함수(`server/assemble.py`) |
@@ -59,8 +59,8 @@ MORAI ──UDP 2368 (VLP16)──> velodyne_driver ──/velodyne_packets─�
   - competition_status yaw는 GT yaw보다 상수 0.0235 rad 작다. 상대 heading에서는 상쇄된다.
   - **LiDAR yaw rate**: 학습의 `_ego.yaw_rate`는 `np.convolve(np.gradient(yaw, 0.1), np.ones(5) / 5, "same")`(coc_labeler `load_episode`)이다. 0.1 s 격자 GT yaw에 중앙 차분과 5탭 이동평균을 한 값이다.
     - 노드(`vlp16_bev/scan.py` `GridYawRate`)는 competition_status yaw로 같은 계산을 한다.
-    - 격자점 하나의 값에는 0.3 s 뒤의 yaw가 필요하다(중앙 차분 ±0.1 s, 5탭 ±0.2 s). 그래서 그 지지가 모두 있는 격자점만 쓰고, 더 새 패킷에는 마지막 값을 유지한다(np.interp 끝값).
-    - 그 결과 회전 시작·끝에서 학습값보다 최대 약 0.3 s 늦다. 지연 없이 하려면 스캔을 0.3 s 늦게 내야 하는데, 그러면 가장 새 스캔이 t0에서 0.15 s 넘게 떨어져 학습 행 조건(`MAX_SCAN_GAP`)을 벗어난다.
+    - 격자점 하나의 값에는 0.3 s 뒤의 yaw가 필요하다(중앙 차분 ±0.1 s, 5탭 ±0.2 s). 실시간에는 그 0.3 s가 없다.
+    - 기본(`grid_trend`)은 최근 0.3 s yaw의 직선 적합으로 그 구간을 채운 뒤 같은 식을 적용한다. `grid`는 지지가 모두 있는 마지막 격자점 값을 유지하며, 회전 시작·끝에서 학습값보다 최대 약 0.3 s 늦다. 지연 없이 하려면 스캔을 0.3 s 늦게 내야 하는데, 그러면 가장 새 스캔이 t0에서 0.15 s 넘게 떨어져 학습 행 조건(`MAX_SCAN_GAP`)을 벗어난다.
     - IMU wz도 GT yaw rate와 상관이 0.99이지만, 학습과 같은 식이 아니라 쓰지 않는다(비교는 아래 일치 시험). competition_status의 `angular_velocity_z_radps`는 부호가 반대다.
 - **시간**
   - bag의 모든 stamp는 벽시계다. packet 안의 MORAI 시각도 벽시계 속도로 간다(d/dt = 1.000).
@@ -84,15 +84,15 @@ MORAI ──UDP 2368 (VLP16)──> velodyne_driver ──/velodyne_packets─�
 
   | r 출처 | BEV IoU 중앙값 | IoU 하위 10 % | 회전 행 IoU 중앙값 | r 오차 평균 / 최대 (rad/s) | 회전 중 r 오차 평균 |
   |---|---|---|---|---|---|
-  | 학습식 + 마지막 값 유지 (`grid`, 기본) | 0.970 | 0.882 | 0.944 | 0.028 / 0.339 | 0.055 |
-  | 학습식 + 추세 외삽 0.3 s (`grid_trend`) | 0.980 | 0.914 | 0.960 | 0.014 / 0.180 | 0.026 |
+  | 학습식 + 마지막 값 유지 (`grid`) | 0.970 | 0.882 | 0.944 | 0.028 / 0.339 | 0.055 |
+  | 학습식 + 추세 외삽 0.3 s (`grid_trend`, **기본**) | 0.980 | 0.914 | 0.960 | 0.014 / 0.180 | 0.026 |
   | 학습식 + 추세 외삽 0.6 s | 0.970 | 0.891 | 0.944 | 0.021 / 0.275 | 0.041 |
   | IMU wz (`imu`) | 0.985 | 0.947 | 0.957 | 0.010 / 0.183 | 0.020 |
 
   - 추세 외삽: 실시간에 없는 마지막 약 0.3 s의 yaw만, 최근 창(0.3 또는 0.6 s)의 yaw 직선 적합으로 채운다. 그다음 같은 학습식(중앙 차분 + 5탭)을 적용한다.
   - r 오차는 스캔의 패킷마다 잰 |r − 학습 r|(`_ego` yaw_rate를 패킷 시각에 보간한 값)다.
   - ego 이력은 r을 쓰지 않으므로 세 방식 모두 같다.
-  - vlp16_bev의 `~yaw_rate_source`(`grid` | `grid_trend` | `imu`)와 `~yaw_trend_window_sec`(기본 0.3)로 고른다. 기본값은 `grid`다.
+  - **결정 (10/26 사용자)**: 기본값은 학습식 + 추세 0.3 s(`~yaw_rate_source:=grid_trend`, `~yaw_trend_window_sec:=0.3`, `vlp16_bev/launch/vlp16_bev.launch`)다. 학습과 같은 식을 유지하면서, 실시간에 없는 마지막 0.3 s만 추세로 채운다. 학습식 변형 중 BEV 일치가 가장 높다. 다른 값은 같은 파라미터로 고른다.
 - **두 모드**
   - gt 모드는 학습과 같은 신호(`_ego` v, yaw rate, path_s)를 넣어 코드가 같은지 본다.
   - deploy 모드는 대회 입력(competition_status, IMU, 스택 EKF)을 넣어 신호 차이의 크기를 본다.

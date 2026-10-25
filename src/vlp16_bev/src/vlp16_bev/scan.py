@@ -7,7 +7,7 @@ stack runs the same driver, so the node reads the same messages.
 Motion: lidar_bev.scan_bev_stream with v and r sampled at each packet time, as step 0 did from the _ego table:
   v  competition_status signed_velocity_mps (equal to the GT speed, median difference 0.0002 m/s in run1024b-w1-001)
   r  GridYawRate: the _ego yaw_rate recipe (coc_labeler load_episode) on competition_status yaw, which differs from the
-     GT yaw by a constant 0.0235 rad
+     GT yaw by a constant 0.0235 rad; the node's default extends the newest 0.3 s by the yaw trend (grid_trend)
 """
 import math
 
