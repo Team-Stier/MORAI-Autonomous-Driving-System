@@ -3,10 +3,12 @@
   MORAI_VLA_TRAIN=~/morai-student/train ~/claude-bench/venv-teacher/bin/python model_server.py --backend hf --ckpt <student dir>
   ... --backend fake [--preprocess-config <any checkpoint/release dir with config.json>]
 
-Each request (e2e_driver.wire frame) -> assemble.build_sample -> backend.predict -> {accel, kappa, v0, xyz, timing}.
---dump DIR keeps every request (wire frames) for offline checks.
+Each request (e2e_driver.wire frame, with an "id") -> assemble.build_sample + backend.prepare (CPU thread) ->
+backend.run (GPU, this thread) -> {id, accel, kappa, v0, xyz, timing}. The node keeps up to two requests in flight, so
+the next request is prepared while the model runs the current one: the step rate is set by the slower stage, not by
+their sum. --dump DIR keeps every request (wire frames) for offline checks.
 """
-import argparse, logging, os, socket, sys, time
+import argparse, logging, os, queue, socket, sys, threading, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -40,22 +42,50 @@ def serve(a, backend):
         conn, peer = srv.accept()
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         log.info("client %s", peer)
+        inbox, ready = queue.Queue(4), queue.Queue(1)
+
+        def receive():
+            try:
+                while True:
+                    inbox.put((wire.recv(conn), time.perf_counter()))
+            except (ConnectionError, OSError) as e:
+                log.info("client gone: %s", e)
+            inbox.put(None)
+
+        def prepare():
+            while True:
+                job = inbox.get()
+                if job is None:
+                    ready.put(None); return
+                req, t_in = job
+                t = time.perf_counter()
+                if dump: (dump / f"req_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(req))
+                sample = build_sample(req, key=f"live/{req.get('id', 0)}")
+                t1 = time.perf_counter()
+                prepared = backend.prepare(sample)
+                ready.put((req, sample, prepared, t_in, t, t1, time.perf_counter()))
+
+        threading.Thread(target=receive, daemon=True).start()
+        threading.Thread(target=prepare, daemon=True).start()
         try:
             while True:
-                req = wire.recv(conn)
-                t = time.perf_counter()
-                if dump: (dump / f"req_{n:06d}.bin").write_bytes(wire.pack(req))
-                sample = build_sample(req, key=f"live/{n}")
-                t1 = time.perf_counter()
-                out = backend.predict(sample)
-                out["timing"] = dict(out.get("timing", {}), assemble_ms=round(1e3 * (t1 - t), 1),
-                                     total_ms=round(1e3 * (time.perf_counter() - t), 1))
+                job = ready.get()
+                if job is None:
+                    break
+                req, sample, prepared, t_in, t, t1, t2 = job
+                t3 = time.perf_counter()
+                out = backend.run(sample, prepared)
+                t4 = time.perf_counter()
+                ms = lambda x: round(1e3 * x, 1)
+                out["timing"] = dict(out.get("timing", {}), wait_prep_ms=ms(t - t_in), assemble_ms=ms(t1 - t), prep_ms=ms(t2 - t),
+                                     wait_run_ms=ms(t3 - t2), run_ms=ms(t4 - t3), total_ms=ms(t4 - t_in))
+                out["id"] = req.get("id")
                 if out.get("xyz") is None: out.pop("xyz", None)
                 wire.send(conn, out)
                 n += 1
                 if n % 100 == 1: log.info("request %d: %s", n, out["timing"])
         except (ConnectionError, OSError) as e:
-            log.info("client gone: %s", e)
+            log.info("send failed: %s", e)
         finally:
             conn.close()
 

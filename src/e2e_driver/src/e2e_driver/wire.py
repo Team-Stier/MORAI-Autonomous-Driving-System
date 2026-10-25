@@ -4,7 +4,6 @@ header length, a JSON header, then the raw buffers it points to: arrays as {"__n
 {"__b__": i}.
 """
 import json
-import socket
 import struct
 
 import numpy as np
@@ -72,28 +71,3 @@ def send(sock, obj):
 def recv(sock):
     n = struct.unpack(">Q", _recv_exact(sock, 8))[0]
     return unpack(_recv_exact(sock, n))
-
-
-class Client:
-    """blocking request/response client with reconnect."""
-
-    def __init__(self, host, port, timeout=5.0):
-        self.addr, self.timeout, self.sock = (host, int(port)), timeout, None
-
-    def call(self, obj):
-        if self.sock is None:
-            self.sock = socket.create_connection(self.addr, timeout=self.timeout)
-            self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        try:
-            send(self.sock, obj)
-            return recv(self.sock)
-        except Exception:
-            self.close()
-            raise
-
-    def close(self):
-        if self.sock is not None:
-            try:
-                self.sock.close()
-            finally:
-                self.sock = None

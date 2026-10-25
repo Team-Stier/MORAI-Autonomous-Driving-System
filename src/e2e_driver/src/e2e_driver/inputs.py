@@ -14,6 +14,7 @@ Per request time t0 (the clock of the stamps: ROS time live, the restored sim cl
   nav      route.RouteTracker s -> Route.nav_text.
 """
 import math
+import queue
 import threading
 from collections import deque
 
@@ -36,14 +37,33 @@ def reencode(data, size):
 
 
 class Inputs:
-    def __init__(self, horizon=2.5):
+    def __init__(self, horizon=2.5, prefetch=False):
+        """prefetch: re-encode every arriving camera frame in a worker thread per camera (cv2 releases the GIL), so a
+        request only reads finished step-0 JPEGs; a frame the worker has not reached yet is encoded on the spot."""
         self.horizon = horizon
         self.cams = {c: deque() for c in CAMERAS}        # (t, raw JPEG)
         self.cache = {}                                    # (camera, t) -> step-0 JPEG
         self.scans = deque()                               # (t, height, density, pose (3,), odom epoch)
         self.ego = deque()                                 # (t, v, unwrapped yaw)
         self._yaw = None                                   # (raw, unwrapped) of the last status
-        self.lock = threading.Lock()
+        self.lock, self.cache_lock = threading.Lock(), threading.Lock()
+        self.work = {c: queue.Queue(8) for c in CAMERAS} if prefetch else None
+        for c in CAMERAS if prefetch else ():
+            threading.Thread(target=self._encode_loop, args=(c,), daemon=True).start()
+
+    def _encode(self, cam, t, data):
+        with self.cache_lock:
+            if (cam, t) in self.cache:
+                return self.cache[(cam, t)]
+        jpeg = reencode(data, SIZES[cam])
+        with self.cache_lock:
+            self.cache[(cam, t)] = jpeg
+        return jpeg
+
+    def _encode_loop(self, cam):
+        while True:
+            t, data = self.work[cam].get()
+            self._encode(cam, t, data)
 
     def _trim(self, q, t):
         while q and q[0][0] < t - self.horizon:
@@ -55,6 +75,11 @@ class Inputs:
             if q and t <= q[-1][0]:
                 return
             q.append((t, bytes(data))); self._trim(q, t)
+        if self.work is not None:
+            try:
+                self.work[cam].put_nowait((t, q[-1][1]))
+            except queue.Full:
+                pass                                          # behind: request() encodes what it picks
 
     def add_scan(self, t, height, density, pose, epoch=0):
         with self.lock:
@@ -85,7 +110,8 @@ class Inputs:
             cams = {c: list(q) for c, q in self.cams.items()}
             scans, ego = list(self.scans), list(self.ego)
         lo = min(q[0][0] for q in cams.values() if q) if any(cams.values()) else t0
-        self.cache = {k: v for k, v in self.cache.items() if k[1] >= lo}   # only request() touches the cache
+        with self.cache_lock:
+            self.cache = {k: v for k, v in self.cache.items() if k[1] >= lo}
         jpegs, times, newest = [], [], []
         for c in CAMERAS:
             if len(cams[c]) < N_FRAMES:
@@ -96,12 +122,10 @@ class Inputs:
                 problems.append("camera %s: pick %.3f s from its target" % (c, float(np.abs(tau[k] - tgt).max())))
             out = []
             for j in k:
-                key = (c, float(tau[j]))
-                if key not in self.cache:
-                    self.cache[key] = reencode(cams[c][j][1], SIZES[c])
-                if self.cache[key] is None:
+                jpeg = self._encode(c, float(tau[j]), cams[c][j][1])
+                if jpeg is None:
                     return None, ["camera %s: undecodable JPEG" % c]
-                out.append(self.cache[key])
+                out.append(jpeg)
             jpegs.append(out); times.append(tau[k] - t0); newest.append(float(tau[k[-1]]))
         req = dict(t0=float(t0), camera_jpegs=jpegs, camera_times=np.stack(times), camera_newest=newest, nav_text=nav_text)
         if lidar:

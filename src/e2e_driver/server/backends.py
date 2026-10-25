@@ -1,12 +1,14 @@
-"""Swappable model backends. predict(sample) -> dict(accel (64,), kappa (64,), v0, xyz (64, 3) or None, timing).
-accel/kappa are unnormalised (m/s^2, 1/m): the expert's terminal control signals.
+"""Swappable model backends: prepare(sample) -> (batch, timing) on the CPU, run(sample, batch) -> dict(accel (64,),
+kappa (64,), v0, xyz (64, 3) or None, timing) on the GPU; the server overlaps the two for consecutive requests.
+predict(sample) = run(sample, prepare(sample)). accel/kappa are unnormalised (m/s^2, 1/m): the expert's terminal control
+signals.
 
   hf    a saved student (StudentVLA.build(init=ckpt)) or teacher (TeacherVLA.build(ckpt)) in PyTorch, run with the
         training repo's own inference, model.sample_trajectories (prefix prefill -> <traj_future_start> -> Euler flow
         matching, no CoC). The (a, kappa) it integrates are read off model.diffusion.sample's return value.
   fake  no model: a speed-hold law on the measured history (wiring and latency tests); preprocess=True still builds the
         full model batch with the processor, so its CPU time is in the measurement.
-A later engine backend (NVFP4) only has to implement the same predict().
+A later engine backend (NVFP4) only has to implement the same prepare() / run().
 """
 import time
 
@@ -24,18 +26,23 @@ class FakeBackend:
             from morai_vla.model import load_config
             self.config = load_config(preprocess_config, vlm)
 
-    def predict(self, sample):
-        t = time.perf_counter(); timing = {}
-        if self.config is not None:
-            b = tokenize(sample, self.config)
-            timing["preprocess_ms"] = round(1e3 * (time.perf_counter() - t), 1)
-            timing["prefix_tokens"] = int(b["tokenized_data"]["input_ids"].shape[1])
+    def prepare(self, sample):
+        if self.config is None:
+            return None, {}
+        t = time.perf_counter()
+        b = tokenize(sample, self.config)
+        return b, dict(preprocess_ms=round(1e3 * (time.perf_counter() - t), 1), prefix_tokens=int(b["tokenized_data"]["input_ids"].shape[1]))
+
+    def run(self, sample, prepared):
         h = sample["ego_history_xyz"][0].numpy().astype(np.float64)                 # (16, 3), t0 last
         v = v0 = float(np.hypot(*(h[-1, :2] - h[-2, :2])) / 0.1)
         accel = np.zeros(64)
         for k in range(64):
             accel[k] = np.clip((self.v_target - v) / 1.0, -self.decel_max, self.accel_max); v += accel[k] * 0.1
-        return dict(accel=accel, kappa=np.full(64, self.kappa), v0=v0, xyz=None, timing=timing)
+        return dict(accel=accel, kappa=np.full(64, self.kappa), v0=v0, xyz=None, timing=dict(prepared[1]))
+
+    def predict(self, sample):
+        return self.run(sample, self.prepare(sample))
 
 
 class HFBackend:
@@ -60,18 +67,20 @@ class HFBackend:
         self.model.diffusion.sample = capture
         self.n = 0
 
-    def predict(self, sample):
-        m = self.model
+    def prepare(self, sample):
         t = time.perf_counter()
-        b = tokenize(sample, m.config)
+        b = tokenize(sample, self.model.config)
+        return b, dict(preprocess_ms=round(1e3 * (time.perf_counter() - t), 1), prefix_tokens=int(b["tokenized_data"]["input_ids"].shape[1]))
+
+    def run(self, sample, prepared):
+        m, (b, timing) = self.model, prepared
         t1 = time.perf_counter()
         dev = lambda x: {k: dev(v) if isinstance(v, dict) else v.to(self.device) if torch.is_tensor(v) else v for k, v in x.items()}
-        b = dev(b)
+        b = dev(b)                                  # host -> device here: the run thread owns the CUDA stream
         if self.seed is not None:
             torch.manual_seed(int(self.seed) + self.n)
         self.n += 1
         hx, hr = b["ego_history_xyz"], b["ego_history_rot"]
-        n_prefix = int(b["tokenized_data"]["input_ids"].shape[1])                # sample_trajectories pops input_ids
         xyz, _ = m.sample_trajectories(b["tokenized_data"], hx, hr, num_samples=1, num_steps=self.num_steps)
         act = self._last.pop("action").float()                                   # (1, 64, 2) normalised
         sp = m.action_space
@@ -82,5 +91,7 @@ class HFBackend:
         t2 = time.perf_counter()
         return dict(accel=accel.cpu().numpy().astype(np.float64), kappa=kappa.cpu().numpy().astype(np.float64),
                     v0=float(v0.reshape(-1)[0]), xyz=xyz[0, 0].float().cpu().numpy(),
-                    timing=dict(preprocess_ms=round(1e3 * (t1 - t), 1), model_ms=round(1e3 * (t2 - t1), 1),
-                                prefix_tokens=n_prefix))
+                    timing=dict(timing, model_ms=round(1e3 * (t2 - t1), 1)))
+
+    def predict(self, sample):
+        return self.run(sample, self.prepare(sample))

@@ -4,7 +4,7 @@ control_rate_hz: 50.0         # /control_cmd from the newest plan (bridge sends 
 use_lidar: true
 server_host: 127.0.0.1
 server_port: 47011
-server_timeout_s: 5.0
+max_inflight: 2              # requests outstanding: the server prepares the next while the model runs
 command_topic: /control_cmd   # -> speed_filter -> /morai_udp_bridge/control_cmd
 lidar_topic: /lidar_bev/scan
 status_topic: /vehicle/competition_status
