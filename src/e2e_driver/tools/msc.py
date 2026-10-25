@@ -1,10 +1,11 @@
 """Minimal MSC client (port of morai-use windows_msc.ps1) for a Linux launcher, e.g. the bc-250 simulator host.
-Usage: python3 msc.py <LinkConnection.txt> status|execute|map|pause|play|load-scene [option] [timeout_s]
+Usage: python3 msc.py <LinkConnection.txt> status|execute|map|pause|play|load-network|load-sensors|load-scene [option] [timeout_s]
   map R_KR_PR_K-city_2025/2023_Hyundai_Ioniq5     (re)load the map; the vehicle's default Sensor/Network presets apply
   load-scene rs2041_001/62                        scenario + its EgoNetwork/<name>_MN.json, waits paused at the spawn"""
 import socket, struct, sys, time
 
-CMD = {"execute": (1, 4), "map": (2, 1), "pause": (2, 2), "play": (2, 3), "load-scene": (2, 19)}
+CMD = {"execute": (1, 4), "map": (2, 1), "pause": (2, 2), "play": (2, 3), "load-network": (2, 17), "load-sensors": (2, 18),
+       "load-scene": (2, 19)}
 
 
 def packet(platform, command, option=""):

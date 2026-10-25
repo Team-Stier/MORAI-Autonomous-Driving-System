@@ -211,6 +211,8 @@ bc-250 (MORAI 25.S4 Linux, 192.168.0.15)                 winpc (WSL, RTX 5080)
   - 복사한 파일(md5): `Sensor/25.S4.MolitComp03/SensorInfo_2023_Hyundai_Ioniq5.json`(ee321a03), `Network/…/NetworkInfo_2023_Hyundai_Ioniq5.json`(1d912cbb), `Scenario/R_KR_PR_K-city_2025/{rs2041_001,clcol}.json`과 `EgoNetwork/*_MN.json`.
   - 바꾸기 전 bc-250의 `SaveFile` 전체를 `~/morai-backup-20261026/SaveFile.tgz`에 백업했다.
   - 맵을 다시 읽은 뒤 시뮬레이터 소켓이 W1 포트(9290…, 9094, 9098, 7605 등)로 바뀐 것을 확인했다.
+  - 시뮬레이터는 맵을 로드할 때 차량 기본 파일(`NetworkInfo/SensorInfo_<차량>.json`)을 다시 쓴다. 10/26 05:11 맵 로드 뒤 NetworkInfo md5가 59e9736a로 바뀌었다.
+  - 더 안전한 방법은 W1 프리셋을 다른 이름으로 두고, 맵 로드 뒤 `msc.py $L load-network <파일>`과 `load-sensors <파일>`로 올리는 것이다. 아직 시험하지 않았다(옵션 형식 미확인).
 - **터널** (`tools/lan_tunnel.py`): 시뮬레이터 쪽 루프백의 UDP를 TCP 하나로 묶어 스택 쪽 루프백에 그대로 다시 쏜다. 제어(9093)는 반대 방향으로 보낸다.
   - 프리셋의 목적지 IP를 바꾸지 않아도 된다. WSL은 LAN에서 들어오는 연결을 받지 못하므로, bc-250이 listen하고 WSL이 connect한다.
   - 경로는 WSL NAT → Windows → 유선 LAN이다(Tailscale 아님). 왕복은 0.87 ms다.
