@@ -1,0 +1,5 @@
+{
+  "include/rospack/macros.h": "7cbc468ebbff52cabf3cc0d349c71b9d001fad43d580ccae5f4e41167262f6f5",
+  "include/rospack/rospack.h": "dd8154375d3ac3d45f924d60ae6c1fc4253fe08b32f981babfcdf62332585bb2",
+  "include/rospack/rospack_backcompat.h": "0f5e02803eab34b40481ef39c2e40005f10bffd9b549007043280adad5196410"
+}

@@ -1,0 +1,16 @@
+checkpoint_file: models/utonia_longitudinal_fde_best.pt
+checkpoint_sha256: 680fbd523a70a11a3d0e65f3da5a52725cd065d35ab77fa597dbc8c88c2e05bc
+device: cuda
+python_home: /home/taeyun_kim/.local/share/uv/python/cpython-3.12-linux-x86_64-gnu
+python_site_packages: /home/taeyun_kim/Workspaces/NPC-Trajectory-ML/.venv-utonia/lib/python3.12/site-packages
+encoder_sources:
+  utonia.serialization.hilbert: src/libraries/utonia/serialization/hilbert.py
+  utonia.serialization.z_order: src/libraries/utonia/serialization/z_order.py
+  utonia.serialization.default: src/libraries/utonia/serialization/default.py
+  utonia.serialization: src/libraries/utonia/serialization/__init__.py
+  utonia.utils: src/libraries/utonia/utils.py
+  utonia.structure: src/libraries/utonia/structure.py
+  utonia.module: src/libraries/utonia/module.py
+  utonia.model: src/libraries/utonia/model.py
+hilbert_ptx_file: models/utonia_hilbert.ptx
+hilbert_ptx_sha256: ab4533718e5edb6fff5293041687c8ee635b7f3d922bd1121bfafa605f6079de

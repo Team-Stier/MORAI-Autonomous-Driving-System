@@ -21,3 +21,8 @@ bool acceleration_available
 geometry_msgs/Pose bbox_pose
 # bbox 자체 x·y·z 축의 전체 길이 [m]. 반길이가 아니다.
 geometry_msgs/Vector3 bbox_size
+# 미래 bbox 중심·자체 축 pose, map 좌표. prediction_available=false이면 사용하지 않는다.
+# [i]의 목표 시각은 Objects.header.stamp + 0.5 * (i + 1)초 (0.5~5.0초)다.
+# 0초 bbox는 기존 position·bbox_pose·bbox_size로 표현한다. 크기는 예측 구간 동안 일정하다.
+bool prediction_available
+geometry_msgs/Pose[10] predicted_bbox_poses

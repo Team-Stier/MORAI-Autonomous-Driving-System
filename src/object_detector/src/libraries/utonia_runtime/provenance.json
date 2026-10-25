@@ -1,0 +1,15 @@
+{
+  "repository": "https://github.com/ros/rospack",
+  "revision": "63bf5288618e6a44e2f12fbd43ea6fd4e6b5e984",
+  "version": "2.6.4",
+  "source_modified": false,
+  "purpose": "private Python3.12-compatible rospack ABI for same-process PyTorch; system ROS dependencies unchanged",
+  "public_api_symbols_verified": 85,
+  "files": {
+    "rospack-2.6.4.tar.gz": "e7a8296f25bc0f32336ea619935ac6cf2b4cbb72f614a23ac383c6cb29e69337",
+    "LICENSE.rospack": "24d0488038e5303a1ec43b68f338aca3739a9a81c5f63ef3a24fedea6730aff2",
+    "build_private.sh": "49d04f317c8ea9a77b7fdcadd454806d18767113c5dd09409582c498f9caf362",
+    "headers.sha256.json": "8f39f603a59e6c3ef7952ffeeade3ea661f0fa16c4891d8914d68f847f86daf3",
+    "lib/librospack.so": "d0483333d9d1662cfc7353f53f7aa53531ae9b70573d3ab0afe8adae9ce189bc"
+  }
+}

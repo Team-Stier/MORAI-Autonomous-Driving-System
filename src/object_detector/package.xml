@@ -19,5 +19,6 @@
   <depend>lanelet2_routing</depend>
   <depend>lanelet2_traffic_rules</depend>
   <depend>pugixml-dev</depend>
-  <export><node_pipeline include_roots="pcl flann"/></export>
+  <depend>python3-dev</depend>
+  <export><node_pipeline include_roots="pcl flann Python.h"/></export>
 </package>

@@ -1,0 +1,5 @@
+map_file: ../map/kcity_lanelet2.osm
+range_m: 50.0
+boundary_margin_m: 0.5
+z_min_m: 0.2
+z_max_m: 2.0

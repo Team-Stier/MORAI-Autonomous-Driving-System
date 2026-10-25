@@ -9,7 +9,7 @@ roi:
     "6": road_roi.hpp
     "7": road_roi.hpp
     "8": road_roi.hpp
-    "9": road_roi.hpp
+    "9": roundabout_roi.hpp
     "10": road_roi.hpp
     "11": road_roi.hpp
     "12": road_roi.hpp
@@ -69,7 +69,7 @@ bbox_fitting:
     "6": obb.hpp
     "7": empty_objects.hpp
     "8": obb.hpp
-    "9": obb.hpp
+    "9": utonia_bbox.hpp
     "10": obb.hpp
     "11": obb.hpp
     "12": obb.hpp

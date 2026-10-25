@@ -49,7 +49,7 @@ prediction:
     "6": core_prediction.hpp
     "7": core_prediction.hpp
     "8": core_prediction.hpp
-    "9": npc_history_prediction.hpp
+    "9": bbox_prediction_adapter.hpp
     "10": core_prediction.hpp
     "11": core_prediction.hpp
     "12": core_prediction.hpp

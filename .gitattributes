@@ -1,3 +1,4 @@
 src/*/models/**/*.onnx filter=lfs diff=lfs merge=lfs -text
 src/*/models/**/*.bin filter=lfs diff=lfs merge=lfs -text
 src/*/models/**/*.json filter=lfs diff=lfs merge=lfs -text
+src/object_detector/models/utonia_longitudinal_fde_best.pt filter=lfs diff=lfs merge=lfs -text
