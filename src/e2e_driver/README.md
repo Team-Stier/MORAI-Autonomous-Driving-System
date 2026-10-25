@@ -115,7 +115,7 @@ run1023h-w1-007(CP14 출발)을 `test/bag_loop.sh`로 재생했다. 구간 15(s 
 - **터널을 나온 뒤**: 위치 오차는 최대 5.7–6.9 m에서 줄어든다.
 - **bag 자체의 끊김**: 15–20 s에는 bag의 모든 센서가 1.5 s까지 끊긴다. 수집 EKF도 이 구간에서 거의 출력하지 못했다.
 - **재생 시각 맞춤**: 처음에는 패킷을 벽시계로 보냈다. 그러면 rosbag과 시작 시각이 매번 달라 점군과 IMU·status가 어긋났고, 그렇게 돌린 8회 중 3회는 EKF가 44–200 m로 발산했다. `/clock`에 맞춘 뒤로는 3회 모두 발산하지 않았다.
-- **leveler 통과율**: lidar_leveler는 점군의 절반 정도만 통과시킨다(50 s에 171–183개). bag의 competition_status가 16 Hz라 leveler의 stale 기준 0.06 s에 자주 걸린다. 실제 시뮬레이터에서 status가 더 빠르면 줄어들 수 있다.
+- **leveler 통과율**: lidar_leveler는 점군의 절반 정도만 통과시킨다(50 s에 171–183개). bag의 competition_status가 16 Hz라 leveler의 stale 기준 0.06 s에 자주 걸린다. 실주행에서는 98.6 %였다(아래).
 - **nav 진행거리**: GPS가 끊긴 동안 모델 노드는 localization 출력을 쓰지 않고, 마지막 GPS 기반 위치에서 competition_status 주행거리로 이어 간다.
   - 위 표처럼 음영 구간 위치는 23–27 m까지 표류하기 때문이다.
   - 시뮬 시계로 맞춘 `test/route_replay.py`, CP14 출발 4개 에피소드의 음영 구간 진행거리 오차:
@@ -146,6 +146,28 @@ run1023h-w1-007(CP14 출발)을 `test/bag_loop.sh`로 재생했다. 구간 15(s 
 
 - **카메라 간격 경고**: Cam7 등에서 프레임이 목표 시각과 0.08 s 넘게 떨어진 경고가 난다. bag 카메라가 10 Hz라 생기는 것이다. 실시간 브릿지는 더 빠르다.
 - **health check 경고**: localization과 speed_filter가 초당 약 1회 `pipeline Rejected: health check limit`을 낸다. bag의 GPS(15 Hz)가 stale 기준 0.1 s에 걸리는 것으로 본다. speed_filter가 이 때문에 버린 명령은 1.7 %였다.
+
+## MORAI 실주행 시험 (2026-10-26 02:40–02:47, W1)
+
+- **환경**: W1 사본(`C:\morai\multi-03-20261007`, 수집 때 센서·네트워크 프리셋)을 RTX 5080에서 띄웠다. 두 대를 같이 돌리면 CPU가 포화되므로, 원본 시뮬레이터는 시험 동안 내렸다가 다시 올렸다.
+- **장면**: `rs2041_001/62`(CP14 출발, 음영 + 터널).
+- **측정**: `tools/winpc/probes.sh` → `test/live_probe.py`, `latency_probe.py`. GT는 판정용 Ego status를 측정에만 썼고 스택에는 넣지 않았다.
+- **LiDAR yaw rate**: `grid_trend`.
+
+| 시험 | 결과 |
+|---|---|
+| 가짜 모델, 목표 4 m/s, κ = 0 (70 s) | 차가 움직였다: 110.8 m, 최고 4.6 m/s, control_mode 2, 적용 accel 최대 0.26 |
+| 출발 보조 (가짜 모델 목표 0, 53 s 정지) | 적용 accel 최대 0.0, 이동 0 m |
+| 작은 학생 체크포인트 `dry/deliver/final` (QAD, HF 백엔드, 40 s) | 계획 29개. 모델 1.25 s/스텝(eager fake-quant)이라 계획 만료(0.5 s)에 걸려 브레이크가 유지됐다 |
+
+- **센서 rate (주행 중)**: competition_status 18.5 Hz, 전방 카메라 16.6 Hz, LiDAR 스캔 7.3 Hz, localization 46 Hz.
+- **lidar_leveler 통과율**: 98.6 %다. bag 재생의 약 50 %는 bag의 16 Hz status 탓이었다.
+- **localization**: GPS가 61.7 s 끊긴 동안 최대 공백 1.4 s(0.2 s 넘는 공백 합 6.0 s), 위치 오차 중앙값 3.4 m, 최대 22 m(구간 15). nav 진행거리 오차는 중앙값 6.8 m, 최대 25 m이고, nav text는 100 % 맞았다(구간 내 기동 없음).
+- **RTF**: 0.83이다(GT 이동거리 / 속도 × 벽시계).
+- **지연 (가짜 모델)**: 카메라 수신 → `/control_cmd` 중앙값 265 ms, p95 494 ms다.
+  - 구성: t0의 최신 카메라 나이 45 ms, 노드 요청 조립(step-0 JPEG 재인코딩) 98 ms, 서버 120 ms(전처리), `/control_cmd` → speed_filter 0.3 ms, → 브릿지 UDP 송신 17 ms.
+  - 모델 스텝은 4.6 Hz였다. 시뮬레이터와 같은 CPU에서 노드 재인코딩과 서버 전처리(PIL, Qwen image processor, 토크나이저)가 느려진다. 10 Hz를 내려면 이 둘을 줄여야 한다.
+- **지연 보정 스텝**: 명령은 계획의 t0부터 흐른 시간 + 0.1 s(적용 지연)의 스텝을 읽는다. 그래서 계산 지연이 자동으로 반영된다. 이번처럼 계획이 t0 뒤 약 220 ms에 오면 첫 명령은 스텝 3을 쓴다. 고정 스텝으로 바꾸지 않았다.
 
 ## 제어 변환 (`control.py`)
 
@@ -204,7 +226,8 @@ cd ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/winpc
 
 ## 남은 문제
 
-- **지연**: 모델 서버 전처리(PIL decode + Qwen image processor + 토크나이저)가 CPU에서 요청당 약 50 ms 걸린다. 5080 NVFP4 모델 89 ms와 더하면 10 Hz 예산 100 ms를 넘는다. 과거 프레임 12장의 pixel_values 캐시 등으로 줄여야 한다.
+- **지연**: 실주행(W1과 같은 PC)에서 노드 재인코딩 98 ms + 서버 전처리 약 100 ms가 걸려, 모델 없이도 카메라 → 명령이 265 ms, 스텝이 4.6 Hz였다. 5080 NVFP4 모델 89 ms를 더하면 10 Hz 예산 100 ms를 크게 넘는다. 과거 프레임의 재인코딩·pixel_values 캐시, 전처리의 GPU 이전 등으로 줄여야 한다.
+- **RTF**: W1 실주행 RTF 0.83이다. 시각 텍스트와 적분은 벽시계를 쓰므로, 학습 분포(τ)와 그만큼 어긋난다.
 - **학생 BF16 메모리**: 학생 BF16은 13.4 GiB다. 시뮬레이터와 같은 5080(16 GB)에서는 HF 백엔드로 돌리기 어렵다. 실제 학생은 NVFP4 엔진 백엔드가 필요할 수 있다.
 - **RTF**: winpc에서 시뮬레이터와 모델이 함께 돌면 RTF가 1보다 낮을 수 있다. 그러면 시각 텍스트와 이력 적분이 학습 분포에서 벗어난다.
 - **터널·GPS 음영**: localization(full_ekf / tunnel_wall)은 음영 구간에서 수집 때처럼 23–27 m 표류한다. 재생 시각이 어긋났던 시험에서는 수백 m로 발산했고, 발산 뒤에는 GPS가 돌아와도 바로 복귀하지 않았다. nav 진행거리는 GPS가 끊긴 동안에만 주행거리로 버티므로, 발산이 GPS 복귀 뒤까지 이어지면 nav text가 틀린다.
