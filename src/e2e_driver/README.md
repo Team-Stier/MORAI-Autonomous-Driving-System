@@ -259,6 +259,33 @@ bc-250 (MORAI 25.S4 Linux, 192.168.0.15)                 winpc (WSL, RTX 5080)
 - **localization** (GPS 음영 89 s): 위치 오차 중앙값 8.7 m, 최대 50 m, 최대 공백 4.6 s다. W1(중앙값 3.4 m, 최대 22 m)보다 나쁘다. 시뮬레이터 멈춤 때문에 LiDAR가 5 Hz로 줄고 공백이 생긴 탓으로 본다.
 - **nav text**: 100 % 맞았다.
 
+### 반복 주행과 리셋 (강화학습 대비, 10/26 05:30–06:30, W1으로 도구 확인)
+
+- **15분 주행 부하**: 가짜 모델에 경로 추종 곡률을 준다. 노드의 `fake_follow_route_m`(기본 0, 꺼짐)을 켜면 localization 자세에서 8 m 앞 경로점으로 pure pursuit 곡률을 계산해 요청에 싣는다.
+  - 이 값은 가짜 백엔드만 쓴다. 서버가 토큰화 뒤에 붙이므로 모델 배치는 바뀌지 않는다.
+  - 장애물·NPC 인지는 없다. 그래서 `STUCK_S`(10 s) 동안 서 있으면 장면을 다시 불러온다.
+- **리셋 순서**: pause → load-scene → localization 재시작 → 4 s 대기 → play.
+  - localization 필터는 순간이동을 따라가지 못한다. 재시작 없이 시험하면 재로딩 뒤 15 s 동안 36 m, 그 뒤에도 8 m가 어긋났다.
+  - 그래서 `localization.launch`에 `respawn`을 켰다. 리셋 때 `rosnode kill /localization_node`로 새 GPS fix에서 다시 시작한다.
+  - 나머지 스택은 그대로 둔다. 재로딩 동안에도 노드는 10 Hz로 요청을 보낸다(일시정지 중에도 센서가 나온다).
+- **프리셋**: 시뮬레이터는 맵을 로드할 때 차량 기본 파일을 다시 쓴다. 값은 W1과 같았고 md5만 바뀌었다.
+  - 그래도 W1 프리셋을 `w1_collect.json`(Network, Sensor)으로 따로 두고, 맵 로드 뒤 MSC로 올린다.
+- **W1 결과** (가짜 모델, 같은 PC):
+
+  | | 15분, 막힐 때만 리셋 | 15분, 2분마다 리셋 |
+  |---|---|---|
+  | 모델 스텝 | 9.99 Hz (간격 99.8 %가 0.100 s, 공백 0) | 9.98 Hz (99.7 %, 공백 0) |
+  | 카메라 → 명령 중앙값 (p95) | 122 ms (179) | 120 ms (183) |
+  | 서버 왕복 중앙값 (p95) | 75 ms (99) | 73 ms (99) |
+  | 주행거리, 리셋 | 4.4 km, 1번 | 3.2 km, 5번 |
+  | 리셋 뒤 localization 재동기화 | 0 s | 0–9.4 s (대기 4 s 포함) |
+  | 리셋 3 s 뒤 경로 진행거리 | 1854 (스폰 1858) | 1850–1851 (스폰 1847) |
+  | RTF, 시뮬레이터 멈춤 (0.5 s 이상) | 0.76, 1번 | 0.68, 0번 |
+  | localization 오차 중앙값 / p95 / 최대 | 0.2 / 24 / 242 m | 1.0 / 58 / 237 m |
+
+  - 두 번을 연달아 돌려도 문제가 없었다. 서버 메모리는 1.82 GB 그대로였고, 노드는 225 → 241 MB였다.
+  - localization이 가끔 수십–수백 m씩 튄다. 메시지 사이 5 m 넘는 점프가 5분에 561번이었고, section 판정은 15분에 33–38번 바뀌었다. 아래 '남은 문제'에 적었다.
+
 ## 제어 변환 (`control.py`)
 
 expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률(1/m, 좌 +)이고 0.1 s씩 유지된다(`UnicycleAccelCurvatureActionSpace`). 시각 t에는 t + 0.1 s의 단계를 읽는다.
@@ -309,19 +336,17 @@ cd ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/winpc
 - **시뮬레이터**: W1(`C:\morai\multi-03-20261007`)을 쓴다. 출력은 모두 127.0.0.1로 나가고, UDP-over-TCP 터널로 WSL에 들어온다.
   - 시뮬레이터 시작, 터널, scene 로드는 `morai-parallel-collect` 스킬의 `parallel.sh`를 쓴다(`STACKS=wsl tunnels`, `msc w1 load-scene clcol/62`).
   - 이 스택은 수집 스택(win-1) 대신 WSL 호스트 네트워크에 뜬다. 둘을 동시에 띄우지 않는다.
-- **두 PC (bc-250 MORAI)**: `L=~/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/SaveFile/LinkConnection.txt`
+- **두 PC (기본, `tools/two_pc.sh`, Mac에서 실행)**: `SIM=bc250`이 기본이다. `SIM=w1`이면 winpc의 W1 사본을 쓴다.
   ```bash
-  # bc-250: 장면을 일시정지로 불러오고 터널을 띄운다
-  python3 msc.py $L map R_KR_PR_K-city_2025/2023_Hyundai_Ioniq5 120   # 프리셋을 바꾼 뒤 한 번
-  python3 msc.py $L pause; python3 msc.py $L load-scene rs2041_001/62 90
-  setsid nohup python3 lan_tunnel.py sim --listen 192.168.0.15:30011 > tunnel.log 2>&1 &
-  # winpc WSL (chroot 밖): 터널, 서버, 스택
-  setsid nohup python3 ../lan_tunnel.py stack --connect 192.168.0.15:30011 > ~/morai-eval/run/lan_stack.log 2>&1 &
-  ./server.sh up --backend fake --preprocess-config <config.json dir>; ./stack.sh up
-  ./chroot.sh probes 'bash src/e2e_driver/tools/winpc/probes.sh <name>'   # 측정, touch ~/morai-eval/data/stop_<name>로 멈춤
-  # bc-250: 재생
-  python3 msc.py $L play
+  tools/two_pc.sh up        # bc-250 lan_tunnel(sim) + WSL lan_tunnel(stack), 가짜 서버(경로 추종, 7 m/s), 스택
+  tools/two_pc.sh prep      # bc-250: 맵 → load-network/load-sensors w1_collect → 장면 rs2041_001/62 (일시정지)
+  tools/two_pc.sh drive <이름> 900            # 15분 주행 + 측정 → ~/morai-eval/data/summary_<이름>.json
+  EPISODE_S=120 tools/two_pc.sh drive <이름> 900   # 강화학습식: 2분마다 리셋
+  tools/two_pc.sh reset     # 리셋 한 번: pause → load-scene → localization 재시작 → play
+  tools/two_pc.sh down
   ```
+  - 실제 학생 모델은 `tools/two_pc.sh up --backend hf --ckpt <dir>`로 띄운다. 이때는 `FAKE_FOLLOW_ROUTE_M=0`으로 경로 추종 값을 끈다.
+  - 시험 중에는 winpc에서 시뮬레이터를 띄우지 않는다(위 '주의').
 - **체크포인트**: `StudentVLA.build(init=dir)`로 읽는다. QAD 체크포인트(`modelopt_state.pth`)는 `~/morai-student/pylib`의 nvidia-modelopt를 쓴다.
   - 교사는 `--model-class teacher --vlm Qwen/Qwen3-VL-8B-Instruct`로 띄운다. 다만 BF16 23 GB라 5080에 올라가지 않는다.
 - **백엔드 교체**: `server/backends.py`에 `predict(sample) -> {accel, kappa, v0}`를 구현하는 클래스를 추가하면 된다. 이후 NVFP4 엔진을 붙일 자리다.
@@ -337,5 +362,8 @@ cd ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/winpc
 - **RTF**: W1 실주행 RTF는 0.83, bc-250은 0.67–0.70이다. 시각 텍스트와 적분은 벽시계를 쓰므로, 학습 분포(τ)와 그만큼 어긋난다.
 - **학생 BF16 메모리**: 학생 BF16은 13.4 GiB다. 시뮬레이터와 같은 5080(16 GB)에서는 HF 백엔드로 돌리기 어렵다. 실제 학생은 NVFP4 엔진 백엔드가 필요할 수 있다.
 - **RTF**: winpc에서 시뮬레이터와 모델이 함께 돌면 RTF가 1보다 낮을 수 있다. 그러면 시각 텍스트와 이력 적분이 학습 분포에서 벗어난다.
+- **localization 점프**: 경로를 계속 달리면 출력이 메시지마다 수십–수백 m씩 오가는 구간이 생긴다(W1 15분 p95 24–58 m, 최대 242 m).
+  - section 판정이 자주 바뀌는 것으로 보아, full_ekf와 tunnel_wall core가 번갈아 선택되는 되먹임이 의심된다. section은 localization 자세로 정하고, GPS Missing 규칙도 core를 바꾼다.
+  - nav 진행거리는 GPS가 있을 때 localization fix를 받으므로 nav text가 틀릴 수 있다. 아직 고치지 않았다.
 - **터널·GPS 음영**: localization(full_ekf / tunnel_wall)은 음영 구간에서 수집 때처럼 23–27 m 표류한다. 재생 시각이 어긋났던 시험에서는 수백 m로 발산했고, 발산 뒤에는 GPS가 돌아와도 바로 복귀하지 않았다. nav 진행거리는 GPS가 끊긴 동안에만 주행거리로 버티므로, 발산이 GPS 복귀 뒤까지 이어지면 nav text가 틀린다.
 - **한 바퀴 끝**: s ≈ 2184/0 겹침 지점에서 경로 추적이 잠깐(샘플의 약 0.6 %) 엉뚱한 구간으로 튄다. 학습 GT path_s에도 같은 지점의 튐이 있다.
