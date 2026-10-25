@@ -15,7 +15,7 @@ import rospy
 from interfaces.msg import CompetitionVehicleStatus, LidarBevScan
 from morai_msgs.msg import CtrlCmd
 from nav_msgs.msg import Odometry
-from sensor_msgs.msg import CompressedImage
+from sensor_msgs.msg import CompressedImage, NavSatFix
 from std_msgs.msg import String
 
 import numpy as np
@@ -51,7 +51,8 @@ class Node:
         rospy.Subscriber(P("status_topic", "/vehicle/competition_status"), CompetitionVehicleStatus, self.on_status,
                          queue_size=20, tcp_nodelay=True)
         rospy.Subscriber(P("localization_topic", "/localization/ego"), Odometry, self.on_ego, queue_size=20, tcp_nodelay=True)
-        self.s = None
+        rospy.Subscriber(P("gps_topic", "/sensors/gps/fix"), NavSatFix, self.on_gps, queue_size=20, tcp_nodelay=True)
+        self.gps_ok = True
 
     def on_scan(self, m):
         h = np.frombuffer(m.height, np.uint8).reshape(m.rows, m.cols)
@@ -64,7 +65,14 @@ class Node:
         self.odo.add(t, m.signed_velocity_mps)
         self.inputs.add_status(t, m.signed_velocity_mps, m.yaw_rad)
 
+    def on_gps(self, m):
+        self.gps_ok = not (m.status.status < 0 or (m.latitude == 0 and m.longitude == 0))   # blackout: NO_FIX or 0,0
+
     def on_ego(self, m):
+        # While GPS is blacked out the EKF / tunnel_wall pose drifts along the road (23-30 m in run1023h-w1-007): route
+        # progress then runs on the competition_status odometer from the last GPS-backed fix instead.
+        if not self.gps_ok:
+            return
         p = m.pose.pose
         self.tracker.update(m.header.stamp.to_sec(), p.position.x, p.position.y, yaw_of(p.orientation), self.odo.d)
 

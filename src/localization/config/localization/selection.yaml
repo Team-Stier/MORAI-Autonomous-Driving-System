@@ -17,4 +17,10 @@ estimate:
     "14": full_ekf.hpp
     "15": tunnel_wall.hpp
     "16": full_ekf.hpp
-  health_core_map: []
+  health_core_map:
+    # GPS Blackout reports 0,0,0 (gps_fix -> Missing). Section 16 starts ~8 m before the tunnel exit,
+    # so full_ekf would get no fix there and localization would stop publishing.
+    # (Same rule as the collection fork, commit e2cd63a.)
+    - when: [{input: gps, issue: Missing}]
+      priority: 100
+      core: tunnel_wall.hpp

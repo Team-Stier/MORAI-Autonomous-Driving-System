@@ -26,15 +26,16 @@ class ScanAssembler:
         self.n, self.data, self.stamps = n, [], []
         self.dropped = 0                                  # datagrams of another size (velodyne InputSocket ignores them)
 
-    def add(self, payload, stamp):
-        """one datagram and its receipt time (s) -> (raw bytes of 76 packets, (76,) stamps) when a scan completes."""
+    def add(self, payload, stamp_ns):
+        """one datagram and its receipt time (int ns, ROS clock) -> (raw bytes of 76 packets, (76,) int64 ns stamps) when a
+        scan completes."""
         if len(payload) != PACKET_BYTES:
             self.dropped += 1
             return None
-        self.data.append(bytes(payload)); self.stamps.append(float(stamp))
+        self.data.append(bytes(payload)); self.stamps.append(int(stamp_ns))
         if len(self.data) < self.n:
             return None
-        out = b"".join(self.data), np.array(self.stamps, np.float64)
+        out = b"".join(self.data), np.array(self.stamps, np.int64)
         self.data, self.stamps = [], []
         return out
 

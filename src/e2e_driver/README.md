@@ -6,6 +6,7 @@
 ```
 MORAI ──UDP──> MORAI-UDP-Bridge-Node ──(카메라 4, GPS, IMU, competition_status)──┐
 MORAI ──UDP 2368 (VLP16)──> vlp16_bev ──/lidar_bev/scan──────────────────────────┤
+                                │ /velodyne_points ─> lidar_leveler ─> localization (tunnel_wall)
                        localization ──/localization/ego (경로 진행거리)───────────┤
                                                                                   v
                      e2e_driver_node ──TCP──> model_server (GPU, chroot 밖 venv)
@@ -18,9 +19,10 @@ MORAI ──UDP 2368 (VLP16)──> vlp16_bev ──/lidar_bev/scan────�
 - **직렬 경로**는 MORAI → 브릿지 → 모델 → speed_filter → 브릿지 → MORAI다. LiDAR만 브릿지를 거치지 않는다.
 - **곁가지 노드**
   - localization과 section_annotator가 경로 진행거리와 speed_filter의 섹션을 준다.
-  - `run.sh`는 이 체인에 필요한 패키지만 빌드하고 띄운다. path_planner, control, traffic_light, velodyne은 띄우지 않는다.
+  - localization은 수집 때처럼 tunnel_wall Core까지 돈다. vlp16_bev가 velodyne_pointcloud와 같은 `/velodyne_points`를 내고, lidar_leveler가 수평화하며, tf_publisher가 그 장착 TF(`/tf_static`)를 준다.
+  - GPS가 끊기면 tunnel_wall로 넘어가는 규칙도 수집 포크(e2cd63a)와 같이 넣었다(`localization/config/localization/selection.yaml`). `origin/main`에는 이 규칙이 없어, GPS가 끊기면 localization이 멈춘다.
+  - `run.sh`는 이 체인에 필요한 패키지만 빌드하고 띄운다. path_planner, control, traffic_light는 띄우지 않는다.
 - **velodyne**은 서브모듈째 뺐다. 다른 패키지 중 velodyne에 빌드 의존이 있는 것은 없다.
-  - lidar_leveler와 localization의 tunnel_wall Core는 `/velodyne_points/leveled`를 구독하지만, 이 스택에서는 둘 다 쓰지 않는다.
 
 ## 구성
 
@@ -76,6 +78,37 @@ MORAI ──UDP 2368 (VLP16)──> vlp16_bev ──/lidar_bev/scan────�
 - **재생 시각**: bag은 벽시계이고 수집 때 시뮬레이터가 0.71–0.95배였다. 그래서 재생기는 step 0처럼 `_ego` 표로 stamp를 τ로 옮긴다.
 - **추가 에피소드**: run1023h-w1-007의 5행도 gt 모드에서 비트 단위로 같았다.
 - **재현**: winpc에서 `tools/winpc/parity.sh <episode>`를 돌린다. 내용은 `test/offline_replay.py`(chroot) → `test/offline_compare.py`(venv)다. 결과는 `~/morai-eval/data/parity/<ep>/report.json`에 남는다.
+
+## 점군과 터널 구간 localization (2026-10-26)
+
+**점군 일치**: `vlp16_bev/cloud.py`는 velodyne_pointcloud @29abd0e의 `unpack_vlp16`과 PointcloudXYZIRT를 numpy float32로 옮긴 것이다. 설정은 VLP16_points.launch와 같다: VLP16db.yaml, 0.4–130 m, 센서 frame `velodyne`, 모션 보정 없음, `time` = 마지막 패킷 기준 상대 시각. 삼각함수 표는 glibc `cosf`·`sinf`로 만든다.
+- `vlp16_bev/test/cloud_parity.py`로 run1024b-w1-001의 VelodyneScan 1,343개를 실제 velodyne_pointcloud `transform_node`와 이 모듈에 각각 넣었다.
+- 결과: 모든 스캔에서 점 개수, 필드(x, y, z, intensity, ring, time; point_step 22), frame, x·y·z·intensity·ring·time이 **비트 단위로 같았다**.
+- 기준용 velodyne은 winpc `~/morai-eval/ws-vref`에만 빌드했다. 이 스택에는 들어가지 않는다.
+
+**터널·GPS 음영 구간**: run1023h-w1-007(CP14 출발)을 `test/bag_loop.sh`로 재생했다. 구간 15(s 1859.6–1996, 음영 + 터널)를 34 s에 지나고, GPS는 10.5–34 s 동안 끊긴다.
+
+| 5 s 구간 | 0–10 | 10–15 | 15–20 | 20–25 | 25–30 | 30–35 | 35–50 |
+|---|---|---|---|---|---|---|---|
+| 우리 localization 위치 오차 중앙값 (m) | 0.04 | 2.3 | 17–24 | 11–25 | 8–28 | 8–28 | 0.06–0.5 |
+| 수집 때 EKF (bag) | 0.04 | 2.5 | 19.8 | 15.2 | 18.5 | 18.1 | 0.06–0.4 |
+
+- **출력**: 우리 출력의 5 s 구간별 개수는 수집 EKF와 같은 양상이었다(15–20 s에 거의 없음). 이 구간은 bag 자체의 모든 센서가 1.5 s까지 끊긴 곳이다.
+- **오차**: 음영·터널 구간 최대 오차는 23–30 m로, 수집 EKF(27 m)와 같은 수준이다. 같은 조건 4회 중 1회는 우리 EKF가 약 200 m로 튀었고, GPS가 돌아온 뒤에도 바로 복귀하지 않았다. 수집 때도 있던 full_ekf 발산과 같은 현상으로 본다.
+- **nav 진행거리**: GPS가 끊긴 동안 모델 노드는 localization 출력을 쓰지 않고, 마지막 GPS 기반 위치에서 competition_status 주행거리로 이어 간다.
+  - 위 표처럼 음영 구간 위치는 23–30 m까지 표류하기 때문이다.
+  - 시뮬 시계로 맞춘 `test/route_replay.py`, CP14 출발 4개 에피소드의 음영 구간 진행거리 오차:
+
+  | 에피소드 | 모든 위치 사용 (중앙값 / 최대 m) | GPS 끊김 시 주행거리 (중앙값 / 최대 m) |
+  |---|---|---|
+  | run1023h-w1-007 | 17.3 / 27.9 | 5.0 / 17.9 |
+  | run1024a-w1-009 | 1.8 / 9.9 | 3.2 / 9.9 |
+  | run1024a-w1-004 | 1.4 / 2.7 | 1.6 / 3.1 |
+  | run1023g-w1-005 | 0.5 / 1.3 | 1.0 / 1.5 |
+
+  - 음영 구간의 nav text는 네 에피소드 모두 학습값과 같았다. 이 구간 150 m 안에는 기동이 없다.
+  - 에피소드 전체의 nav text 일치는 83–88 %다. 나머지는 거리만 ±1–2 m 다른 경우(10–16 %)와, 한 바퀴 끝·시작이 겹치는 지점에서 잠깐 튄 경우(0.2–2.9 %)다.
+- `bag_loop.sh`는 벽시계로 재생한다. 그래서 RTF 0.88 bag에서는 주행거리 적산이 약 13 % 길게 나온다. 진행거리 오차는 그래서 시뮬 시계 재생(`route_replay.py`)으로 쟀다.
 
 ## bag 재생 배선 시험 (MORAI 없이, 2026-10-26)
 
@@ -151,4 +184,5 @@ cd ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/winpc
 - **지연**: 모델 서버 전처리(PIL decode + Qwen image processor + 토크나이저)가 CPU에서 요청당 약 50 ms 걸린다. 5080 NVFP4 모델 89 ms와 더하면 10 Hz 예산 100 ms를 넘는다. 과거 프레임 12장의 pixel_values 캐시 등으로 줄여야 한다.
 - **학생 BF16 메모리**: 학생 BF16은 13.4 GiB다. 시뮬레이터와 같은 5080(16 GB)에서는 HF 백엔드로 돌리기 어렵다. 실제 학생은 NVFP4 엔진 백엔드가 필요할 수 있다.
 - **RTF**: winpc에서 시뮬레이터와 모델이 함께 돌면 RTF가 1보다 낮을 수 있다. 그러면 시각 텍스트와 이력 적분이 학습 분포에서 벗어난다.
-- **터널·GPS 음영**: localization이 출력을 멈추고, nav 진행거리는 주행거리 적산으로 버틴다. 이 구간의 오차는 아직 재지 않았다.
+- **터널·GPS 음영**: localization(full_ekf / tunnel_wall)은 음영 구간에서 23–30 m 표류하고, 가끔(재생 4회 중 1회) 수백 m로 발산한다. 발산 뒤에는 GPS가 돌아와도 바로 복귀하지 않는다. nav 진행거리는 GPS가 끊긴 동안에만 주행거리로 버티므로, 발산이 GPS 복귀 뒤까지 이어지면 nav text가 틀린다.
+- **한 바퀴 끝**: s ≈ 2184/0 겹침 지점에서 경로 추적이 잠깐(샘플의 약 0.6 %) 엉뚱한 구간으로 튄다. 학습 GT path_s에도 같은 지점의 튐이 있다.

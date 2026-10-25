@@ -127,7 +127,7 @@ if [[ -d build ]]; then
     run_step "Remove empty build objects" find build -type f -name '*.o' -size 0c -delete
 fi
 # Closed-loop evaluation stack (eval/claude-closedloop-20261025): only the packages the serial chain needs are built.
-EVAL_PACKAGES="morai_msgs;interfaces;node_pipeline;morai_udp_bridge;localization;section_annotator;vlp16_bev;e2e_driver;speed_filter"
+EVAL_PACKAGES="morai_msgs;interfaces;node_pipeline;morai_udp_bridge;tf_publisher;lidar_leveler;localization;section_annotator;vlp16_bev;e2e_driver;speed_filter"
 run_step "Build catkin workspace" catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCATKIN_WHITELIST_PACKAGES="$EVAL_PACKAGES" -j2
 if [[ -r devel/setup.bash ]]; then
     source devel/setup.bash || fail "source workspace overlay"
@@ -168,12 +168,15 @@ done
 rosnode list >/dev/null 2>&1 || fail "ROS master did not start; package launch attempts will continue"
 
 # Serial chain: MORAI -> bridge (cameras, GPS, IMU, status) -> e2e_driver (model node; LiDAR from vlp16_bev, which reads
-# the VLP16 UDP packets itself) -> /control_cmd -> speed_filter -> bridge -> MORAI. localization and section_annotator
-# feed route progress (nav text) and speed_filter's section. The model server runs outside this chroot (see
-# src/e2e_driver/README.md). No velodyne: it is no longer in the workspace.
+# the VLP16 UDP packets itself) -> /control_cmd -> speed_filter -> bridge -> MORAI. localization (with its tunnel_wall
+# Core on vlp16_bev's /velodyne_points -> lidar_leveler) and section_annotator feed route progress (nav text) and
+# speed_filter's section; tf_publisher gives lidar_leveler its /tf_static mount. The model server runs outside this
+# chroot (see src/e2e_driver/README.md). No velodyne: vlp16_bev publishes the same point cloud.
 export MORAI_BRIDGE_CONFIG="${MORAI_BRIDGE_CONFIG:-$WORKSPACE/src/e2e_driver/config/bridge_same_pc.yaml}"
 start_package MORAI-UDP-Bridge-Node
 start_package vlp16_bev
+start_package tf_publisher
+start_package lidar_leveler
 start_package localization
 start_package section_annotator
 start_package e2e_driver
