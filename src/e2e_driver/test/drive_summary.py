@@ -34,11 +34,20 @@ def main(name):
     st = gt[(gt > 0.5) & ~jump]                                                  # the reload's own gap is not a stall
     out["sim_stalls"] = dict(over_0p5s=len(st), total_s=round(float(st.sum()), 1), max_s=round(float(st.max()), 2) if len(st) else 0.0,
                              per_min=round(60 * len(st) / (g[-1, 0] - g[0, 0]), 2))
+    import time
+    out["stall_times"] = [(time.strftime("%H:%M:%S", time.localtime(g[i, 0])), round(float(gt[i]), 2))
+                          for i in np.flatnonzero((gt > 0.5) & ~jump)]
     resets = g[1:][jump, 0]
     out["scene_reloads"] = len(resets)
     mv = (g[1:, 1] > 1.0) & ~jump
     out["rtf"] = round(float(step[mv].sum() / np.sum(g[1:, 1][mv] * gt[mv])), 3) if mv.any() else None
     out["distance_m"] = round(float(step[~jump].sum()), 1)
+    per_min = []                                                                 # minutes with >= 30 m of driving
+    for a in np.arange(g[0, 0], g[-1, 0] - 30.0, 60.0):
+        w = mv & (g[1:, 0] >= a) & (g[1:, 0] < a + 60.0)
+        if np.sum(g[1:, 1][w] * gt[w]) > 30.0:
+            per_min.append(round(float(step[w].sum() / np.sum(g[1:, 1][w] * gt[w])), 3))
+    out["rtf_per_min"] = per_min
 
     if os.path.exists(f"{D}/loc_{name}.csv"):
         lc = [l.split(",") for l in open(f"{D}/loc_{name}.csv").read().splitlines()[1:]]
