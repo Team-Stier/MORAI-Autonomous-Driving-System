@@ -13,8 +13,9 @@ case ${1:-} in
   down)
     [[ -e $EVAL/run/stack.pid ]] || exit 0
     w=$(cat "$EVAL/run/stack.pid")
-    pkill -TERM -P "$w" 2>/dev/null; kill -TERM "$w" 2>/dev/null
-    for i in $(seq 1 30); do kill -0 "$w" 2>/dev/null || break; sleep 0.5; done
-    kill -KILL "$w" 2>/dev/null; mv "$EVAL/run/stack.pid" "$EVAL/run/stack.pid.old"; echo "stack down" ;;
+    # setsid made $w a session leader; everything run.sh started in the chroot (own pid namespace) keeps that session
+    pkill -INT -s "$w" 2>/dev/null
+    for i in $(seq 1 30); do pgrep -s "$w" > /dev/null || break; sleep 0.5; done
+    pkill -KILL -s "$w" 2>/dev/null; mv "$EVAL/run/stack.pid" "$EVAL/run/stack.pid.old"; echo "stack down" ;;
   *) echo "usage: stack.sh up|down" >&2; exit 1 ;;
 esac

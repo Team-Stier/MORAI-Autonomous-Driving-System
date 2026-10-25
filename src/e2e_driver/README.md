@@ -169,6 +169,76 @@ run1023h-w1-007(CP14 출발)을 `test/bag_loop.sh`로 재생했다. 구간 15(s 
   - 모델 스텝은 4.6 Hz였다. 시뮬레이터와 같은 CPU에서 노드 재인코딩과 서버 전처리(PIL, Qwen image processor, 토크나이저)가 느려진다. 10 Hz를 내려면 이 둘을 줄여야 한다.
 - **지연 보정 스텝**: 명령은 계획의 t0부터 흐른 시간 + 0.1 s(적용 지연)의 스텝을 읽는다. 그래서 계산 지연이 자동으로 반영된다. 이번처럼 계획이 t0 뒤 약 220 ms에 오면 첫 명령은 스텝 3을 쓴다. 고정 스텝으로 바꾸지 않았다.
 
+## 지연 줄이기 (1dc09fe)
+
+W1 실주행의 4.6 Hz 병목(노드 재인코딩 98 ms, 서버 전처리 약 120 ms)을 다음처럼 줄였다. 학습 함수와 계산 순서는 그대로 두고, 같은 입력의 결과를 다시 쓰거나 일을 겹치게만 했다.
+
+- **노드**: 카메라마다 작업 스레드가 프레임이 들어오는 즉시 step-0 재인코딩을 해 둔다(`Inputs(prefetch=True)`). 요청을 만들 때는 캐시를 읽기만 한다(조립 98 → 1–2 ms).
+- **노드 ↔ 서버**: 요청에 `id`를 붙여 응답을 기다리지 않고 보낸다. 동시에 2개까지 보내고(`max_inflight`), 서버가 밀리면 그 틱을 건너뛴다.
+- **서버**: 받기, CPU 전처리, GPU 실행을 각각 스레드로 나눠 연속 요청을 겹친다. 이미지별 결과를 내용 해시(blake2b)로 캐시한다.
+  - 캐시 대상은 JPEG 디코드, `pack_bev`, 이미지 프로세서 출력(`CachedImageProcessor`)이다. 연속 요청은 카메라 16장 중 12장을 공유한다.
+  - 프롬프트 조립과 토큰화는 매번 학습 함수(`get_preprocess_fn`, `collate_fn`)로 한다.
+- **확인**: gt 모드 비트 단위 일치를 표준 96행과 연속 41행(캐시가 맞는 경우)에서 다시 확인했다(`offline_compare.py`). 10/26 두 PC 시험 뒤에도 다시 돌렸다.
+
+## 두 PC 구성: bc-250 MORAI + winpc 스택 (2026-10-26)
+
+```
+bc-250 (MORAI 25.S4 Linux, 192.168.0.15)                 winpc (WSL, RTX 5080)
+ Simulator ─UDP─> 127.0.0.1:9291… ─┐                 ┌─> 127.0.0.1:<같은 포트> ─> 브릿지, velodyne_driver, …
+                                   lan_tunnel.py sim ══TCP 30011══ lan_tunnel.py stack
+ Simulator <─UDP─ 127.0.0.1:9093 <─┘   (유선 LAN)     └─< 127.0.0.1:9093 <─ 브릿지 제어(speed_filter 뒤)
+```
+
+- **프리셋**: bc-250에 W1 사본(수집 때)의 기본 프리셋과 장면을 그대로 복사했다. 모든 출력은 127.0.0.1의 수집 때 포트로 나간다.
+  - 복사한 파일(md5): `Sensor/25.S4.MolitComp03/SensorInfo_2023_Hyundai_Ioniq5.json`(ee321a03), `Network/…/NetworkInfo_2023_Hyundai_Ioniq5.json`(1d912cbb), `Scenario/R_KR_PR_K-city_2025/{rs2041_001,clcol}.json`과 `EgoNetwork/*_MN.json`.
+  - 바꾸기 전 bc-250의 `SaveFile` 전체를 `~/morai-backup-20261026/SaveFile.tgz`에 백업했다.
+  - 맵을 다시 읽은 뒤 시뮬레이터 소켓이 W1 포트(9290…, 9094, 9098, 7605 등)로 바뀐 것을 확인했다.
+- **터널** (`tools/lan_tunnel.py`): 시뮬레이터 쪽 루프백의 UDP를 TCP 하나로 묶어 스택 쪽 루프백에 그대로 다시 쏜다. 제어(9093)는 반대 방향으로 보낸다.
+  - 프리셋의 목적지 IP를 바꾸지 않아도 된다. WSL은 LAN에서 들어오는 연결을 받지 못하므로, bc-250이 listen하고 WSL이 connect한다.
+  - 경로는 WSL NAT → Windows → 유선 LAN이다(Tailscale 아님). 왕복은 0.87 ms다.
+  - Ego status(9095)는 측정용 GT 수신기도 받도록 127.255.255.255로 다시 쏜다.
+- **MSC** (`tools/msc.py`): bc-250 런처의 `~/msc.py`(status, execute, map)에 pause, play, load-scene을 더한 사본이다.
+- **주의**: 두 PC 시험 중에는 winpc에서 시뮬레이터를 띄워 두지 않는다.
+  - 맵만 띄운 원본 시뮬레이터가 Windows CPU의 41 %와 5080을 써서, 서버 전처리가 42 → 92 ms로 늘었다.
+  - 그 상태에서는 GT 수신값도 섞였다(RTF 1100, 이동거리 633 km로 나옴). 시험 동안 원본 시뮬레이터를 내렸다가 다시 올렸다.
+
+### 결과 (장면 `rs2041_001/62`, 가짜 모델 목표 4 m/s, κ = 0)
+
+모델 스텝은 시뮬레이터가 입력을 주는 동안 **10.0 Hz**다(`/e2e_driver/debug` 1667 스텝).
+
+- 스텝 간격의 99.0 %가 0.100 s다.
+- 0.3 s 넘는 공백은 14번(합 17.9 s)이고, 모두 bc-250 시뮬레이터가 멈춘 때다. 그때는 입력 창(2.5 s)이 비어 노드가 요청을 만들지 않는다(`camera front: 1 frames`, `lidar: 3 scans`).
+- 공백을 빼면 1652 스텝 / 164.9 s = 10.0 Hz다. 공백을 넣은 평균은 9.1 Hz다.
+- 서버가 밀려 건너뛴 틱은 7개다.
+
+| 구간 (두 PC, 가짜 모델) | 중앙값 | p95 |
+|---|---|---|
+| t0의 최신 카메라 나이 (시뮬 송신 → 브릿지 수신 → 틱 대기) | 50.5 ms | 870 ms* |
+| 노드 요청 조립 (재인코딩은 미리 해 둠) | 1.5 ms | 10.4 ms |
+| 서버 왕복 | 53.6 ms | 63.6 ms |
+| ├ 서버 조립 (JPEG 디코드, BEV, 이력) | 6.0 ms | 9.3 ms |
+| ├ 전처리 (프로세서, 토큰화, collate) | 42.2 ms | 49.3 ms |
+| └ 모델 (가짜) | 0.4 ms | |
+| `/control_cmd` → speed_filter 출력 | 0.23 ms | 10.8 ms |
+| speed_filter 출력 → 브릿지 UDP 송신 | 3.4 ms | 19.8 ms |
+| 브릿지 → bc-250 (터널, LAN) | 왕복 0.87 ms | |
+| **카메라 수신 → `/control_cmd`** | **106 ms** | 918 ms* |
+
+\* p95와 최대값은 bc-250 시뮬레이터가 멈춘 구간(최대 4 s)에서 나온다.
+
+- **HF 백엔드** (작은 학생 체크포인트 `dry/s2/final`, BF16, 10 스텝):
+  - 5080 단독으로 오프라인 벤치를 돌리면 모델이 207 ms, 4.7 Hz다. W1과 GPU를 나눠 쓸 때는 509 ms였다.
+  - 두 PC 실주행에서는 모델 271 ms, 서버 왕복 498 ms, 카메라 → 명령 553 ms, 약 3.5 Hz다.
+  - 이 체크포인트는 출발하지 않았다(최고 0.06 m/s).
+  - 10 Hz를 내려면 엔진 백엔드(NVFP4 89 ms 예상)가 필요하다.
+- **서버 처리량** (실주행 요청 덤프, 20 Hz로 보냄): 가짜 모델은 20.0 Hz, 왕복 48 ms다.
+- **bc-250 시뮬레이터**: RTF는 0.67–0.70이다(W1 0.83). 센서 rate는 전방 카메라 10 Hz, LiDAR 5 Hz, competition_status 10 Hz다.
+  - 시뮬레이터가 3–10 s마다 0.6–4.5 s씩 멈춘다. 터널을 거치지 않는 포트(7505)를 bc-250에서 직접 받아도 같았고, 차가 서 있어도 같았다.
+  - 원인 후보는 GPU 클럭이다. `freq1_input`이 재생 중에도 100 MHz였다(`pp_od_clk_voltage` OD_SCLK 100 MHz, 허용 범위 1000–2000 MHz). GPU 클럭 거버너(cyan-skillfish-governor)는 설치돼 있지 않다.
+  - 클럭을 고정하거나 거버너를 깔려면 sudo가 필요하다. 이번에는 바꾸지 않았다.
+- **localization** (GPS 음영 89 s): 위치 오차 중앙값 8.7 m, 최대 50 m, 최대 공백 4.6 s다. W1(중앙값 3.4 m, 최대 22 m)보다 나쁘다. 시뮬레이터 멈춤 때문에 LiDAR가 5 Hz로 줄고 공백이 생긴 탓으로 본다.
+- **nav text**: 100 % 맞았다.
+
 ## 제어 변환 (`control.py`)
 
 expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률(1/m, 좌 +)이고 0.1 s씩 유지된다(`UnicycleAccelCurvatureActionSpace`). 시각 t에는 t + 0.1 s의 단계를 읽는다.
@@ -219,6 +289,19 @@ cd ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/winpc
 - **시뮬레이터**: W1(`C:\morai\multi-03-20261007`)을 쓴다. 출력은 모두 127.0.0.1로 나가고, UDP-over-TCP 터널로 WSL에 들어온다.
   - 시뮬레이터 시작, 터널, scene 로드는 `morai-parallel-collect` 스킬의 `parallel.sh`를 쓴다(`STACKS=wsl tunnels`, `msc w1 load-scene clcol/62`).
   - 이 스택은 수집 스택(win-1) 대신 WSL 호스트 네트워크에 뜬다. 둘을 동시에 띄우지 않는다.
+- **두 PC (bc-250 MORAI)**: `L=~/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/SaveFile/LinkConnection.txt`
+  ```bash
+  # bc-250: 장면을 일시정지로 불러오고 터널을 띄운다
+  python3 msc.py $L map R_KR_PR_K-city_2025/2023_Hyundai_Ioniq5 120   # 프리셋을 바꾼 뒤 한 번
+  python3 msc.py $L pause; python3 msc.py $L load-scene rs2041_001/62 90
+  setsid nohup python3 lan_tunnel.py sim --listen 192.168.0.15:30011 > tunnel.log 2>&1 &
+  # winpc WSL (chroot 밖): 터널, 서버, 스택
+  setsid nohup python3 ../lan_tunnel.py stack --connect 192.168.0.15:30011 > ~/morai-eval/run/lan_stack.log 2>&1 &
+  ./server.sh up --backend fake --preprocess-config <config.json dir>; ./stack.sh up
+  ./chroot.sh probes 'bash src/e2e_driver/tools/winpc/probes.sh <name>'   # 측정, touch ~/morai-eval/data/stop_<name>로 멈춤
+  # bc-250: 재생
+  python3 msc.py $L play
+  ```
 - **체크포인트**: `StudentVLA.build(init=dir)`로 읽는다. QAD 체크포인트(`modelopt_state.pth`)는 `~/morai-student/pylib`의 nvidia-modelopt를 쓴다.
   - 교사는 `--model-class teacher --vlm Qwen/Qwen3-VL-8B-Instruct`로 띄운다. 다만 BF16 23 GB라 5080에 올라가지 않는다.
 - **백엔드 교체**: `server/backends.py`에 `predict(sample) -> {accel, kappa, v0}`를 구현하는 클래스를 추가하면 된다. 이후 NVFP4 엔진을 붙일 자리다.
@@ -226,8 +309,11 @@ cd ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/winpc
 
 ## 남은 문제
 
-- **지연**: 실주행(W1과 같은 PC)에서 노드 재인코딩 98 ms + 서버 전처리 약 100 ms가 걸려, 모델 없이도 카메라 → 명령이 265 ms, 스텝이 4.6 Hz였다. 5080 NVFP4 모델 89 ms를 더하면 10 Hz 예산 100 ms를 크게 넘는다. 과거 프레임의 재인코딩·pixel_values 캐시, 전처리의 GPU 이전 등으로 줄여야 한다.
-- **RTF**: W1 실주행 RTF 0.83이다. 시각 텍스트와 적분은 벽시계를 쓰므로, 학습 분포(τ)와 그만큼 어긋난다.
+- **지연**: 두 PC에서 가짜 모델 기준 서버 왕복은 54 ms, 카메라 → 명령은 106 ms다. 서버는 CPU 전처리(48 ms)와 GPU 실행을 겹치므로, 스텝 주기는 둘 중 긴 쪽이 정한다.
+  - 엔진 모델(NVFP4 89 ms 예상)이면 10 Hz 안에 들어오지만 여유가 작다.
+  - HF 백엔드는 작은 체크포인트로도 207–271 ms라 10 Hz가 안 된다.
+- **bc-250 시뮬레이터 멈춤**: GPU가 100 MHz에 머문다(위 두 PC 결과). 그래서 RTF가 0.67–0.70이고 0.6–4.5 s 멈춤이 생긴다. GPU 클럭 설정(sudo)은 사용자가 정해야 한다.
+- **RTF**: W1 실주행 RTF는 0.83, bc-250은 0.67–0.70이다. 시각 텍스트와 적분은 벽시계를 쓰므로, 학습 분포(τ)와 그만큼 어긋난다.
 - **학생 BF16 메모리**: 학생 BF16은 13.4 GiB다. 시뮬레이터와 같은 5080(16 GB)에서는 HF 백엔드로 돌리기 어렵다. 실제 학생은 NVFP4 엔진 백엔드가 필요할 수 있다.
 - **RTF**: winpc에서 시뮬레이터와 모델이 함께 돌면 RTF가 1보다 낮을 수 있다. 그러면 시각 텍스트와 이력 적분이 학습 분포에서 벗어난다.
 - **터널·GPS 음영**: localization(full_ekf / tunnel_wall)은 음영 구간에서 수집 때처럼 23–27 m 표류한다. 재생 시각이 어긋났던 시험에서는 수백 m로 발산했고, 발산 뒤에는 GPS가 돌아와도 바로 복귀하지 않았다. nav 진행거리는 GPS가 끊긴 동안에만 주행거리로 버티므로, 발산이 GPS 복귀 뒤까지 이어지면 nav text가 틀린다.
