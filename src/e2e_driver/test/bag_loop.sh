@@ -10,6 +10,7 @@ source devel/setup.bash
 roscore > /tmp/roscore.log 2>&1 &
 for i in $(seq 1 100); do rosnode list > /dev/null 2>&1 && break; sleep 0.1; done
 rosparam set /use_sim_time true
+roslaunch velodyne_pointcloud VLP16_points.launch > /tmp/velodyne.log 2>&1 &
 for p in vlp16_bev tf_publisher lidar_leveler localization section_annotator e2e_driver speed_filter; do
   bash src/$p/launch.sh > /tmp/$p.log 2>&1 &
 done
@@ -21,16 +22,17 @@ if [[ -n ${EGO:-} ]]; then
   probes="$probes $!"
 fi
 sleep 1
-python3 src/e2e_driver/test/udp_replay.py --start $START --duration $DUR "$@" > /tmp/udp_replay.log 2>&1 &
+python3 src/e2e_driver/test/udp_replay.py "$@" > /tmp/udp_replay.log 2>&1 &
+replay=$!
 rosbag play --clock -q -s $START -u $DUR "$@" \
   /image/front/compressed_10hz:=/image/front/compressed /image/left/compressed_10hz:=/image/left/compressed \
   /image/right/compressed_10hz:=/image/right/compressed /image/camera_7/compressed_10hz:=/image/camera_7/compressed \
   --topics /image/front/compressed_10hz /image/left/compressed_10hz /image/right/compressed_10hz \
   /image/camera_7/compressed_10hz /sensors/gps/fix /sensors/imu/data /vehicle/competition_status \
   /collect_only/ego_status /collect_only/localization_ekf
-sleep 2
+sleep 2; kill -INT $replay 2>/dev/null
 kill -INT $probes; for p in $probes; do for i in $(seq 1 60); do kill -0 $p 2>/dev/null || break; sleep 0.5; done; done
-for f in /tmp/vlp16_bev.log /tmp/lidar_leveler.log /tmp/localization.log /tmp/e2e_driver.log /tmp/speed_filter.log /tmp/udp_replay.log /tmp/probe.log /tmp/loc_probe.log; do
+for f in /tmp/velodyne.log /tmp/vlp16_bev.log /tmp/lidar_leveler.log /tmp/localization.log /tmp/e2e_driver.log /tmp/speed_filter.log /tmp/udp_replay.log /tmp/probe.log /tmp/loc_probe.log; do
   [[ -f $f ]] && { echo "== $f"; grep -v "^$" $f | tail -4; }
 done
 cat $OUT

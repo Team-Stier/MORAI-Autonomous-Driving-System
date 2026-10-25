@@ -6,7 +6,8 @@ replay maps every stamp to tau with the episode's _ego table, exactly as step 0 
 and stores tau as float32 like cams_index / lidar_index. Two modes:
   gt      the training signals: LiDAR motion from _ego v and yaw_rate at packet times (step 0), ego history from the
           _ego v / yaw grid, route s = _ego path_s. Must reproduce the training sample exactly (tests the code).
-  deploy  the inference signals: competition_status speed + IMU yaw rate for LiDAR, competition_status speed + yaw for
+  deploy  the inference signals: competition_status speed + yaw rate (--r-source grid: the node's GridYawRate on
+          competition_status yaw; imu: IMU wz) for LiDAR, competition_status speed + yaw for
           the history, /collect_only/localization_ekf (the stack's EKF) + odometer for route s. Differences are the
           price of the deployable signals.
 Usage: python3 offline_replay.py --mode gt|deploy --ego _ego/<ep>.npz --rows 100,120,... --out DIR BAG [BAG ...]
@@ -21,7 +22,7 @@ sys.path[:0] = [os.path.join(HERE, "..", "src"), os.path.join(HERE, "..", "..", 
 from e2e_driver import wire                                         # noqa: E402
 from e2e_driver.inputs import Inputs                                # noqa: E402
 from e2e_driver.route import Odometer, Route, RouteTracker          # noqa: E402
-from vlp16_bev.scan import BevBuilder, SignalTrack                  # noqa: E402
+from vlp16_bev.scan import BevBuilder, GridYawRate, SignalTrack     # noqa: E402
 
 CAMS = {"/image/front/compressed_10hz": "front", "/image/left/compressed_10hz": "left",
         "/image/right/compressed_10hz": "right", "/image/camera_7/compressed_10hz": "camera_7"}
@@ -56,6 +57,8 @@ def main():
     ap.add_argument("--mode", choices=["gt", "deploy"], required=True)
     ap.add_argument("--ego", required=True); ap.add_argument("--rows", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--route", default=os.path.join(HERE, "..", "assets", "route.json"))
+    ap.add_argument("--r-source", choices=["grid", "imu"], default="grid",
+                    help="deploy: LiDAR yaw rate from competition_status yaw (the node's GridYawRate) or IMU wz")
     ap.add_argument("bags", nargs="+")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -63,7 +66,8 @@ def main():
     rows = sorted(int(x) for x in a.rows.split(","))
     route = Route(a.route); tracker, odo = RouteTracker(route), Odometer()
     inp, bev = Inputs(horizon=3.0), BevBuilder()
-    v_trk, r_trk = SignalTrack(), SignalTrack()
+    v_trk, r_trk = SignalTrack(), (GridYawRate() if a.r_source == "grid" else SignalTrack())
+    mode = a.mode if a.mode == "gt" else "deploy_" + a.r_source
     grid = list(zip(z["tau"], z["v"].astype(np.float64), z["yaw"])) if a.mode == "gt" else []   # gt: the tau grid is the
     pending, meta, n_scans = list(rows), [], 0                                                  # history signal
 
@@ -75,7 +79,7 @@ def main():
         req, problems = inp.request(t0, route.nav_text(s) if s is not None else "")
         if req is None:
             meta.append(dict(i=i, ok=False, problems=problems)); return
-        req.update(row=i, mode=a.mode, s=s)
+        req.update(row=i, mode=mode, s=s)
         open(os.path.join(a.out, "req_%06d.bin" % i), "wb").write(wire.pack(req))
         meta.append(dict(i=i, ok=True, problems=problems, s=s, nav=req["nav_text"]))
 
@@ -104,16 +108,17 @@ def main():
             elif topic == STATUS:
                 ts = float(clk.tau_at(m.header.stamp.to_nsec()))
                 v_trk.add(ts, m.signed_velocity_mps); odo.add(ts, m.signed_velocity_mps)
+                if a.r_source == "grid": r_trk.add(ts, m.yaw_rad)
                 if a.mode == "deploy": inp.add_status(ts, m.signed_velocity_mps, m.yaw_rad)
-            elif topic == IMU:
+            elif topic == IMU and a.r_source == "imu":
                 r_trk.add(float(clk.tau_at(m.header.stamp.to_nsec())), m.angular_velocity.z)
             elif topic == EKF and a.mode == "deploy":
                 p = m.pose.pose
                 tracker.update(float(clk.tau_at(m.header.stamp.to_nsec())), p.position.x, p.position.y, yaw_of(p.orientation), odo.d)
         b.close()
     while pending: emit(pending.pop(0))
-    json.dump(dict(mode=a.mode, scans=n_scans, rows=meta), open(os.path.join(a.out, "meta.json"), "w"), indent=1)
-    print(a.mode, "rows ok", sum(r["ok"] for r in meta), "/", len(meta), "scans", n_scans)
+    json.dump(dict(mode=mode, scans=n_scans, rows=meta), open(os.path.join(a.out, "meta.json"), "w"), indent=1)
+    print(mode, "rows ok", sum(r["ok"] for r in meta), "/", len(meta), "scans", n_scans)
 
 
 if __name__ == "__main__":

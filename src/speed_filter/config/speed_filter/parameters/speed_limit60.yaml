@@ -1,5 +1,7 @@
 speed_limit_kph: 60.0
-stop_tolerance_sec: 30.0
+# Start assist off, as the training data was collected (collection fork 1e94244). Not 0: the limiter starts the
+# assist once now - stopped_since >= stop_tolerance_sec, so 0 would fire as soon as the car stops.
+stop_tolerance_sec: 1.0e9
 start_duration_sec: 1.0
 start_accel: 0.2
 stop_speed_mps: 0.1

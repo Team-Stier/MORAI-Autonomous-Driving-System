@@ -11,8 +11,9 @@ print(",".join(map(str, d[d.episode == "$EP"].i.to_numpy()[::15])))
 PY
 )
 BAGS=$(ls /mnt/d/share/${BAGDIR#/mnt/}/${EP}*.bag | sed 's|^/mnt/d/share|/mnt|' | tr '\n' ' ')
-for m in gt deploy; do
-  $W/tools/winpc/chroot.sh replay "python3 src/e2e_driver/test/offline_replay.py --mode $m --ego /mnt/2026_MORAI_step0/_ego/$EP.npz --rows $ROWS --out /data/parity/$EP/$m $BAGS" 2>&1 | tail -1
+for m in gt deploy:grid deploy:imu; do
+  mode=${m%%:*}; r=${m#*:}; [[ $r == gt ]] && r=grid; out=$m; [[ $mode == deploy ]] && out=deploy_$r
+  $W/tools/winpc/chroot.sh replay "python3 src/e2e_driver/test/offline_replay.py --mode $mode --r-source $r --ego /mnt/2026_MORAI_step0/_ego/$EP.npz --rows $ROWS --out /data/parity/$EP/$out $BAGS" 2>&1 | tail -1
 done
-cd $W/test && python offline_compare.py --root $D --episode $EP --config $R --out $O/report.json $O/gt $O/deploy 2>&1 | grep -v Warn > $O/compare.log
+cd $W/test && python offline_compare.py --root $D --episode $EP --config $R --out $O/report.json $O/gt $O/deploy_grid $O/deploy_imu 2>&1 | grep -v Warn > $O/compare.log
 echo done

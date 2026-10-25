@@ -1,43 +1,19 @@
-"""VLP16 UDP datagrams -> per-scan BEV, the way the training data was made (no ROS imports; python 3.8 / numpy 1.17).
+"""VLP16 scans -> per-scan BEV, the way the training data was made (no ROS imports; python 3.8 / numpy 1.17).
 
-Training (Alpamayo-Cosmos tools/step0/step0_worker.py) read /velodyne_packets from the bags. velodyne_driver had made those
-scans with its default VLP16 settings (VLP16_points.launch: rpm 600, cut_angle -0.01 = off): every scan is the next
-npackets = ceil(754 / 10) = 76 packets of exactly 1206 bytes, each stamped with its receipt time, the scan stamped with
-its last packet. Every scan in the collected bags has 76 packets (run1024b-w1-001: 1336 scans). The scan boundary
-azimuth is wherever the driver happened to start, so any phase is in distribution.
+Training (Alpamayo-Cosmos tools/step0/step0_worker.py) read /velodyne_packets from the bags: velodyne_driver's scans
+(VLP16_points.launch: 76 packets of 1206 bytes, each stamped with its receipt time, the scan with its last packet). The
+stack runs the same driver, so the node reads the same messages.
 
-Motion: lidar_bev.scan_bev_stream with v and r sampled at each packet time. Step 0 used the _ego GT speed and yaw rate
-(np.interp of the 10 Hz table); here they are competition_status signed_velocity_mps (equal to the GT speed, median
-difference 0.0002 m/s in run1024b-w1-001) and IMU angular_velocity.z (left +, correlation 0.99 with the GT yaw rate,
-same sign; competition_status angular_velocity_z_radps has the opposite sign).
+Motion: lidar_bev.scan_bev_stream with v and r sampled at each packet time, as step 0 did from the _ego table:
+  v  competition_status signed_velocity_mps (equal to the GT speed, median difference 0.0002 m/s in run1024b-w1-001)
+  r  GridYawRate: the _ego yaw_rate recipe (coc_labeler load_episode) on competition_status yaw, which differs from the
+     GT yaw by a constant 0.0235 rad
 """
+import math
+
 import numpy as np
 
 from vlp16_bev import lidar_bev as L
-
-PACKET_BYTES = 1206
-PACKETS_PER_SCAN = 76
-
-
-class ScanAssembler:
-    """consecutive 1206-byte packets -> scans of 76 (velodyne_driver standard behaviour without a cut angle)."""
-
-    def __init__(self, n=PACKETS_PER_SCAN):
-        self.n, self.data, self.stamps = n, [], []
-        self.dropped = 0                                  # datagrams of another size (velodyne InputSocket ignores them)
-
-    def add(self, payload, stamp_ns):
-        """one datagram and its receipt time (int ns, ROS clock) -> (raw bytes of 76 packets, (76,) int64 ns stamps) when a
-        scan completes."""
-        if len(payload) != PACKET_BYTES:
-            self.dropped += 1
-            return None
-        self.data.append(bytes(payload)); self.stamps.append(int(stamp_ns))
-        if len(self.data) < self.n:
-            return None
-        out = b"".join(self.data), np.array(self.stamps, np.int64)
-        self.data, self.stamps = [], []
-        return out
 
 
 class SignalTrack:
@@ -63,6 +39,40 @@ class SignalTrack:
 
     def at(self, t):
         return np.interp(np.asarray(t, np.float64), np.array(self.t), np.array(self.x))
+
+
+class GridYawRate:
+    """yaw rate as the training _ego table has it: yaw on a 0.1 s grid, np.convolve(np.gradient(yaw, 0.1),
+    np.ones(5) / 5, "same") (coc_labeler data.load_episode), linearly interpolated at the packet times (step 0).
+    A grid point's value needs the yaw 0.3 s after it (central difference +-0.1 s, 5-tap box +-0.2 s), so live only the
+    grid points with that support are used and packets newer than the last of them get its value (np.interp holds the
+    end): r lags the training value by up to ~0.3 s at turn onset and exit. Grid points are multiples of 0.1 s of the
+    stamp clock (the training grid started at the episode's tau 0; only the sampling phase differs)."""
+
+    def __init__(self, dt=0.1, horizon=3.0):
+        self.dt, self.horizon, self.t, self.yaw = dt, horizon, [], []
+
+    def add(self, t, yaw):
+        t = float(t)
+        if self.t and t <= self.t[-1]:
+            return
+        u = yaw if not self.yaw else self.yaw[-1] + math.atan2(math.sin(yaw - self._raw), math.cos(yaw - self._raw))
+        self._raw = yaw
+        self.t.append(t); self.yaw.append(u)
+        while self.t[0] < t - self.horizon:
+            self.t.pop(0); self.yaw.pop(0)
+
+    def ready(self):
+        return len(self.t) > 1 and self.t[-1] - self.t[0] >= 7 * self.dt
+
+    def latest(self):
+        return self.t[-1] if self.t else None
+
+    def at(self, tq):
+        t, y = np.array(self.t), np.array(self.yaw)
+        g = self.dt * np.arange(math.ceil(t[0] / self.dt), math.floor(t[-1] / self.dt) + 1)
+        r = np.convolve(np.gradient(np.interp(g, t, y), self.dt), np.ones(5) / 5, "same")
+        return np.interp(np.asarray(tq, np.float64), g[3:-3], r[3:-3])    # only points with their full 0.3 s support
 
 
 class BevBuilder:

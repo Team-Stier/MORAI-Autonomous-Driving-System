@@ -1,8 +1,7 @@
 <launch>
-  <!-- MORAI LiDAR network: VLP16 data packets to this host's port (velodyne_driver's default 2368) -->
-  <arg name="port" default="2368"/>
+  <!-- reads velodyne_driver's /velodyne_packets (run.sh starts VLP16_points.launch, as in collection) -->
   <node pkg="vlp16_bev" type="vlp16_bev_node.py" name="vlp16_bev" output="screen" respawn="true" respawn_delay="1.0">
-    <param name="port" value="$(arg port)"/>
     <param name="topic" value="/lidar_bev/scan"/>
+    <param name="yaw_rate_source" value="grid"/>   <!-- grid (training recipe) | imu -->
   </node>
 </launch>
