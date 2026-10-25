@@ -3,5 +3,7 @@
   <node pkg="e2e_driver" type="e2e_driver_node.py" name="e2e_driver" output="screen" respawn="true" respawn_delay="1.0">
     <rosparam command="load" file="$(find e2e_driver)/config/e2e_driver.yaml"/>
     <param name="route_asset" value="$(find e2e_driver)/assets/route.json"/>
+    <!-- load tests with the fake backend only: route-following curvature (pure pursuit, this many metres ahead) -->
+    <param name="fake_follow_route_m" value="$(optenv E2E_FAKE_FOLLOW_ROUTE_M 0)"/>
   </node>
 </launch>

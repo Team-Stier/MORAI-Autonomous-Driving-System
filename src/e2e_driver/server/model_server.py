@@ -74,6 +74,8 @@ def serve(a, backend):
                     break
                 req, sample, prepared, t_in, t, t1, t2 = job
                 t3 = time.perf_counter()
+                if "route_kappa" in req:                  # load-test steering for the fake backend; after prepare, so
+                    sample["route_kappa"] = req["route_kappa"]   # the tokenized batch never sees it
                 out = backend.run(sample, prepared)
                 t4 = time.perf_counter()
                 ms = lambda x: round(1e3 * x, 1)

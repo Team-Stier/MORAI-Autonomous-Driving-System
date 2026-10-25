@@ -39,7 +39,7 @@ class FakeBackend:
         accel = np.zeros(64)
         for k in range(64):
             accel[k] = np.clip((self.v_target - v) / 1.0, -self.decel_max, self.accel_max); v += accel[k] * 0.1
-        return dict(accel=accel, kappa=np.full(64, self.kappa), v0=v0, xyz=None, timing=dict(prepared[1]))
+        return dict(accel=accel, kappa=np.full(64, sample.get("route_kappa", self.kappa)), v0=v0, xyz=None, timing=dict(prepared[1]))
 
     def predict(self, sample):
         return self.run(sample, self.prepare(sample))

@@ -44,6 +44,7 @@ class Node:
         self.ctrl = Controller(**{k: P("control/" + k, v) for k, v in DEFAULTS.items()})
         self.server = (P("server_host", "127.0.0.1"), int(P("server_port", 47011)))
         self.max_inflight = int(P("max_inflight", 2))
+        self.follow_m, self.pose = float(P("fake_follow_route_m", 0.0)), None    # > 0: route_kappa for the fake backend
         self.sock, self.pending, self.next_id, self.skipped = None, {}, 0, 0
         self.plan, self.plan_id, self.v, self.plan_lock = None, -1, 0.0, threading.Lock()
         self.pub = rospy.Publisher(P("command_topic", "/control_cmd"), CtrlCmd, queue_size=1, tcp_nodelay=True)
@@ -76,9 +77,10 @@ class Node:
     def on_ego(self, m):
         # While GPS is blacked out the EKF / tunnel_wall pose drifts along the road (23-30 m in run1023h-w1-007): route
         # progress then runs on the competition_status odometer from the last GPS-backed fix instead.
+        p = m.pose.pose
+        self.pose = (p.position.x, p.position.y, yaw_of(p.orientation))
         if not self.gps_ok:
             return
-        p = m.pose.pose
         self.tracker.update(m.header.stamp.to_sec(), p.position.x, p.position.y, yaw_of(p.orientation), self.odo.d)
 
     def publish(self, t):
@@ -150,6 +152,8 @@ class Node:
             if req is None:
                 rospy.logwarn_throttle(5.0, "e2e_driver: inputs not ready: %s", problems)
                 continue
+            if self.follow_m > 0 and self.pose is not None:
+                req["route_kappa"] = float(self.route.pursuit_kappa(s, *self.pose, self.follow_m))
             try:
                 if self.sock is None:
                     self.connect()

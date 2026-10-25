@@ -23,6 +23,12 @@ class Route:
     def nav_text(self, s):
         return nav_text(s, self.M, self.lap, self.exempt)
 
+    def pursuit_kappa(self, s, x, y, yaw, lookahead):
+        """test driver only (fake backend load runs): pure-pursuit curvature toward the route point `lookahead` m past s."""
+        i = min(int(np.searchsorted(self.s, (s + lookahead) % self.lap)), len(self.s) - 1)
+        dx, dy = self.path[i, 0] - x, self.path[i, 1] - y
+        return 2.0 * np.sin(np.arctan2(dy, dx) - yaw) / max(np.hypot(dx, dy), 1.0)
+
 
 class RouteTracker:
     """KMap.progress online. The vertex index i is searched in [i - 40, i + 400) while the window has a vertex within

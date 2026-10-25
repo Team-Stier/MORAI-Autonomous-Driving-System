@@ -1,3 +1,5 @@
 <launch>
-  <node pkg="localization" type="localization_node" name="localization_node" output="screen"/>
+  <!-- respawn: a scene reload teleports the Ego and the filter does not follow (e2e_driver tools/two_pc.sh kills the node
+       after a reload so it restarts from the new GPS fix) -->
+  <node pkg="localization" type="localization_node" name="localization_node" output="screen" respawn="true" respawn_delay="1.0"/>
 </launch>
