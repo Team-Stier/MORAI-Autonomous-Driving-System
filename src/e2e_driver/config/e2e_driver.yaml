@@ -1,0 +1,29 @@
+# e2e_driver_node parameters (private namespace). Controller constants: src/e2e_driver/control.py docstring + README.
+rate_hz: 10.0                 # model steps per second (training rows are 10 Hz)
+control_rate_hz: 50.0         # /control_cmd from the newest plan (bridge sends at 50 Hz)
+use_lidar: true
+server_host: 127.0.0.1
+server_port: 47011
+server_timeout_s: 5.0
+command_topic: /control_cmd   # -> speed_filter -> /morai_udp_bridge/control_cmd
+lidar_topic: /lidar_bev/scan
+status_topic: /vehicle/competition_status
+localization_topic: /localization/ego
+control:                      # src/e2e_driver/control.py docstring; measured with test/fit_vehicle.py (README)
+  wheelbase_m: 3.0
+  max_steer_deg: 40.0
+  steer_gain: 0.77
+  steer_lookahead_s: 0.1
+  accel_lookahead_s: 0.1
+  accel_map_low: [[0.0, -0.55], [0.06, 0.0], [0.15, 0.51], [0.25, 0.94], [0.35, 1.40], [0.45, 2.18], [0.55, 2.58], [0.67, 3.45], [1.0, 5.0]]
+  accel_map_cruise: [[0.0, -0.40], [0.06, 0.0], [0.15, 0.27], [0.25, 0.48], [0.35, 0.87], [0.45, 1.08], [0.55, 1.37], [0.67, 1.75], [1.0, 2.6]]
+  brake_map: [[0.0, -0.45], [0.06, -1.1], [0.15, -1.95], [0.25, -2.6], [0.38, -6.1], [0.52, -9.1], [1.0, -18.8]]
+  low_speed_mps: 4.5
+  cruise_speed_mps: 7.5
+  max_accel_cmd: 1.0
+  max_brake_cmd: 1.0
+  speed_kp: 0.0
+  stop_speed: 0.3
+  hold_brake: 0.5
+  hold_horizon_s: 1.0
+  plan_timeout_s: 0.5

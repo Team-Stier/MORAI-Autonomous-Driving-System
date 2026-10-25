@@ -126,7 +126,9 @@ fi
 if [[ -d build ]]; then
     run_step "Remove empty build objects" find build -type f -name '*.o' -size 0c -delete
 fi
-run_step "Build catkin workspace" catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -j2
+# Closed-loop evaluation stack (eval/claude-closedloop-20261025): only the packages the serial chain needs are built.
+EVAL_PACKAGES="morai_msgs;interfaces;node_pipeline;morai_udp_bridge;localization;section_annotator;vlp16_bev;e2e_driver;speed_filter"
+run_step "Build catkin workspace" catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCATKIN_WHITELIST_PACKAGES="$EVAL_PACKAGES" -j2
 if [[ -r devel/setup.bash ]]; then
     source devel/setup.bash || fail "source workspace overlay"
 else
@@ -165,21 +167,17 @@ for attempt in {1..100}; do
 done
 rosnode list >/dev/null 2>&1 || fail "ROS master did not start; package launch attempts will continue"
 
+# Serial chain: MORAI -> bridge (cameras, GPS, IMU, status) -> e2e_driver (model node; LiDAR from vlp16_bev, which reads
+# the VLP16 UDP packets itself) -> /control_cmd -> speed_filter -> bridge -> MORAI. localization and section_annotator
+# feed route progress (nav text) and speed_filter's section. The model server runs outside this chroot (see
+# src/e2e_driver/README.md). No velodyne: it is no longer in the workspace.
+export MORAI_BRIDGE_CONFIG="${MORAI_BRIDGE_CONFIG:-$WORKSPACE/src/e2e_driver/config/bridge_same_pc.yaml}"
 start_package MORAI-UDP-Bridge-Node
-start_process velodyne roslaunch velodyne_pointcloud VLP16_points.launch
-start_package tf_publisher
-start_package lidar_leveler
+start_package vlp16_bev
 start_package localization
 start_package section_annotator
-start_package morai_test
-start_package traffic_light
-start_package path_planner
-start_package velocity_planner
-start_package control
+start_package e2e_driver
 start_package speed_filter
-if [[ -f "$WORKSPACE/src/visualizer/launch.sh" ]]; then
-    start_package visualizer
-fi
 
 stop_child_groups() {
     local signal="$1"

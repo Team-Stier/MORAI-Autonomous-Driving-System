@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>vlp16_bev</name>
+  <version>0.1.0</version>
+  <description>VLP16 UDP packets from MORAI -> per-scan LiDAR BEV made exactly like the training data (replaces velodyne).</description>
+  <maintainer email="dev@team-stier.local">Team Stier</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>rospy</depend>
+  <depend>interfaces</depend>
+  <depend>sensor_msgs</depend>
+  <exec_depend>python3-numpy</exec_depend>
+</package>

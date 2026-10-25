@@ -1,0 +1,7 @@
+<launch>
+  <!-- the model server (server/model_server.py) runs outside the ROS chroot, on the GPU; see README -->
+  <node pkg="e2e_driver" type="e2e_driver_node.py" name="e2e_driver" output="screen" respawn="true" respawn_delay="1.0">
+    <rosparam command="load" file="$(find e2e_driver)/config/e2e_driver.yaml"/>
+    <param name="route_asset" value="$(find e2e_driver)/assets/route.json"/>
+  </node>
+</launch>
