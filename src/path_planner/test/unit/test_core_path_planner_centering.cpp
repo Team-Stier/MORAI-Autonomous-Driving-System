@@ -2368,19 +2368,20 @@ TEST(CorePathFollowing, SamePredictionTimeKeepsPoseCapAndSceneSpecificTargets) {
     scene.future[i].push_back(future);
   }
   const PathGenerationCore::Context c{reference,scene,schedule,boundary,0,0,false,&index};
-  EXPECT_NEAR(core.followingSpeedTarget(c,{{0,0},0},0,20),
+  EXPECT_NEAR(core.followingSpeedTarget(c,{{0,0},0},0,20,4,0),
               (12-3.845008-2.25-2)/1.5,1e-12);
-  EXPECT_NEAR(core.followingSpeedTarget(c,{{0,0},0},.5,20),
+  EXPECT_NEAR(core.followingSpeedTarget(c,{{0,0},0},.5,20,4,0),
               (14-3.845008-2.25-2)/1.5,1e-12);
-  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{4,0},0},0,20),0);
-  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{0,4},0},0,20),20);
-  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{0,0},geometry::kPi},0,20),20);
-  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{0,0},0},0,1),1);
+  EXPECT_NEAR(core.followingSpeedTarget(c,{{0,0},0},0,20,6,0),1.9366613333333333,1e-12);
+  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{4,0},0},0,20,4,0),0);
+  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{0,4},0},0,20,4,0),20);
+  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{0,0},geometry::kPi},0,20,4,0),20);
+  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(c,{{0,0},0},0,1,4,0),1);
   auto distant=scene;distant.current[0].pose.position.x+=28;
   for(auto& future:distant.future)future[0].pose.position.x+=28;
   const PathGenerationCore::Context next{reference,distant,schedule,boundary,0,0,false,&index};
-  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(next,{{0,0},0},0,20),20);
-  EXPECT_NEAR(core.followingSpeedTarget(c,{{0,0},0},0,20),
+  EXPECT_DOUBLE_EQ(core.followingSpeedTarget(next,{{0,0},0},0,20,4,0),20);
+  EXPECT_NEAR(core.followingSpeedTarget(c,{{0,0},0},0,20,4,0),
               (12-3.845008-2.25-2)/1.5,1e-12);
 }
 

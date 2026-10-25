@@ -1,4 +1,5 @@
 #pragma once
+#include <unsupported/Eigen/Splines>
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,7 @@
 #include <boost/geometry/strategies/agnostic/hull_graham_andrew.hpp>
 
 #include <Eigen/Cholesky>
+#include <Eigen/SparseCholesky>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <Eigen/LU>
@@ -101,6 +103,7 @@ struct VehicleShape {
   double front_m = 3.845008;  // Rear axle -> front bumper.
   double rear_m = 0.790;
   double width_m = 2.160835;
+  double wheelbase_m = 3.0;
 };
 
 struct ProgressTime {
@@ -141,6 +144,10 @@ struct PlanningConstraints {
 
 struct PathParameters {
   VehicleShape vehicle;
+  double lane_change_confirmation_sec = 1.0;
+  double lane_change_observation_gap_sec = 0.2;
+  double lane_change_heading_tolerance_rad = 0.03490658503988659;
+  double lane_change_steering_tolerance_rad = 0.05235987755982989;
   double horizon_m = 25.0;
   double min_horizon_m = 0.5;  // Minimum geometric calculation extent, not stopping distance.
   double road_boundary_step_m = 0.25;  // Polygon discretization; every reference knot is retained.
@@ -153,6 +160,7 @@ struct PathParameters {
   double road_margin_m = 0.05;
   double pedestrian_caution_speed_mps = 0.0;  // 0 disables the optional VRU approach ceiling.
   double pedestrian_caution_distance_m = 0.0;
+  double pedestrian_caution_lateral_margin_m = 0.0;  // 0 keeps the legacy body/bbox preview.
   double pedestrian_near_preferred_speed_mps = 0.0;  // 0: keep the existing cost target.
   double max_curvature_inv_m = 0.18;
   double max_lateral_accel_mps2 = 2.0;
@@ -183,6 +191,8 @@ struct PathParameters {
   double acceleration_weight = 0.15;
   double longitudinal_jerk_weight = 0.05;
   double following_time_headway_sec = 1.5;
+  double following_low_speed_headway_sec = 0.0;  // 0 preserves the legacy target.
+  double following_headway_transition_mps = 5.0;
   double following_min_gap_m = 2.0;
   // Integrated planning window; the legacy supplied-schedule horizon stays
   // unchanged. Caller must supply reference/prediction coverage for its speed.
@@ -229,6 +239,20 @@ using stier::kPredictionSteps;
 // Ground Truth는 최신 morai_test의 /objects(map)로 공급하고 LiDAR 검출을 다시 적용하지 않는다.
 class CorePathPlanner {
  private:
+  // #WITHIN_CALL_GEOMETRY_REUSE
+  // 축소 beam과 전체 beam은 같은 관측·예측·이전 경로와 도로에서 형상을 만든다.
+  // 같은 시간표·공간 창·계산 모드의 DP/QP와 같은 C2 목표를 다시 계산하지 않는다.
+  // 이 캐시는 아래 plan() 호출의 지역 변수로만 소유해 다음 관측으로 넘기지 않는다.
+  // root reference와 초기 자세·곡률은 두 beam에서 같고, 다른 출발 차선 참조는
+  // 이 캐시에 넣지 않는다. 시간표·horizon·기하/재시간화 모드·C2 복구 여부는
+  // 정확한 값으로 구분한다. 실패도 동일 입력의 계산 결과로만 재사용한다.
+  // 속도·가감속·객체 충돌·도로·최종 궤적 검사는 각 탐색에서 그대로 수행한다.
+  using GeometrySchedule=std::vector<std::pair<double,double>>;
+  struct PlanGeometryCache {
+    std::map<std::tuple<GeometrySchedule,bool,double,bool>,std::vector<PathPoint>> generated;
+    std::map<std::pair<GeometrySchedule,bool>,std::vector<PathPoint>> cartesian;
+    const std::vector<Vec2>* independent_entries=nullptr;
+  };
   struct Geometry {
 static constexpr double kPi = 3.14159265358979323846;
 static Vec2 add(Vec2 a, Vec2 b) { return {a.x + b.x, a.y + b.y}; }
@@ -655,13 +679,13 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     if(target && laneKey(*target)==laneKey(lane))return incoming;
     return {};
   }
-  std::shared_ptr<const NativeRoadRegion> nativeRoadRegion(const Route& route) {
+  std::shared_ptr<const NativeRoadRegion> nativeRoadRegion(const Route& route,bool include_neighbors=true) {
     if(!routing_graph_) return nullptr;
     std::map<LaneKey,lanelet::ConstLanelet> lanes;
     for(const auto& lane:*route) {
       lanes.emplace(laneKey(lane),lane);
       for(bool left:{false,true}) {
-        const auto neighbor=corridorNeighbor(lane,left);
+        const auto neighbor=include_neighbors ? corridorNeighbor(lane,left) : lanelet::Optional<lanelet::ConstLanelet>{};
         if(neighbor)lanes.emplace(laneKey(*neighbor),*neighbor);
       }
     }
@@ -739,7 +763,9 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
   // represented by a physically reachable stop/wait, never a truncated prefix.
   std::vector<PathPoint> plan(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
                                 const Predictions& predictions, const PlanningConstraints& requested_limits,
-                                const std::vector<PathPoint>& previous = {},bool pending_lane_change=false) const {
+                                const std::vector<PathPoint>& previous = {},bool pending_lane_change=false,
+                                const std::vector<ReferencePoint>* hold_reference=nullptr,
+                                const std::vector<Vec2>* independent_entries=nullptr) const {
     // #COLLISION_SEARCH_BUDGET
     // map 객체가 있으면 시간별 swept SAT가 많은 속도 후보에서 반복된다.
     // 동일한 전체 기하/속도 탐색을 작은 beam으로 먼저 수행하고, 모든 도로·
@@ -749,19 +775,46 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // 각 실패 기하마다 큰 탐색을 반복하지 않으며, 객체가 없는 곡선은 원래
     // beam을 유지한다. GT ID·센서·경로 시각·제어 입력 만료는 바꾸지 않는다.
     constexpr std::size_t fast_beam_width=32;
+    PlanGeometryCache geometry_cache;geometry_cache.independent_entries=independent_entries;
     bool truncated=false;
-    if(!predictions.current.empty() && p_.speed_beam_width>fast_beam_width &&
-       requested_limits.maximum_speed_mps>0) {
-      auto quick=planWithBeam(ego,reference_map,predictions,requested_limits,previous,fast_beam_width,truncated,pending_lane_change);
-      if((!quick.empty() && quick.back().speed_mps>0) || !truncated) return quick;
+    // #HIGHWAY_SEARCH_ALLOCATION
+    // 고속 변경에서 축소 beam의 후보 비교 뒤 전체 beam을 재계산하면
+    // 제어 입력 만료가 생길 수 있다. 실측 v/a의 기존 jerk 제한 정지거리가
+    // 기존 긴 연결 창(2*horizon_m)보다 큰 고속 인접 변경에만 원래 전체
+    // beam을 처음부터 한 번 배정한다. 짧은 창 안에서 정지 가능한 장면과
+    // 일반도로는 원래 빠른 탐색·반환 순서를 유지한다. 이는 계산 배정 기준이며
+    // 정지거리·물리 한도나 안전 보증을 새로 정의하지 않는다.
+    // 후보·최대 beam·예측 시간을 늘리지 않으며, 같은 map 차체/도로/객체와
+    // 속도·가감속·jerk·최종 궤적 검사를 모두 거친 결과만 반환한다.
+    // 이전 경로/시각/입력 만료/MPC는 바꾸지 않는다. LiDAR 통합도 GT와 같은
+    // map bbox·절대 속도·예측 시각 계약 및 최종 검사를 유지해야 한다.
+    const bool highway_lane_change=pending_lane_change &&
+        (requested_limits.maximum_speed_mps>p_.normal_speed_limit_mps ||
+         ego.speed_mps>p_.normal_speed_limit_mps);
+    const bool long_maneuver_search=highway_lane_change &&
+        brakingDistance(ego.speed_mps,ego.acceleration_mps2)>2*p_.horizon_m;
+    if(!long_maneuver_search && !predictions.current.empty() && p_.speed_beam_width>fast_beam_width &&
+       requested_limits.maximum_speed_mps>0 && ego.acceleration_mps2>=0) {
+      auto quick=planWithBeam(ego,reference_map,predictions,requested_limits,previous,fast_beam_width,truncated,pending_lane_change,hold_reference,&geometry_cache);
+      // #OBSTACLE_APPROACH_SEARCH
+      // 가지치기한 탐색이 즉시 제동을 택했다면 이동 경로가 있다는 사실만으로
+      // 채택하지 않는다. 기존 전체 beam으로 같은 객체·도로·동역학을 다시
+      // 계산해 탐색 누락에 따른 불필요한 감속을 줄인다. 가지치기가 없거나
+      // 정상 가속/순항이면 원래 빠른 경로를 유지하며 안전 검사는 생략하지 않는다.
+      // 이미 감속 중이면 처음부터 전체 beam을 써 이중 계산을 피한다.
+      const bool early_braking=std::any_of(quick.begin(),quick.end(),[&](const PathPoint& point) {
+        return point.time_sec<=p_.speed_time_step_sec && point.acceleration_mps2<0;
+      });
+      if((!quick.empty() && quick.back().speed_mps>0 && !early_braking) || !truncated) return quick;
     }
-    return planWithBeam(ego,reference_map,predictions,requested_limits,previous,p_.speed_beam_width,truncated,pending_lane_change);
+    return planWithBeam(ego,reference_map,predictions,requested_limits,previous,p_.speed_beam_width,truncated,pending_lane_change,hold_reference,&geometry_cache);
   }
 
   std::vector<PathPoint> planWithBeam(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
                                 const Predictions& predictions, const PlanningConstraints& requested_limits,
                                 const std::vector<PathPoint>& previous,std::size_t beam_width,bool& truncated,
-                                bool pending_lane_change) const {
+                                bool pending_lane_change,const std::vector<ReferencePoint>* hold_reference=nullptr,
+                                PlanGeometryCache* geometry_cache=nullptr) const {
     auto limits=requested_limits;
     requireSceneDomain(ego,reference_map,predictions);
     requirePlanningDomain(ego,limits);
@@ -772,8 +825,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     const double offset=ego.stamp_sec-predictions.reference_stamp_sec;
     const double duration=predictions.step_sec*kPredictionSteps-offset;
     if (offset<0 || duration<=0 ||
-        ego.acceleration_mps2>p_.max_acceleration_mps2 ||
-        ego.acceleration_mps2<-p_.max_deceleration_mps2) return {};
+        ego.acceleration_mps2>p_.max_acceleration_mps2) return {};
     // 절대 차량 곡률 한도는 유지한다. 실측 횡가속도 초과는 아래의
     // 고정된 가장 빠른 감속 포락선 안에서만 복귀하도록 시간 계획한다.
     if(std::max(0.0,std::abs(ego.curvature_inv_m)-1e-8)>
@@ -798,23 +850,36 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // 현재 관측에 남고 전방 거리 안에 있는 ID만 보존하며, 뒤범퍼 통과·거리
     // 이탈·관측 목록에서 제외되면 해제한다. 위치/운동을 추정하거나 누락 객체를
     // 만들어 넣지 않는다. 충돌 검사에는 매 호출의 원래 bbox·예측을 사용한다.
-    std::set<std::uint32_t> active_pedestrian_caution;
-    if(p_.pedestrian_caution_speed_mps>0 && p_.pedestrian_caution_distance_m>0) {
+    std::map<std::uint32_t,double> active_pedestrian_caution;
+    const double approach_distance=p_.pedestrian_caution_distance_m>0 ? approachDistance(ego) : 0;
+    if(p_.pedestrian_caution_speed_mps>0 && approach_distance>0) {
       for(std::size_t index=0;index<predictions.current.size();++index) {
         if(predictions.current[index].kind!=ObjectKind::Pedestrian) continue;
         const auto object=samplePrediction(predictions,index,offset);
         const double radius=std::hypot(object.length_m,object.width_m)/2+object.radius_error_m;
         const auto delta=Geometry::sub(object.pose.position,ego.pose.position);
-        if(Geometry::norm(delta)>p_.pedestrian_caution_distance_m+radius) continue;
+        const auto remembered=pedestrian_caution_distances_.find(object.id);
+        const double preview=remembered==pedestrian_caution_distances_.end() ? approach_distance :
+            std::max(approach_distance,remembered->second);
+        if(Geometry::norm(delta)>preview+radius) continue;
         const auto spot=reference.project(object.pose.position,origin.s,
-            std::min(reference.length(),origin.s+p_.pedestrian_caution_distance_m));
+            std::min(reference.length(),origin.s+preview));
         const auto road=reference.at(spot.s);
-        const double padding=radius+p_.vehicle.width_m/2+p_.obstacle_margin_m;
+        // #PEDESTRIAN_ROADSIDE_PREVIEW
+        // 도로 옆 보행자의 접근 판정은 충돌 OBB와 별도로 설정한 도로 밖
+        // 중심점 거리로 결정한다. 차체 반폭과 보행자 bbox를 합친 경계를
+        // 사용하면 정지 보행자의 애니메이션 폭이 수 mm 변할 때 최초 감속이
+        // 늦어질 수 있다. 입력은 같은 map 관측이며 종방향 접근 거리·뒤쪽
+        // 제외·추적 ID 유지 순서는 그대로다. 실제 충돌 검사에는 원래 bbox,
+        // 여유·속도·예측을 사용한다. 0 설정은 기존 판정을 보존한다.
+        // LiDAR 통합 시에도 위치·분류·추적 ID를 같은 계약으로 공급해야 한다.
+        const double padding=p_.pedestrian_caution_lateral_margin_m>0 ?
+            p_.pedestrian_caution_lateral_margin_m : radius+p_.vehicle.width_m/2+p_.obstacle_margin_m;
         if(Geometry::dot(delta,Geometry::unit(ego.pose.yaw_rad))<-p_.vehicle.rear_m-radius) continue;
-        if(!pedestrian_caution_ids_.count(object.id) &&
+        if(remembered==pedestrian_caution_distances_.end() &&
            (spot.distance>std::max(std::abs(road.lower),std::abs(road.upper))+padding ||
             spot.l<road.lower-padding || spot.l>road.upper+padding)) continue;
-        active_pedestrian_caution.insert(object.id);
+        active_pedestrian_caution.emplace(object.id,preview);
         limits.maximum_speed_mps=std::min(limits.maximum_speed_mps,p_.pedestrian_caution_speed_mps);
         // #PEDESTRIAN_NEAR_APPROACH
         // 전방 map 도로 주변 보행자가 기존 공간 창(horizon_m) 안에 들어오면
@@ -827,7 +892,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
                                              p_.pedestrian_near_preferred_speed_mps);
       }
     }
-    pedestrian_caution_ids_=std::move(active_pedestrian_caution);
+    pedestrian_caution_distances_=std::move(active_pedestrian_caution);
     // #SPEED_DEPENDENT_CALCULATION_WINDOW
     // 일반 구간에서는 검증한 기존 네 기하 창(기본 100/75/50/37.5m)을 유지한다.
     // 고주로 목표 또는 이미 빠른 실측 상태일 때만 확장한 공간 계산 범위를 쓴다.
@@ -859,6 +924,30 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     const auto& boundary=geometry->boundary;
     const std::vector<ProgressTime> unused;
     const Context c{reference,predictions,unused,boundary,0,offset,false,&geometry->index,geometry->native_region.get()};
+    const auto schedule_key=[](const std::vector<ProgressTime>& timing) {
+      GeometrySchedule key;for(const auto& point:timing)key.emplace_back(point.progress_m,point.time_sec);return key;
+    };
+    const auto generate_geometry=[&](const std::vector<ProgressTime>& timing,bool geometric_only,
+                                     double horizon,bool retime=false) {
+      const auto key=std::make_tuple(schedule_key(timing),geometric_only,horizon,retime);
+      if(geometry_cache) {
+        const auto found=geometry_cache->generated.find(key);
+        if(found!=geometry_cache->generated.end())return found->second;
+      }
+      auto result=generatePath(ego,reference_map,predictions,timing,previous,geometric_only,horizon,retime);
+      if(geometry_cache)geometry_cache->generated.emplace(key,result);
+      return result;
+    };
+    const auto center_geometry=[&](const GeometrySchedule& goals,bool repair=false) {
+      const auto key=std::make_pair(goals,repair);
+      if(geometry_cache) {
+        const auto found=geometry_cache->cartesian.find(key);
+        if(found!=geometry_cache->cartesian.end())return found->second;
+      }
+      auto result=cartesianPieces(c,ego,goals,repair);
+      if(geometry_cache)geometry_cache->cartesian.emplace(key,result);
+      return result;
+    };
     // #LONG_CENTER_GEOMETRY
     // map 중심선의 작은 knot 흔들림 때문에 긴 Frenet 후보가 탈락하면,
     // 기존 탐색은 곧바로 25m 창을 골라 그 끝에 제동 가능한 속도를 계획했다.
@@ -889,31 +978,137 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // 초기 상태·전체 계획 길이·600표본 한도와 원래 차체/도로/시간 검사를
     // 유지한다. 새 형상도 실제 객체 예측과 가감속·jerk 검사 후에만 선택한다.
     std::set<double> long_geometry_ready;
+    const bool align_spatial_curvature=pending_lane_change && c.native_region &&
+        !c.native_region->recovery_original;
+    const auto timed_connection=[&](const std::vector<PathPoint>& connected) -> std::vector<PathPoint> {
+      if(connected.empty())return {};
+      ArcPath connected_arc(connected);
+      // #CONNECTED_CURVATURE_SEARCH
+      // map 초기 곡선을 QP로 보정하면 명시 곡률 외에 공간 보간 곡률도 생긴다.
+      // 차선 변경과 같은 기존 공간 곡률 계산을 보정 후보의 속도 탐색에도
+      // 적용해, 최종 검사에서 같은 이유로 탈락할 속도 후보를 반복하지 않는다.
+      // output_step_m과 실제 뒷차축 형상·v/a·객체 시각은 그대로 사용한다.
+      // 정상 원본 C2의 선택과 도로 복귀 탐색은 유지하며, 보정 후에도 기존
+      // 전체 도로/ROI·차체·예측 충돌·곡률·가감속·jerk 검사로 출력한다.
+      if(c.native_region && !c.native_region->recovery_original)
+        connected_arc.includeSpatialCurvature(p_.output_step_m);
+      const double connected_stop=stopArc(ego,reference,connected_arc,limits);
+      if(connected_stop<0 && limits.release_time_sec>0)return {};
+      auto candidate=planSpeed(c,connected_arc,ego,limits,duration,connected_stop,reference_map,beam_width,truncated);
+      if(!candidate.empty() && candidate.back().speed_mps>0 &&
+         checkPlannedPath(ego,reference_map,predictions,limits,candidate))return candidate;
+      return {};
+    };
+    // #CURVE_FOOTPRINT_RESERVE
+    // 정상 곡선에서 뒷차축 경로가 차체 전체에 최소 여유만 남기면 수 cm의
+    // 추종 오차에도 다음 재계획의 기하/횡가속도 연결이 막힐 수 있다.
+    // 현재 차체가 충분히 안쪽에 있을 때만, 앞으로 두 속도 계획 간격의
+    // 출력 자세에 road_margin_m의 두 배 여유가 있는 경로를 선호한다.
+    // 이 값은 새 필수 안전 한도가 아니라 경계 접근을 미리 피하는 선택 기준이다.
+    // 여유가 부족한 정상 이동 경로에 기존 15m 차체 중심 QP를 한 번 적용하고
+    // 같은 map 뒷차축·실측 v/a/곡률에서 속도를 새로 계산한다. 새 경로가
+    // 같은 여유 기준과 원본 객체·전체 도로·충돌·곡률·횡가속도·jerk 검사를
+    // 모두 통과할 때만 선택한다. 실패하면 기존 검증 경로를 그대로 쓴다.
+    // 실제 차선 변경·정적 회피·도로 복귀 선택과 MPC는 유지한다. QP 반복과
+    // 원래 최소 여유를 바꾸지 않으며 경계 밖으로 도로를 확장하지 않는다.
+    // GT ID·지도 구간에 의존하지 않고 LiDAR/ROI도 같은 map bbox·절대 속도·
+    // 예측 시각 및 허용 도로 계약을 전달해야 한다.
+    const auto prefer_body_reserve=[&](std::vector<PathPoint> path) -> std::vector<PathPoint> {
+      if(path.empty() || path.back().speed_mps<=0 || pending_lane_change || lane_change_ || static_center_blocked ||
+         !c.native_region || c.native_region->recovery_original ||
+         !roadClearWithMargin(c,ego.pose,ego.pose,2*p_.road_margin_m))return path;
+      const auto has_reserve=[&](const std::vector<PathPoint>& candidate) {
+        return std::all_of(candidate.begin(),candidate.end(),[&](const PathPoint& point) {
+          return point.time_sec>2*p_.speed_time_step_sec ||
+                 roadClearWithMargin(c,point.pose,point.pose,2*p_.road_margin_m);
+        });
+      };
+      if(has_reserve(path))return path;
+      const auto settled=conditionInitialGeometryWithin(c,ego,path,15.0);
+      auto preferred=timed_connection(settled);
+      if(!preferred.empty() && has_reserve(preferred)) {
+        return preferred;
+      }
+      return path;
+    };
     const auto center_candidate=[&](double horizon,double segment_extent) -> std::vector<PathPoint> {
       const int segments=static_cast<int>(std::ceil(horizon/segment_extent));
       const std::vector<std::pair<double,double>> goals(segments,{horizon/segments,0});
-      auto smooth=cartesianPieces(c,ego,goals);
+      auto smooth=center_geometry(goals);
       // 새 곡선이 시간 계획에서 실패해도 기존 짧은 창과 DP 후보를 계속
       // 검사해야 한다. 탐색 순서/정적 차단 표시는 원래 기하에서만 갱신한다.
       const bool original_geometry=!smooth.empty();
-      if(!original_geometry) smooth=cartesianPieces(c,ego,goals,true);
+      if(!original_geometry) smooth=center_geometry(goals,true);
       if(smooth.empty()) return {};
       if(original_geometry && segment_extent>=p_.horizon_m) long_geometry_ready.insert(horizon);
-      const ArcPath arc(smooth);
+      ArcPath arc(smooth);
+      if(align_spatial_curvature)arc.includeSpatialCurvature(p_.output_step_m);
       double alternate_clearance_progress=0;
       if(std::isfinite(staticStopArc(c,arc,original_geometry ? &static_clearance_progress : &alternate_clearance_progress))) {
         if(original_geometry) static_center_blocked=true;
-        return {};
       }
+      // #OBSTACLE_APPROACH
+      // 공간 창 안의 먼 정적 장애물 때문에 중앙 형상을 즉시 폐기하지 않는다.
+      // planSpeed의 원래 장애물 앞 정지 거리·매 상태의 제동 여유·시간별 충돌
+      // 검사로 안전한 접근 궤적을 계산하고, 아래에서 회피 궤적과 비용을 비교한다.
+      // 장애물은 제거하지 않으며 시간 계획과 최종 검사를 통과해야 반환한다.
       const double stop_arc=stopArc(ego,reference,arc,limits);
       if(stop_arc<0 && limits.release_time_sec>0) return {};
       auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
       if(!path.empty() && path.back().speed_mps>0 &&
          checkPlannedPath(ego,reference_map,predictions,limits,path)) return path;
+      const auto connected=conditionInitialGeometry(c,ego,smooth,!pending_lane_change);
+      const auto connected_path=timed_connection(connected);
+      if(!connected_path.empty())return connected_path;
+      // #HIGH_SPEED_AVOIDANCE_WINDOW
+      // map 실측 v/a의 정지 가능 거리가 기존 짧은 복구 창(2*horizon_m)보다
+      // 길면, 중앙의 분할 C2 시간 계획 실패 뒤 동일한 긴 창의 단일 C2도
+      // 검사한다. 짧은 창에서는 정지 가능 공간이 모자라 빈 경로만 반복됐다.
+      // 기존 Cartesian 연결식·네 공간 길이·초기 뒷차축 운동을 재사용한다.
+      // GT ID·지도 좌표에 의존하지 않고 원본 객체 예측과 ROI/허용 도로,
+      // 전체 차체·곡률·속도·가감속·jerk·5초 swept 충돌 검사를 유지한다.
+      // 첫 분할 후보가 유효하면 기존 반환을 보존하고, 추가 후보 실패 시
+      // 원래 DP/QP·횡 격자·짧은 복구 탐색을 계속한다. 입력 시각은 바꾸지 않는다.
+      if(segment_extent==p_.horizon_m && !static_center_blocked &&
+         brakingDistance(ego.speed_mps,ego.acceleration_mps2)>2*p_.horizon_m) {
+        const auto single=cartesianRecovery(c,ego,horizon,0);
+        if(!single.empty()) {
+          ArcPath single_arc(single);
+          if(align_spatial_curvature)single_arc.includeSpatialCurvature(p_.output_step_m);
+          const double single_stop=stopArc(ego,reference,single_arc,limits);
+          if(single_stop>=0 || limits.release_time_sec<=0) {
+            auto candidate=planSpeed(c,single_arc,ego,limits,duration,single_stop,reference_map,beam_width,truncated);
+            if(!candidate.empty() && candidate.back().speed_mps>0 &&
+               checkPlannedPath(ego,reference_map,predictions,limits,candidate))return candidate;
+          }
+        }
+      }
       return {};
     };
+    // #SPEED_SCALED_C2_COMPARISON
+    // 기존 25/50m C2 연결과 네 공간 창을 모두 유지한다. 고주로에서 현재
+    // 속도로 기존 25m를 이동할 시간 안에 속도를 잃는 후보에만, 일반도로
+    // 대비 요청 상한 비율로 늘린 연결 한 개를 추가 비교한다. 그 시간 동안
+    // 초기 속도를 유지하고 원래 비용도 낮은 검증 궤적만 즉시 선택한다.
+    // 새 후보가 실패하거나 이득이 없으면 원래 후보·비교 순서를 보존한다.
+    // 표본 예산·실측 v/a·도로·충돌·곡률·횡가속도·가감속·jerk 검사는 그대로다.
+    // 실제 100→60 제한 전환은 변경하지 않으며, 무한 입력 상한은 기존처럼
+    // 차량 설정 상한으로 제한한다. 객체/ROI 계약과 MPC 설정은 바꾸지 않는다.
+    const double long_segment_extent=2*p_.horizon_m*std::max(1.0,
+        p_.normal_speed_limit_mps>0 ? std::min(p_.max_speed_mps,limits.maximum_speed_mps)/p_.normal_speed_limit_mps : 1.0);
     const auto timed_center=[&]() -> std::vector<PathPoint> {
-    for(double segment_extent:{p_.horizon_m,2*p_.horizon_m,p_.horizon_m/2,p_.horizon_m/4})
+    // #REACHABLE_LONG_CONNECTION
+    // 고속 차선변경에서 기존 25/50m 연결이 모두 시간 계획에 실패하면,
+    // 이미 계산한 고속 연결 길이도 같은 네 공간 창에서 검사한다. 짧은
+    // 유효 경로가 있어야 긴 연결을 비교하던 조건은 빈 경로를 복구하지 못한다.
+    // 기존 25/50m 성공 순서를 유지하고, 긴 길이가 실제로 더 클 때만 한 번
+    // 추가한다. C2 계산식·초기 뒷차축 운동·목표 중앙·전체 예측과 차체/도로/
+    // 충돌/곡률/횡가속도/가감속/jerk 검사는 유지하며 새 창·계수는 만들지 않는다.
+    // GT ID나 지도 위치에 의존하지 않아 LiDAR도 같은 map 계약을 사용한다.
+    std::vector<double> segment_extents{p_.horizon_m,2*p_.horizon_m};
+    if(long_segment_extent>2*p_.horizon_m)segment_extents.push_back(long_segment_extent);
+    segment_extents.push_back(p_.horizon_m/2);segment_extents.push_back(p_.horizon_m/4);
+    for(double segment_extent:segment_extents)
     for(double horizon:{planning_horizon_m,.75*planning_horizon_m,
                         .5*planning_horizon_m,.375*planning_horizon_m}) {
       if(static_center_blocked) break;
@@ -924,16 +1119,84 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       // #VERIFIED_BRAKING_CANDIDATE_COMPARISON
       // map 도로의 같은 전체 계산 범위에서도 짧은 C2 연결은 불필요한 곡률과
       // 급감속을 만들 수 있다. 첫 속도 계획 시간 격자 안에 제동이 있으면 기존 두 배 길이
-      // 연결 한 개만 같은 초기 상태로 비교한다. 먼 미래의 말단 감속만 있을 때는
-      // 비교를 생략해 정상 순항의 계산량을 유지한다. 새 공간 창이나 다른 차선을
+      // 연결 한 개를 같은 초기 상태로 비교한다. 고속 후보의 비교 조건은 아래에서
+      // 기존 25m 이동 시간 안의 속도 손실도 확인한다. 새 공간 창이나 다른 차선을
       // 추가하지 않고, 정적 차단·전체 차체·도로·동적 충돌·정지선·속도·가감속·
       // jerk 검사를 통과한 후보 중 기존 시간 궤적 비용이 낮은 결과를 선택한다.
       // 비교 후보가 실패하거나 비용이 같으면 원래 검증된 후보를 유지한다.
       // ROI/검출 입력이 바뀌어도 같은 map 객체·도로 계약과 검사를 유지해야 한다.
-      if(segment_extent==p_.horizon_m && std::any_of(path.begin(),path.end(),
+      const double comparison_time=ego.speed_mps>0 ? std::min(duration,p_.horizon_m/ego.speed_mps) : 0;
+      const bool early_speed_loss=std::any_of(path.begin(),path.end(),[&](const PathPoint& point) {
+        return point.time_sec<=comparison_time && point.speed_mps<ego.speed_mps-1e-6;
+      });
+      const bool compare_scaled=!static_center_blocked && long_segment_extent>2*p_.horizon_m &&
+          segment_extent<=2*p_.horizon_m && early_speed_loss;
+      if(compare_scaled || (segment_extent==p_.horizon_m && std::any_of(path.begin(),path.end(),
           [&](const PathPoint& point){
             return point.time_sec<=p_.speed_time_step_sec && point.acceleration_mps2<0;
-          })) {
+          }))) {
+        // #LEAD_FOLLOWING_GEOMETRY_CHOICE
+        // 곡선 속도 목표보다 앞차 추종 목표가 낮은 직진에서는 검증된 중앙
+        // 형상을 유지한다. 가감속의 원인이 앞차인데 같은 중앙 형상을 두 길이로
+        // 다시 만드는 속도 탐색은 입력 만료를 일으켰다. 곡률이 목표를 제한하는
+        // 지점이 있거나 앞차가 목표를 낮추지 않으면 기존 형상 비교를 계속한다.
+        // 실제 변경/차선 유지 후보의 비용 비교는 아래에서 별도로 수행한다.
+        const double following_ceiling=std::min({p_.max_speed_mps,limits.maximum_speed_mps,limits.preferred_speed_mps});
+        const ArcPath timed_arc(path);
+        bool following_limited=false,curve_limited=false;
+        for(std::size_t i=0;i<path.size();++i) {
+          const auto& point=path[i];
+          const double following=followingSpeedTarget(c,point.pose,point.time_sec,following_ceiling,point.speed_mps,reference.at(origin.s+point.progress_m).yaw);
+          following_limited=following_limited || following<following_ceiling;
+          const double curvature=timed_arc.curvature(timed_arc.station[i],timed_arc.station[i]);
+          const double acceleration=p_.preferred_lateral_accel_mps2>0 ?
+              p_.preferred_lateral_accel_mps2 : p_.max_lateral_accel_mps2;
+          curve_limited=curve_limited || (curvature>1e-12 && std::sqrt(acceleration/curvature)<following);
+        }
+        if(following_limited && !curve_limited)return path;
+        if(compare_scaled) {
+          auto scaled=center_candidate(horizon,long_segment_extent);
+          if(!scaled.empty() && std::all_of(scaled.begin(),scaled.end(),[&](const PathPoint& point) {
+                return point.time_sec>comparison_time || point.speed_mps>=ego.speed_mps-1e-6;
+              }) && trajectoryCost(c,scaled,following_ceiling)<trajectoryCost(c,path,following_ceiling))
+            return scaled;
+          // #WIDENING_C2_CONNECTION
+          // map에서 짧은 합법 변경 lanelet 뒤로 연결 도로가 계속 열려 있어도
+          // 참조선의 짧은 전환을 그대로 따라가면 큰 곡률 때문에 접근부터 감속한다.
+          // 원본 map 좌표의 차로 개방 지점까지 기존 분할 C2로 접근한 다음,
+          // 같은 공간 창의 나머지를 하나의 C2로 연결해 완만한 변경도 비교한다.
+          // 개방 지점은 뒤쪽 output_step 격자로 올림해 이르지 않게 잡고,
+          // 접근 구간을 정수 격자로 나눠 기존 600구간 예산을 넘기지 않는다.
+          // 빠른 탐색을 가로막지 않도록 전체 beam에서만 한 후보를 추가하며,
+          // 기존 두 배 비교 시간 동안 초기 속도 유지와 더 낮은 비용을 요구한다.
+          // 원본 v/a·전체 차체·합법 도로·객체 예측·곡률·횡가속도·가감속·jerk
+          // 검사를 모두 통과해야 한다. GT ID나 특정 지도 좌표를 사용하지 않으며,
+          // 같은 map 객체 계약을 공급하는 LiDAR에도 적용된다. 복귀 중에는 쓰지
+          // 않고 실패하면 기존 후보를 보존한다. GlobalPath/경유점과 MPC는 유지한다.
+          if(beam_width==p_.speed_beam_width && ego.acceleration_mps2>=0 &&
+             c.native_region && !c.native_region->recovery_original &&
+             geometry_cache && geometry_cache->independent_entries) {
+            for(const auto& entry:*geometry_cache->independent_entries) {
+              const double opening=reference.project(entry,origin.s,reference.length()).s-origin.s;
+              if(opening<=p_.min_horizon_m || opening>=horizon-p_.min_horizon_m)continue;
+              const int steps=static_cast<int>(std::ceil(opening/p_.output_step_m));
+              const double approach=steps*p_.output_step_m;
+              if(approach<=p_.min_horizon_m || approach>=horizon-p_.min_horizon_m)continue;
+              const int count=static_cast<int>(std::ceil(approach/p_.horizon_m));
+              GeometrySchedule goals;
+              for(int i=0;i<count;++i)
+                goals.push_back({(steps/count+(i<steps%count ? 1 : 0))*p_.output_step_m,0});
+              goals.push_back({horizon-approach,0});
+              auto direct=timed_connection(center_geometry(goals));
+              if(!direct.empty() && std::all_of(direct.begin(),direct.end(),[&](const PathPoint& point) {
+                    return point.time_sec>std::min(duration,2*comparison_time) || point.speed_mps>=ego.speed_mps-1e-6;
+                  }) && trajectoryCost(c,direct,following_ceiling)<trajectoryCost(c,path,following_ceiling))
+                return direct;
+              break;
+            }
+          }
+        }
+        if(segment_extent!=p_.horizon_m) return path;
         auto alternative=center_candidate(horizon,2*p_.horizon_m);
         const double ceiling=std::min({p_.max_speed_mps,limits.maximum_speed_mps,limits.preferred_speed_mps});
         if(!alternative.empty() && trajectoryCost(c,alternative,ceiling)<trajectoryCost(c,path,ceiling))
@@ -969,12 +1232,66 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // 차선 경계를 건넌 뒤에는 출발 차선 유지 선택을 새로 시작하지 않는다.
     // 도로 합집합·합법 방향·차체·속도·가감속·jerk 한도는 유지하며,
     // GT ID를 사용하지 않아 같은 계약의 LiDAR 추적 객체에도 적용된다.
-    const bool compare_maneuvers=pending_lane_change && !predictions.current.empty() &&
-        requested_limits.maximum_speed_mps>0 && (timed_center.empty() ||
+    // #MANEUVER_SCENE_RELEVANCE
+    // 수 km 떨어진 객체 때문에 빈 도로와 다른 차선 후보를 비교하지 않는다.
+    // 전체 허용 도로의 바깥 범위에 원래 회전/차체 및 추종 거리 여유까지 더해
+    // 분리된 경우만 제외한다. 객체·ROI·예측 배열 자체는 그대로 사용한다.
+    bool maneuver_objects=false;
+    if(pending_lane_change && !predictions.current.empty()) {
+      Geometry::Bounds road_bounds;
+      for(const auto& point:boundary)road_bounds.include(point);
+      if(c.native_region)for(const auto& polygon:c.native_region->polygons)
+        for(const auto& point:polygon.outer())road_bounds.include({point.x(),point.y()});
+      maneuver_objects=potentialCollision(c,road_bounds,
+          p_.max_speed_mps*p_.following_time_headway_sec+p_.following_min_gap_m);
+    }
+    // #MEASURED_ACCELERATION_MERGE_CHOICE
+    // 현재 차선에 차체 전체가 남아 있는 합법 변경에서, 계획이 실측보다
+    // 큰 가속을 요구할 때의 뒤차 접근도 비교한다. R205에서는 계획 약 2m/s²,
+    // 실측 약 0.8m/s²의 차이로 합류 여유가 사라졌다. 같은 map 형상을 실측의
+    // 비음수 가속이 유지되는 시각표로 조회하고, 그 진행이 원래 계획보다
+    // 항상 뒤에 있을 때만 원래 예측 객체와 기존 swept 충돌 검사를 수행한다.
+    // 겹침이 예상되면 기존 현재 차선 후보도 비교해 간격을 확보하며 전진한다.
+    // 새 기하/속도 후보·계수·안전 한도나 속도 offset은 추가하지 않는다.
+    // 이 관찰 모델은 실행 가속의 보장이 아니라 후보 선택 기준이다. 반환
+    // 경로는 실측 초기 운동량과 기존 차체/도로/충돌/곡률/가감속/jerk 검사를
+    // 그대로 통과해야 한다. 현재 차선을 벗어난 뒤에는 새로운 유지 후보를
+    // 시작하지 않고, 감속 중에는 기존 선택을 보존한다. GT ID/지도 위치를
+    // 쓰지 않으므로 LiDAR도 동일한 map 절대 속도·bbox·예측 시각을 공급해야 한다.
+    bool measured_acceleration_conflict=false;
+    if(pending_lane_change && hold_reference && maneuver_objects &&
+       !timed_center.empty() && ego.acceleration_mps2>=0) {
+      const ArcPath arc(timed_center);
+      const double duration=timed_center.back().time_sec;
+      const SpeedEdge measured{0,ego.speed_mps,ego.acceleration_mps2,
+          ego.speed_mps+ego.acceleration_mps2*duration,ego.acceleration_mps2,0,duration};
+      bool behind_plan=false,bounded=true;
+      for(std::size_t i=0;i<timed_center.size();++i) {
+        const double station=measured.distance(timed_center[i].time_sec);
+        if(station>arc.station[i]+1e-8)bounded=false;
+        if(station<arc.station[i]-1e-6)behind_plan=true;
+      }
+      if(bounded && behind_plan)for(double time=0;time<duration;) {
+        const double next=std::min(duration,time+p_.speed_time_step_sec);
+        const SpeedEdge edge{measured.distance(time),measured.speed(time),ego.acceleration_mps2,
+            measured.speed(next),ego.acceleration_mps2,time,next-time};
+        if(!collisionEdgeClear(c,arc,edge)){measured_acceleration_conflict=true;break;}
+        time=next;
+      }
+    }
+    // #COMMITTED_LANE_CHANGE_TIMING
+    // 차체가 이미 두 차선에 걸쳐 현재 차선을 유지할 수 없다면, 검증된
+    // 중앙 변경 경로의 감속은 새로운 횡 후보 전체를 재탐색할 이유가 아니다.
+    // R211에서는 그 탐색이 전부 실패한 뒤 같은 중앙 경로를 늦게 반환하여
+    // 제어 입력 만료를 유발했다. 출발 차선 유지가 가능한 동안은 기존의
+    // 가속/유지/감속 비교를 수행하고, 유효 중앙 경로가 없으면 기존 회피 탐색을
+    // 계속한다. 실제 map 차체/객체·시간 계획과 모든 최종 검사는 유지한다.
+    const bool compare_maneuvers=pending_lane_change && maneuver_objects &&
+        (hold_reference || timed_center.empty()) && requested_limits.maximum_speed_mps>0 && (timed_center.empty() || measured_acceleration_conflict ||
         std::any_of(timed_center.begin(),timed_center.end(),[&](const PathPoint& point) {
           return point.time_sec<=p_.speed_time_step_sec && point.acceleration_mps2<0;
         }));
-    if(!timed_center.empty() && !compare_maneuvers) return timed_center;
+    if(!timed_center.empty() && !static_center_blocked && !compare_maneuvers) return prefer_body_reserve(timed_center);
     const double cap=std::min(p_.max_speed_mps,limits.maximum_speed_mps);
     // #STATIC_CREEP_SEARCH_COMPLETENESS
     // 현재 정지한 차량에게 첫 시간 격자 전체의 대기 후 작은 전진을 예약하면
@@ -1045,7 +1362,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
               goals.push_back({next,0});covered+=next;
             }
           }
-          const auto shape=cartesianPieces(c,ego,goals);
+          const auto shape=center_geometry(goals);
           if(shape.empty()) continue;
           const ArcPath arc(shape);
           const auto end=std::find_if(shape.begin(),shape.end(),[&](const PathPoint& q) {
@@ -1058,13 +1375,62 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
           if(stop_arc<0 && limits.release_time_sec>0) continue;
           auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
           if(!path.empty() && path.back().speed_mps>0 && has_initial_progress(path) &&
-             checkPlannedPath(ego,reference_map,predictions,limits,path)) return path;
+             checkPlannedPath(ego,reference_map,predictions,limits,path)) {
+            const double ceiling=std::min(cap,limits.preferred_speed_mps);
+            if(!timed_center.empty() && trajectoryCost(c,timed_center,ceiling)<trajectoryCost(c,path,ceiling))
+              return timed_center;
+            return path;
+          }
         }
       }
     }
+    std::vector<PathPoint> source_lane_shape;
+    if(hold_reference && compare_maneuvers) {
+      const Reference hold_road(*hold_reference);
+      const Context hold_context{hold_road,predictions,unused,boundary,0,offset,true,
+          &geometry->index,geometry->native_region.get()};
+      const double start=hold_road.project(ego.pose.position,0,hold_road.length()).s;
+      const double extent=std::min(planning_horizon_m,hold_road.length()-start-
+          std::hypot(p_.vehicle.front_m,p_.vehicle.width_m/2)-p_.road_margin_m-1e-6);
+      for(double fraction:{1.,.75,.5,.375}) {
+        const double horizon=extent*fraction;
+        if(horizon<p_.min_horizon_m)continue;
+        const int count=static_cast<int>(std::ceil(horizon/p_.horizon_m));
+        auto shape=cartesianPieces(hold_context,ego,
+            std::vector<std::pair<double,double>>(count,{horizon/count,0}),true);
+        if(!shape.empty()) {
+          source_lane_shape=std::move(shape);break;
+        }
+      }
+    }
+    // #VALIDATED_SOURCE_LANE_PRIORITY
+    // 차선 변경이 즉시 감속을 요구해도 현재 차선의 가속/유지 경로는 가능할 수
+    // 있다. 느린 앞차별 목표속도 비용 때문에 이 후보를 늦은 QP 탐색 뒤에
+    // 놓으면 불필요한 양보 감속과 입력 만료가 반복된다. 실제 출발 차선의
+    // 기존 C2 후보를 먼저 시간 계획하고, 초기 가속도보다 제동을 더하지 않는
+    // 경로만 선택한다. laneHoldReference는 전체 차체가 출발 차선에 포함될 때만
+    // 제공된다. 이미 변경 중인 차선을 되돌리는 shortcut으로 사용하지 않는다.
+    // 동일 map 예측·5초 시간축·차체·충돌·도로·속도·가감속·jerk 최종 검사를
+    // 모두 통과해야 한다. 변경이 감속 없이 가능하면 앞의 중앙 우선 반환을
+    // 유지하므로 빈 옆 차선 변경을 미루지 않는다. 실패 시 원래 후보 비교를
+    // 계속하고, 같은 계산 안의 형상·시간 결과만 재사용해 이전 경로를 발행하지 않는다.
+    std::vector<PathPoint> source_lane_plan;
+    if(!source_lane_shape.empty()) {
+      const ArcPath arc(source_lane_shape);
+      const double stop_arc=stopArc(ego,reference,arc,limits);
+      if(stop_arc>=0 || limits.release_time_sec<=0) {
+        source_lane_plan=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
+        if(!source_lane_plan.empty() && source_lane_plan.back().speed_mps>0 &&
+           std::all_of(source_lane_plan.begin(),source_lane_plan.end(),[&](const PathPoint& point) {
+             return point.time_sec>p_.speed_time_step_sec ||
+                 point.acceleration_mps2>=std::min(0.0,ego.acceleration_mps2)-1e-6;
+           }) && checkPlannedPath(ego,reference_map,predictions,limits,source_lane_plan))return source_lane_plan;
+      }
+    }
     std::vector<std::vector<PathPoint>> proposals;
-    proposals.push_back(generatePath(ego,reference_map,predictions,
-                       {{0,0},{planning_horizon_m,duration}},previous,true,planning_horizon_m));
+    std::size_t source_lane_proposal=std::numeric_limits<std::size_t>::max();
+    proposals.push_back(generate_geometry(
+                       {{0,0},{planning_horizon_m,duration}},true,planning_horizon_m));
     if(std::abs(origin.l)>1e-6) {
       std::vector<PathPoint> hold;
       const double extent=std::min(planning_horizon_m,reference.length()-origin.s-
@@ -1078,10 +1444,35 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         proposals.push_back(std::move(hold));
       }
     }
+    // #MERGE_SOURCE_LANE_CHOICE
+    // 합류 참조선에 일정한 횡 offset을 주어도 그 선의 횡이동을 따라가므로
+    // 현재 차선 유지 후보가 되지 않는다. 실제 출발 차선의 종방향 중심선으로
+    // 기존 C2 형상을 하나 만들고, 목표 참조선 기준 비용으로 변경 후보와 비교한다.
+    // 속도는 같은 예측 객체·실측 초기 v/a에서 다시 계획한다. 동일한 허용 도로,
+    // 차체·충돌·곡률·가감속·jerk 검사에 통과한 경우에만 선택하며, 변경 경로가
+    // 감속 없이 가능하면 위의 기존 중앙 우선 반환을 유지한다.
+    if(!source_lane_shape.empty()) {
+      source_lane_proposal=proposals.size();proposals.push_back(std::move(source_lane_shape));
+    }
     // Timing guesses only choose geometric obstacle sides for DP/QP. They are
     // never published, nor treated as measured ego speed. Final timing is solved
     // anew for each candidate and checked against the original predictions.
-    if(!predictions.current.empty()) {
+    // #RELEVANT_AVOIDANCE_GEOMETRY
+    // 먼 객체가 목록에만 있어도 추가 DP 후보가 짧은 감속 경로를 만들고,
+    // 아래의 일반 C2 창 탐색을 선점했다. 실제 초기 속도에서 최대 가속도를
+    // 즉시 적용한 예측 시간 전체의 이동 상한으로 자차 도달 범위를 감싼다.
+    // 모든 객체의 미래 위치·회전·bbox 여유와 이 범위가 완전히 분리될 때만
+    // 장애물용 추가 형상 탐색을 생략해 일반 도로와 같은 후보를 사용한다.
+    // 객체 목록·예측을 자르지 않으며 기존 정지거리·도로·시간별 충돌 검사는
+    // 모든 후보에 그대로 수행한다. GT ID·구간 번호에 의존하지 않아 같은
+    // map/절대 속도/bbox 계약의 LiDAR 추적 결과에도 적용된다.
+    Geometry::Bounds reachable_bounds;
+    const double maximum_travel=std::max(0.0,ego.speed_mps)*duration+
+        .5*p_.max_acceleration_mps2*duration*duration;
+    for(double x:{-maximum_travel,maximum_travel})
+      for(double y:{-maximum_travel,maximum_travel})
+        reachable_bounds.include(Geometry::add(ego.pose.position,{x,y}));
+    if(!predictions.current.empty() && potentialCollision(c,reachable_bounds,0)) {
       // #REACHABLE_AVOIDANCE_TIMING
       // 고속 가정 두 개만 검사하면 회피 곡선의 횡가속도 검사에서 전부 탈락해
       // 실제 저속으로 가능한 DP/QP 경로도 누락된다. 원래 두 후보를 우선하고,
@@ -1124,8 +1515,8 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         const double extent=std::min(proposal_extent,progressAt(timing,duration));
         if(constant_boxes && std::find(tried_extents.begin(),tried_extents.end(),extent)!=tried_extents.end())continue;
         tried_extents.push_back(extent);
-        proposals.push_back(generatePath(ego,reference_map,predictions,
-            timing,previous,false,proposal_extent,true));
+        proposals.push_back(generate_geometry(
+            timing,false,proposal_extent,true));
       }
     }
     double best=timed_center.empty() ? std::numeric_limits<double>::infinity() :
@@ -1147,12 +1538,13 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
           });
       }
       if(duplicate) continue;
-      const auto matched=matchInitialCurve(c,ego,shape);
+      const auto matched=i==source_lane_proposal ? shape : matchInitialCurve(c,ego,shape);
       if(matched.empty()) continue;
       const ArcPath arc(matched);
       const double stop_arc=stopArc(ego,reference,arc,limits);
       if(stop_arc<0 && limits.release_time_sec>0) continue;
-      auto path=planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
+      auto path=i==source_lane_proposal ? source_lane_plan :
+          planSpeed(c,arc,ego,limits,duration,stop_arc,reference_map,beam_width,truncated);
       if(path.empty() || !checkPlannedPath(ego,reference_map,predictions,limits,path)) continue;
       // #VERIFIED_CENTER_PRIORITY
       // 중앙 복귀가 실제 시간 계획과 모든 안전 검사를 통과해 계속 전진할 수
@@ -1225,8 +1617,8 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         // 계산 지연을 숨기기 위해 경로 시각·제어 입력 만료 한도를 바꾸지 않는다.
         auto matched=cartesianRecovery(c,ego,horizon,0);
         if(matched.empty()) {
-          const auto shape=generatePath(ego,reference_map,predictions,
-              {{0,0},{horizon,duration}},previous,true,horizon);
+          const auto shape=generate_geometry(
+              {{0,0},{horizon,duration}},true,horizon);
           matched=shape.empty() ? std::vector<PathPoint>{} : matchInitialCurve(c,ego,shape);
         }
         if(matched.empty() && origin.s+horizon<=reference.length()) {
@@ -1296,7 +1688,29 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         }
       }
     }
-    return result;
+    // #FUTURE_LANE_CHANGE_CURVE_CONNECTION
+    // map 경로에 앞으로의 합법 차선 변경이 있으면 hold_reference가 미리
+    // 만들어진다. 아직 변경을 시작하지 않은 일반 곡선까지 변경 중으로
+    // 분류하면 기존 15m 초기 연결이 차단되어, 실제 차체가 도로 안에 있고
+    // 추종이 정상이어도 첫 0.5초의 곡률/속도 연결 실패로 경로가 비었다.
+    // 원래 탐색이 전부 빈 경우에만 현재 map 뒷차축·실측 v/a/곡률에서
+    // 기존 네 공간 창의 15m QP 연결을 검사한다. 앞서 계산한 기하는 같은
+    // 호출의 cache에서 재사용하고 10m 시간 계획은 반복하지 않는다.
+    // 정상 결과와 실제 변경 중의 선택은 보존한다. 객체 예측·차체 전체
+    // 도로 포함·충돌·곡률·횡가속도·jerk와 최종 시간 경로 검사는 그대로다.
+    // 새로운 차선이나 정지 후 복귀 영역을 허용하지 않으며, GT ID나
+    // 구간 좌표에 의존하지 않아 LiDAR/ROI도 기존 map·시각 계약을 따른다.
+    if(result.empty() && pending_lane_change && hold_reference && !lane_change_) {
+      for(double horizon:{planning_horizon_m,.75*planning_horizon_m,.5*planning_horizon_m,.375*planning_horizon_m}) {
+        const int segments=static_cast<int>(std::ceil(horizon/p_.horizon_m));
+        const GeometrySchedule goals(segments,{horizon/segments,0});
+        auto smooth=center_geometry(goals);
+        if(smooth.empty())smooth=center_geometry(goals,true);
+        const auto candidate=timed_connection(conditionInitialGeometryWithin(c,ego,smooth,15.0));
+        if(!candidate.empty())return candidate;
+      }
+    }
+    return prefer_body_reserve(std::move(result));
   }
 
   // Rechecks the cubic-speed / arc-interpolated representation above. This is
@@ -1946,7 +2360,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
   };
   lanelet::routing::RoutingGraphConstPtr routing_graph_;
   mutable std::shared_ptr<const RoadGeometry> road_geometry_;
-  mutable std::set<std::uint32_t> pedestrian_caution_ids_;
+  mutable std::map<std::uint32_t,double> pedestrian_caution_distances_;
   std::shared_ptr<const RoadGeometry> roadGeometry(const std::vector<ReferencePoint>& points,
                                                 const Reference& reference) const {
     if(!road_geometry_ || road_geometry_->native_region!=active_native_region_ ||
@@ -1987,9 +2401,11 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
   struct FollowingObject {
     Geometry::Box box;
     Vec2 heading;
+    Vec2 velocity;
   };
   struct Context {
     mutable std::map<double,std::vector<FollowingObject>> following_objects;
+    mutable std::map<std::pair<double,double>,std::vector<ObjectBounds>> temporal_bounds;
     const Reference& reference;
     const Predictions& predictions;
     const std::vector<ProgressTime>& schedule;
@@ -2185,6 +2601,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       v+=a*h+jerk*h*h/2; a+=jerk*h; t+=h;
     };
     if(a<0 && v-out.cap<a*a/(2*j)) { append(-a/j,j); return out; }
+    if(a<-d) append((-d-a)/j,j);
     const double b=std::min(d,std::sqrt(std::max(0.0,j*(v-out.cap)+a*a/2)));
     append((a+b)/j,-j);
     if(b>0) {
@@ -2251,6 +2668,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     const std::vector<PathPoint>& points;
     std::vector<double> station;
     std::vector<double> position_curvature;
+    std::vector<double> heading_rates;
     std::vector<double> interpolation_knots;
     Geometry::Bounds bounds;
     double heading_per_meter=0;
@@ -2259,11 +2677,13 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       for(std::size_t i=1;i<input.size();++i)
         station.push_back(station.back()+Geometry::norm(Geometry::sub(input[i].pose.position,input[i-1].pose.position)));
       for(const auto& point:input) { bounds.include(point.pose.position); yaw_scale=std::max(yaw_scale,std::abs(point.pose.yaw_rad)); }
+      heading_rates.resize(input.size(),0);
       for(std::size_t i=1;i<input.size();++i) {
         const double distance=station[i]-station[i-1];
         const double angle=std::abs(Geometry::wrap(input[i].pose.yaw_rad-input[i-1].pose.yaw_rad));
-        if(distance>0) heading_per_meter=std::max(heading_per_meter,angle/distance);
-        else if(angle>0) heading_per_meter=std::numeric_limits<double>::infinity();
+        if(distance>0) heading_rates[i]=angle/distance;
+        else if(angle>0) heading_rates[i]=std::numeric_limits<double>::infinity();
+        heading_per_meter=std::max(heading_per_meter,heading_rates[i]);
       }
       position_curvature.resize(input.size(),0);
       for(std::size_t i=1;i+1<input.size();++i)
@@ -2291,7 +2711,40 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         interpolation_knots.push_back(station[i]);
       }
     }
+    // #SPATIAL_CURVATURE_SEARCH
+    // 실제 map 인접 차선 변경의 중앙 후보와 초기 기하 보정 후보에 최종
+    // 검사와 같은 output_step_m 균일 공간 곡률을 먼저 반영한다. 시간 표본 복원 뒤에야 곡률 초과를
+    // 발견하면 같은 속도 후보를 수백 번 거부해 제어 입력 만료를 유발한다.
+    // 원래 위치의 3점 곡률을 그 범위와 겹치는 기존 arc 구간 상한에 넣고,
+    // 속도 탐색 후 원래 전체 최종 검사를 계속 수행한다. 현재 후보만 바꾸며
+    // 보정 전 일반 곡선·도로 복귀와 다른 형상의 기존 계산/선택은 유지한다.
+    // 초기 v/a·차체/도로/충돌/곡률/횡가속도/jerk 한도와 시각은 유지한다.
+    // 새 계수·후보·GT ID는 없으며 LiDAR/ROI 통합도 같은 map bbox·예측
+    // 시각과 최종 전체 검사를 유지해야 한다.
+    void includeSpatialCurvature(double step) {
+      for(double s=step;s+step<=length();s+=step) {
+        const double k=std::abs(Geometry::curvature(at(s-step).pose.position,
+            at(s).pose.position,at(s+step).pose.position));
+        auto it=std::upper_bound(station.begin(),station.end(),s-step);
+        for(;it!=station.end() && *(it-1)<=s+step;++it) {
+          const std::size_t i=static_cast<std::size_t>(it-station.begin());
+          position_curvature[i-1]=std::max(position_curvature[i-1],k);
+          position_curvature[i]=std::max(position_curvature[i],k);
+        }
+      }
+    }
     double length() const { return station.back(); }
+    std::pair<double,double> headingBounds(double lo,double hi) const {
+      double rate=0,variation=0;
+      auto it=std::upper_bound(station.begin(),station.end(),lo);
+      for(;it!=station.end() && *(it-1)<=hi;++it) {
+        const double local=heading_rates[static_cast<std::size_t>(it-station.begin())];
+        rate=std::max(rate,local);
+        const double span=std::max(0.0,std::min(hi,*it)-std::max(lo,*(it-1)));
+        variation+=std::isfinite(local) ? span*local : std::numeric_limits<double>::infinity();
+      }
+      return {rate,variation};
+    }
     PathPoint at(double s) const {
       if(s<=0 || length()==0) return points.front();
       if(s>=length()) return points.back();
@@ -2370,9 +2823,36 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         if(planned) {
           const SpeedEdge edge{0,a.speed_mps,a.acceleration_mps2,b.speed_mps,b.acceleration_mps2,
                                a.time_sec,b.time_sec-a.time_sec};
-          for(double t:edge.extrema())
-            if(std::pow(edge.speed(t),2)*k>p_.max_lateral_accel_mps2+1e-6 &&
-               !(recoveringLateralExcess(initial,k,recovery) && belowRecovery(edge,recovery)))return false;
+          const auto extrema=edge.extrema();
+          const auto exceeds=[&](double t) {
+            return std::pow(edge.speed(t),2)*k>p_.max_lateral_accel_mps2+1e-6;
+          };
+          if(!std::any_of(extrema.begin(),extrema.end(),exceeds) ||
+             (recoveringLateralExcess(initial,k,recovery) && belowRecovery(edge,recovery)))continue;
+          // #SPATIAL_TIME_ALIGNMENT
+          // 균일 공간 재구성의 곡률 k는 map 뒷차축의 [lo,hi] 구간에 대한
+          // 상한이다. 일부만 겹치는 시간 edge의 구간 밖 속도까지 곱하면
+          // 감속 중인 정상 경로를 거부하고 같은 후보 탐색을 반복하게 된다.
+          // 전진 속도 다항식의 거리 적분을 이분해 실제 겹치는 시간 구간을
+          // 구하고, 그 양 끝과 구간 안의 모든 속도 극값을 검사한다.
+          // 최종 거리 일치 허용값 2e-6m만큼 공간 구간을 넓히고 이분 탐색의
+          // 바깥쪽 시각을 사용해 전체 구간을 보수적으로 포함한다. 기존
+          // 곡률·횡가속도 한도와 허용 오차, 도로·충돌·가감속·jerk 검사는
+          // 유지한다. ROI나 검출 원천과 무관하며 속도를 낮추거나 가산하지 않는다.
+          const auto time_at=[&](double distance,bool upper) {
+            if(distance<=0)return 0.0;
+            if(distance>=edge.distance(edge.h))return edge.h;
+            double left=0,right=edge.h;
+            for(int iteration=0;iteration<45;++iteration) {
+              const double middle=(left+right)/2;
+              if(edge.distance(middle)<distance)left=middle;else right=middle;
+            }
+            return upper ? right : left;
+          };
+          const double first=time_at(lo-arc.station[j-1]-2e-6,false);
+          const double last=time_at(hi-arc.station[j-1]+2e-6,true);
+          if(exceeds(first) || exceeds(last))return false;
+          for(double t:extrema)if(t>first && t<last && exceeds(t))return false;
         } else {
           const double speed=(arc.station[j]-arc.station[j-1])/(b.time_sec-a.time_sec);
           if(speed*speed*k>p_.max_lateral_accel_mps2+1e-6) return false;
@@ -2641,18 +3121,195 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     if(!checkPath(geometric,out)) return {};
     return out;
   }
-  double followingSpeedTarget(const Context& c,const Pose2& pose,double time,double cap) const {
+  // #REACHABLE_INITIAL_GEOMETRY
+  // 속도 계획이 실패한 C2 형상의 초기 10m만 같은 map 뒷차축 좌표로 다시
+  // 최적화한다. 시작 위치·방향·실측 곡률과 접속 끝의 위치·방향·곡률은
+  // 등식으로 고정한다. 제어기나 입력 시각을 바꾸지 않는다.
+  // ego의 전방축을 x로 둔 cubic B-spline y(x)의 계수를 기존 QP 계산기로
+  // 구한다. 현재 차체 방향의 실제 도로 합집합에서, 원래 형상 주변의 같은
+  // corridor 안에 있는 연결 성분만 사용한다. 첫 공간 표본을 두 번 더
+  // 나누어 초기 곡률 변화가 한 개의 25cm 표본에서 급증하지 않게 한다.
+  // 양의 초기 가속도를 기존 최대 jerk로 해제할 때의 불가피한 최고 속도까지
+  // 유지 가능한 곡률을 사용한다. |y''| 제한은 실제 곡률보다 보수적이며,
+  // QP 잔차 여유를 뺀다. 해가 있어도 전체 차체·진행 방향·공간 형상을 먼저
+  // 검사하고, 호출부에서 새 시간 계획·예측 충돌·가감속·jerk를 다시 검사한다.
+  // 뒤쪽 경로·속도 프로파일을 재사용하지 않는다. 표본 수와 QP 반복 수를
+  // 제한하며 GT ID·구간 번호를 쓰지 않아 같은 map 계약의 LiDAR에도 적용된다.
+  std::vector<PathPoint> conditionInitialGeometry(const Context& c,const EgoState& ego,
+                                                   const std::vector<PathPoint>& shape,bool extend_connection) const {
+    // #INITIAL_CONNECTION_REACHABILITY
+    // S자 도로에서 실측 곡률과 10m 뒤의 자세·곡률을 동시에 고정하면,
+    // 기존 jerk 제한 감속으로도 그 연결의 횡가속도를 만족하지 못할 수 있다.
+    // 먼저 기존 10m QP의 성공 결과를 그대로 유지한다. 일반 곡선 주행에서
+    // 연결이 없을 때만 같은 map 형상의 15m 끝점으로 같은 QP를 한 번 검사한다.
+    // 차선변경 중에는 기존 연결·후보 선택을 유지해 합류 탐색 비용을 늘리지 않는다.
+    // 64개 spline 분할·QP 반복 한도는 늘리지 않으며, 시작/끝 위치·방향·
+    // 곡률 등식과 실제 차체·도로 corridor를 보존한다. 연결 뒤의 형상은
+    // 그대로 잇고 호출부에서 원본 객체 예측으로 전체 시간 계획·swept 충돌·
+    // 횡가속도·가감속·jerk를 다시 검증한다. 실패한 경로를 발행하거나
+    // 이전 속도 계획을 재사용하지 않는다. GT ID·구간 번호에 의존하지 않아
+    // LiDAR/ROI 통합에서도 같은 map 객체·좌표·시각 계약을 사용해야 한다.
+    auto result=conditionInitialGeometryWithin(c,ego,shape,10.0);
+    if(!result.empty() || !extend_connection)return result;
+    return conditionInitialGeometryWithin(c,ego,shape,15.0);
+  }
+  std::vector<PathPoint> conditionInitialGeometryWithin(const Context& c,const EgoState& ego,
+                                                   const std::vector<PathPoint>& shape,double extent) const {
+    if(shape.size()<4)return {};
+    const auto endpoint=std::lower_bound(shape.begin(),shape.end(),std::min(extent,shape.back().progress_m),
+        [](const PathPoint& q,double s){return q.progress_m<s;});
+    if(endpoint==shape.end())return {};
+    const auto tangent=Geometry::unit(ego.pose.yaw_rad),normal=Geometry::normal(ego.pose.yaw_rad);
+    std::vector<double> gx,gy,gyaw;
+    for(auto it=shape.begin();it!=endpoint+1;++it) {
+      const auto delta=Geometry::sub(it->pose.position,ego.pose.position);
+      const double x=Geometry::dot(delta,tangent),y=Geometry::dot(delta,normal);
+      if(!gx.empty() && x<=gx.back()+1e-8)return {};
+      gx.push_back(x);gy.push_back(y);gyaw.push_back(Geometry::wrap(it->pose.yaw_rad-ego.pose.yaw_rad));
+    }
+    const double length=gx.back();
+    if(length<1 || std::abs(gyaw.back())>1)return {};
+    using Spline=Eigen::Spline<double,1,3>;
+    std::vector<double> breaks{0,.1,.2};
+    for(double x=p_.output_step_m;x<length-1e-8;x+=p_.output_step_m)breaks.push_back(x);
+    breaks.push_back(length);
+    if(breaks.size()>64)return {};
+    std::sort(breaks.begin(),breaks.end());
+    breaks.erase(std::unique(breaks.begin(),breaks.end(),[](double a,double b){return std::abs(a-b)<1e-8;}),breaks.end());
+    typename Spline::KnotVectorType knots(breaks.size()+6);
+    int k=0;for(int i=0;i<4;++i)knots(k++)=0;
+    for(std::size_t i=1;i+1<breaks.size();++i)knots(k++)=breaks[i]/length;
+    for(int i=0;i<4;++i)knots(k++)=1;
+    const int controls=knots.size()-4,m=breaks.size();
+    const auto basis=[&](double x,int derivative) {
+      Eigen::RowVectorXd row=Eigen::RowVectorXd::Zero(controls);
+      const double u=x/length;
+      const auto span=Spline::Span(u,3,knots);
+      const auto values=Spline::BasisFunctionDerivatives(u,derivative,3,knots);
+      row.segment(span-3,4)=values.row(derivative)/std::pow(length,derivative);
+      return row;
+    };
+    Eigen::MatrixXd b(m,controls),d1(m,controls),d2(m,controls),d3(m,controls);
+    Eigen::VectorXd guide(m),preferred(m),lower(m),upper(m),curvature(m);
+    const double peak_speed=ego.speed_mps+std::pow(std::max(0.0,ego.acceleration_mps2),2)/(2*p_.max_longitudinal_jerk_mps3);
+    const double hold_curvature=std::min(p_.max_curvature_inv_m,p_.max_lateral_accel_mps2/std::max(1e-8,peak_speed*peak_speed));
+    for(int i=0;i<m;++i) {
+      const double x=breaks[i];b.row(i)=basis(x,0);d1.row(i)=basis(x,1);d2.row(i)=basis(x,2);d3.row(i)=basis(x,3);
+      auto it=std::upper_bound(gx.begin(),gx.end(),x);const auto j=std::max<std::size_t>(1,std::min<std::size_t>(gx.size()-1,it-gx.begin()));
+      const double u=Geometry::clamp((x-gx[j-1])/(gx[j]-gx[j-1]),0.,1.);
+      guide[i]=Geometry::lerp(gy[j-1],gy[j],u);
+      const double yaw=Geometry::yawLerp(gyaw[j-1],gyaw[j],u);
+      RoadSample sample;sample.position=Geometry::add(ego.pose.position,Geometry::mul(tangent,x));sample.yaw=ego.pose.yaw_rad;
+      const auto intervals=roadLateralIntervals(c,sample,Geometry::wrap(ego.pose.yaw_rad+yaw),
+          guide[i]-p_.corridor_half_width_m,guide[i]+p_.corridor_half_width_m);
+      const auto range=std::find_if(intervals.begin(),intervals.end(),[&](const std::pair<double,double>& r){return guide[i]>=r.first-1e-8 && guide[i]<=r.second+1e-8;});
+      if(range==intervals.end())return {};
+      lower[i]=range->first;upper[i]=range->second;
+      // #FOOTPRINT_RESERVE
+      // 정상 C2 시간 계획은 호출부에서 즉시 반환해 기존 경로를 유지한다.
+      // 실패한 후보를 다시 최적화할 때만 도로 경계에 붙은 원래 형상 대신,
+      // 앞 범퍼·뒤 범퍼를 모두 포함하는 실제 허용 구간의 중앙을 비용 목표로
+      // 둔다. 뒷차축을 차체 중심으로 바꾸지 않고 같은 corridor 안에서만
+      // 횡 위치를 보정한다. 최종 실제 자세의 도로 포함 검사는 다시 수행한다.
+      preferred[i]=(lower[i]+upper[i])/2;
+      const double limit=hold_curvature;
+      curvature[i]=std::max(0.,limit-4*p_.qp_tolerance);
+    }
+    Eigen::MatrixXd equality(6,controls);
+    equality.row(0)=b.row(0);equality.row(1)=d1.row(0);equality.row(2)=d2.row(0);
+    equality.row(3)=b.row(m-1);equality.row(4)=d1.row(m-1);equality.row(5)=d2.row(m-1);
+    Eigen::VectorXd value(6);const double finish_slope=std::tan(gyaw.back());
+    value<<0,0,ego.curvature_inv_m,gy.back(),finish_slope,endpoint->curvature_inv_m*std::pow(1+finish_slope*finish_slope,1.5);
+    Eigen::FullPivLU<Eigen::MatrixXd> decomposition(equality);
+    if(decomposition.rank()!=6)return {};
+    const Eigen::VectorXd fixed=decomposition.solve(value);
+    const Eigen::MatrixXd kernel=decomposition.kernel();
+    Eigen::MatrixXd h=2*((p_.reference_weight+p_.dp_tracking_weight+p_.previous_weight)*b.transpose()*b+
+        p_.slope_weight*d1.transpose()*d1+p_.bending_weight*d2.transpose()*d2+p_.jerk_weight*d3.transpose()*d3);
+    Eigen::VectorXd q=-2*(p_.dp_tracking_weight+p_.previous_weight)*b.transpose()*preferred;
+    Eigen::MatrixXd a(2*m,controls);a.topRows(m)=b;a.bottomRows(m)=d2;
+    Eigen::VectorXd lo(2*m),hi(2*m);lo.head(m)=lower;hi.head(m)=upper;lo.tail(m)=-curvature;hi.tail(m)=curvature;
+    q=(kernel.transpose()*(q+h*fixed)).eval();h=(kernel.transpose()*h*kernel).eval();
+    lo-=a*fixed;hi-=a*fixed;a=(a*kernel).eval();
+    Eigen::VectorXd x=Eigen::VectorXd::Zero(kernel.cols());
+    // #DISTANCE_DEPENDENT_CURVATURE
+    // 기존의 초기 최고 속도 기준 QP가 성공하면 같은 해를 그대로 유지한다.
+    // 실패했을 때만 기존 최대 jerk·감속 정지 포락선에서 거리별 속도를 구해
+    // 곡률 제안 구간을 넓히고 같은 QP를 한 번 더 푼다. 이를 먼저 적용하면
+    // 기존 R182 연결이 실패하는 회귀가 있어 기존 성공 순서를 보존한다.
+    // 초기 실측 v/a·C2 등식·도로 corridor·QP 오차는 유지한다. 전방 x와
+    // 실제 arc 거리는 다르므로 이 제안 자체를 주행 승인으로 쓰지 않는다.
+    // 아래의 전체 형상 검사와 호출부의 새 시간 계획·원본 객체 예측·충돌·
+    // 횡가속도·가감속·jerk 검사를 모두 통과해야 발행한다. 반복은 두 번으로
+    // 제한하며 GT ID나 특정 구간에 의존하지 않아 LiDAR 추적에도 적용된다.
+    if(!solveBoundedQp(h,q,a,lo,hi,x)) {
+      PlanningConstraints stop_limits;stop_limits.maximum_speed_mps=0;
+      const auto braking=ceilingRecovery(ego,stop_limits);
+      const auto reachable_speed=[&](double distance) {
+        double station=0;
+        for(std::size_t phase_index=0;phase_index<braking.count;++phase_index) {
+          const auto& phase=braking.phase[phase_index];
+          const auto travelled=[&](double t){return phase.v*t+phase.a*t*t/2+phase.j*t*t*t/6;};
+          const double end=station+travelled(phase.h);
+          if(distance<=end) {
+            double left=0,right=phase.h;
+            for(int iteration=0;iteration<45;++iteration) {
+              const double middle=(left+right)/2;
+              if(station+travelled(middle)<distance)left=middle;else right=middle;
+            }
+            return std::max(0.0,phase.speed((left+right)/2));
+          }
+          station=end;
+        }
+        return 0.0;
+      };
+      bool expanded=false;
+      for(int i=0;i<m;++i) {
+        const double speed=reachable_speed(breaks[i]);
+        const double limit=std::min(p_.max_curvature_inv_m,p_.max_lateral_accel_mps2/std::max(1e-8,speed*speed));
+        const double increase=std::max(0.0,std::max(0.0,limit-4*p_.qp_tolerance)-curvature[i]);
+        lo[m+i]-=increase;hi[m+i]+=increase;expanded=expanded || increase>0;
+      }
+      if(!expanded)return {};
+      x.setZero();
+      if(!solveBoundedQp(h,q,a,lo,hi,x))return {};
+    }
+    const Eigen::VectorXd coefficients=fixed+kernel*x;
+    std::vector<PathPoint> output;
+    for(double station:breaks) {
+      const double y=(basis(station,0)*coefficients)[0],dy=(basis(station,1)*coefficients)[0],ddy=(basis(station,2)*coefficients)[0];
+      const auto position=Geometry::add(ego.pose.position,Geometry::add(Geometry::mul(tangent,station),Geometry::mul(normal,y)));
+      const double progress=station/length*endpoint->progress_m;
+      output.push_back({{position,Geometry::wrap(ego.pose.yaw_rad+std::atan(dy))},progress,progress,ddy/std::pow(1+dy*dy,1.5)});
+    }
+    output.front().pose=ego.pose;output.front().curvature_inv_m=ego.curvature_inv_m;
+    output.back()=*endpoint;output.back().time_sec=output.back().progress_m;
+    for(auto it=endpoint+1;it!=shape.end();++it){auto point=*it;point.time_sec=point.progress_m;output.push_back(point);}
+    const auto origin=c.reference.project(ego.pose.position,0,c.reference.length());
+    const Context geometric{c.reference,c.predictions,c.schedule,c.boundary,origin.s,c.prediction_offset,true,&c.boundary_index,c.native_region,c.proposal_timing};
+    if(!lateralSlopeClear(geometric,output) || !checkPath(geometric,output))return {};
+    return output;
+  }
+  double followingSpeedTarget(const Context& c,const Pose2& pose,double time,double cap,double ego_speed,double road_yaw) const {
     // #LEAD_VEHICLE_HEADWAY
     // 고정 0.25m 충돌 여유만으로 속도를 최적화하면 느린 앞차의 범퍼까지
     // 접근하는 계획이 선택된다. map 경로상의 각 예정 자세에서 같은 방향의
     // 차량 예측을 조회하고, 실제 차체의 횡 투영이 겹치는 앞차만 추종한다.
     // 뒷차축→앞범퍼와 상대 OBB의 전방 투영을 빼 실제 범퍼 간격을 구한다.
-    // 목표속도는 (간격-정지여유)/추종시간 이하로 낮춘다. 옆 차선·뒤차·
+    // 목표속도에는 아래 상대속도 보정을 적용한다. 옆 차선·뒤차·
     // 교차 차량은 이 추종 목표에서 제외하며 원래 시간별 충돌 검사가 담당한다.
     // 이는 기존 속도 비용의 목표값이지 새 물리 속도 제약이 아니다. 따라서
     // 현재 속도를 순간 삭제하지 않고 원래 가감속/jerk 한도에서 감속한다.
     // headway는 추종 여유이며 급제동·모델 오차에 대한 안전 보증은 아니다.
     // ROI는 앞차를 임의 제거하면 안 되며 bbox와 예측 시각 계약을 유지한다.
+    // #RELATIVE_GAP_PREVIEW
+    // 현재 간격만 쓰면 더 빠르게 멀어지는 앞차에도 제동하고, 느린 앞차에는
+    // 여유가 부족해진 뒤 감속한다. 같은 map 예측의 절대 속도를 경로 전방으로
+    // 투영하고 후보 자차 속도를 빼, 기존 응답 시간 동안의 간격 변화를 구한다.
+    // 이 변화만 기존 headway 목표에 더한다. 벌어지는 간격은 불필요한 감속을
+    // 줄이고, 좁아지는 간격은 속도에 비례해 감속 시점을 앞당긴다. 현재 정지
+    // 여유 이하의 간격은 이 보정으로 풀지 않는다. 예측·bbox·hard 충돌 검사,
+    // 물리 한도와 제어기는 유지하며 GT ID나 검출 원천에 의존하지 않는다.
     // #FOLLOWING_PREDICTION_REUSE
     // 같은 Context 안의 속도 후보들은 동일한 예측 배열·시각을 사용한다.
     // 후보마다 모든 객체의 같은 보간·OBB·방향 계산을 반복하지 않고 시각별
@@ -2666,21 +3323,54 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         if(c.predictions.current[j].kind!=ObjectKind::Vehicle) continue;
         const auto object=samplePrediction(c.predictions,j,c.prediction_offset+time);
         objects.push_back({Geometry::objectBox(object,p_.obstacle_margin_m),
-                           Geometry::unit(object.pose.yaw_rad)});
+                           Geometry::unit(object.pose.yaw_rad),object.velocity_mps});
       }
       found=c.following_objects.emplace(time,std::move(objects)).first;
     }
-    const auto forward=Geometry::unit(pose.yaw_rad),left=Geometry::normal(pose.yaw_rad);
+    // #LOW_SPEED_FOLLOWING
+    // 저속에서 일정한 1.5초 목표를 강제하면 동일 속도의 앞차 뒤에서도
+    // 여유를 다시 벌리기 위한 감속이 반복된다. 후보 자차 속도가 0→설정
+    // 전환 속도로 증가할 때 저속 headway→기존 headway를 연속 보간한다.
+    // 전환 속도 이상은 기존 식과 같다. map 예측·범퍼 간격·상대속도 응답은
+    // 그대로 사용하며 2m 정지 여유, swept 충돌, 가감속/jerk 검사는 줄이지 않는다.
+    // 검출 원천이나 객체 ID에 의존하지 않는다. ROI 통합 시 앞차/예측을
+    // 누락시키지 말고 실제 bbox·속도·시각 계약을 유지해야 한다.
+    const double headway=Geometry::lerp(p_.following_low_speed_headway_sec>0 ?
+        p_.following_low_speed_headway_sec : p_.following_time_headway_sec,
+        p_.following_time_headway_sec,Geometry::clamp(ego_speed/p_.following_headway_transition_mps,0,1));
+    // #ROAD_RELATIVE_SPEED
+    // 같은 map 참조선 접선으로 두 차량의 속도를 투영한다. 차선 변경 중
+    // 자차 경로 yaw가 기울어도 옆 차 절대속도의 크기로 추월 여부를 판단하지
+    // 않는다. 실제 회전 차체의 횡 중첩과 앞범퍼 투영을 사용하고, 도로축의
+    // 목표는 경로축 속도로 환산해 같은 속도 비용·충돌 검사에 전달한다.
+    const auto forward=Geometry::unit(road_yaw),left=Geometry::normal(road_yaw);
+    const double along=Geometry::dot(Geometry::unit(pose.yaw_rad),forward);
+    if(along<=.5)return cap;
+    const auto own_box=Geometry::egoBox(pose,p_.vehicle);
+    const double front=Geometry::dot(Geometry::sub(own_box.pose.position,pose.position),forward)+
+        Geometry::extent(own_box,forward);
+    const double road_speed=ego_speed*along;
     for(const auto& object:found->second) {
       if(Geometry::dot(forward,object.heading)<=.5) continue;
       const auto delta=Geometry::sub(object.box.pose.position,pose.position);
       const double longitudinal=Geometry::dot(delta,forward);
       if(longitudinal<=0) continue;
       const auto& box=object.box;
-      if(std::abs(Geometry::dot(delta,left))>
-         p_.vehicle.width_m/2+Geometry::extent(box,left)) continue;
-      const double gap=longitudinal-p_.vehicle.front_m-Geometry::extent(box,forward);
-      cap=std::min(cap,std::max(0.0,(gap-p_.following_min_gap_m)/p_.following_time_headway_sec));
+      if(std::abs(Geometry::dot(Geometry::sub(box.pose.position,own_box.pose.position),left))>
+         Geometry::extent(own_box,left)+Geometry::extent(box,left)) continue;
+      const double gap=longitudinal-front-Geometry::extent(box,forward);
+      if(gap<=p_.following_min_gap_m) { cap=0; continue; }
+      const double lead_speed=Geometry::dot(object.velocity,forward);
+      const double gap_target=std::max(0.0,(gap-p_.following_min_gap_m+
+          (lead_speed-road_speed)*p_.speed_limit_response_sec)/headway);
+      // #SEPARATING_LEAD_SPEED
+      // 차체가 분리되어 있고 앞차가 더 빨라 간격이 벌어질 때에는 현재의
+      // 짧은 간격만으로 목표속도를 낮추지 않는다. 그 앞차 속도까지의 가속을
+      // 비용 목표로 허용하며 후보의 실제 가속·jerk와 전 시간 충돌 검사는
+      // 그대로 적용한다. 상대속도가 닫히면 기존 간격 목표로 돌아가므로
+      // 빠른 앞차를 관측했다는 이유로 뒤따라 충돌하는 후보를 허용하지 않는다.
+      const double target=lead_speed>road_speed ? std::max(gap_target,lead_speed) : gap_target;
+      cap=std::min(cap,target/along);
     }
     return cap;
   }
@@ -2696,7 +3386,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       const auto q=arc.at(edge.s0+edge.distance(t));
       const auto r=c.reference.at(origin_s+q.progress_m);
       const double l=Geometry::dot(Geometry::sub(q.pose.position,r.position),Geometry::normal(r.yaw));
-      const double following_target=followingSpeedTarget(c,q.pose,edge.t0+t,cap);
+      const double following_target=followingSpeedTarget(c,q.pose,edge.t0+t,cap,edge.speed(t),r.yaw);
       double target=following_target;
       // #CURVE_TRACKING_RESERVE
       // R53은 계획 1.91m/s²와 작은 속도/곡률 추종 오차가 합쳐 실측
@@ -2752,6 +3442,21 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     return cost;
   }
 
+  // #MEASURED_BRAKING_RELEASE
+  // IMU가 전달한 실제 종가속도는 map 경로를 따라가는 뒷차축의 초기 상태다.
+  // 실제 제동이 설정 감속 한도를 넘은 순간도 값을 잘라내지 않고 보존한다.
+  // 이미 발생한 초과 구간에서만 최대 양의 jerk로 즉시 제동을 해제한
+  // a(t)=a0+J*t를 하한으로 사용한다. |jerk|<=J와 초기 상태 일치 검사 때문에
+  // 초과 제동을 유지하거나 더 강하게 만드는 후보는 허용되지 않는다.
+  // -max_deceleration에 도달한 뒤에는 원래 하한을 그대로 적용한다.
+  // 같은 해제 구간을 속도 탐색 시간 격자·정지 거리·속도 상한 복귀에도
+  // 반영한다. 도로 전체 차체·예측 충돌·정지선·횡가속도와 가감속/jerk
+  // 최종 검사는 유지하며, 해제 전에 역주행이 불가피하면 경로를 내지 않는다.
+  // 새 감속 한도나 제어 명령을 추가하지 않으며 GT/LiDAR·ROI와 무관하다.
+  double minimumPlannedAcceleration(const EgoState& ego,double time) const {
+    return std::min(-p_.max_deceleration_mps2,
+                    ego.acceleration_mps2+p_.max_longitudinal_jerk_mps3*time);
+  }
   bool speedAdmissible(const SpeedEdge& edge,const EgoState& ego,const PlanningConstraints& limits,
                        double curvature,const CeilingRecovery& recovery) const {
     const double cap=std::min(p_.max_speed_mps,limits.maximum_speed_mps);
@@ -2764,11 +3469,18 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
                             initial_peak>cap;
     const double ceiling=edge.v0<=cap+1e-8 && !initial_ramp ? cap : std::max(cap,initial_peak);
     if(!std::isfinite(curvature) || curvature>p_.max_curvature_inv_m+1e-6) return false;
-    for(double t:edge.extrema()) {
+    auto acceleration_times=edge.extrema();
+    if(ego.acceleration_mps2<-p_.max_deceleration_mps2) {
+      const auto add=[&](double t){if(t>0 && t<edge.h)acceleration_times.push_back(t);};
+      add((-p_.max_deceleration_mps2-ego.acceleration_mps2)/p_.max_longitudinal_jerk_mps3-edge.t0);
+      if(std::abs(edge.c3())>1e-12)
+        add((p_.max_longitudinal_jerk_mps3-2*edge.c2())/(6*edge.c3()));
+    }
+    for(double t:acceleration_times) {
       const double v=edge.speed(t),a=edge.acceleration(t),j=edge.jerk(t);
       if(!std::isfinite(v) || !std::isfinite(a) || !std::isfinite(j) || v<-1e-8 ||
          v>ceiling+1e-8 || a>p_.max_acceleration_mps2+1e-8 ||
-         a<-p_.max_deceleration_mps2-1e-8 || std::abs(j)>p_.max_longitudinal_jerk_mps3+1e-8 ||
+         a<minimumPlannedAcceleration(ego,edge.t0+t)-1e-8 || std::abs(j)>p_.max_longitudinal_jerk_mps3+1e-8 ||
          (v*v*curvature>p_.max_lateral_accel_mps2+1e-6 &&
           !recoveringLateralExcess(ego,curvature,recovery))) return false;
     }
@@ -2904,36 +3616,40 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
                                                  double time0=std::numeric_limits<double>::quiet_NaN(),
                                                  double time1=std::numeric_limits<double>::quiet_NaN(),
                                                  double ego_yaw=std::numeric_limits<double>::quiet_NaN()) const {
+    // #PREDICTION_SWEEP_REUSE
+    // 같은 속도 layer의 모든 후보는 동일한 예측 시간 구간을 검사한다.
+    // 객체 중심의 시간 구간 바깥 범위만 Context 안에 재사용한다. 후보별 자차
+    // 위치·회전·속도 보간 여유와 정밀 SAT는 그대로이며 다음 관측과 공유하지 않는다.
+    const std::vector<ObjectBounds>* bounds=&c.object_bounds;
+    const double horizon=c.predictions.step_sec*kPredictionSteps;
+    if(std::isfinite(time0) && std::isfinite(time1) && time0>=0 && time1>=time0 && time1<=horizon) {
+      const auto key=std::make_pair(time0,time1);
+      auto found=c.temporal_bounds.find(key);
+      if(found==c.temporal_bounds.end()) {
+        auto objects=c.object_bounds;
+        for(std::size_t j=0;j<objects.size();++j) {
+          const auto center=[&](double time) {
+            const double scaled=time/c.predictions.step_sec;
+            const auto lo=std::min(static_cast<std::size_t>(scaled),kPredictionSteps-1);
+            const auto& a=(lo==0?c.predictions.current:c.predictions.future[lo-1])[j];
+            const auto& b=c.predictions.future[lo][j];
+            return Geometry::lerp(a.pose.position,b.pose.position,scaled-lo);
+          };
+          auto& box=objects[j];box.centers=Geometry::Bounds{};
+          box.centers.include(center(time0));box.centers.include(center(time1));
+          for(std::size_t k=1;k<kPredictionSteps;++k) {
+            const double time=k*c.predictions.step_sec;
+            if(time>time0 && time<time1)box.centers.include(c.predictions.future[k-1][j].pose.position);
+          }
+        }
+        found=c.temporal_bounds.emplace(key,std::move(objects)).first;
+      }
+      bounds=&found->second;
+    }
     std::vector<std::size_t> indices;const double radius=egoCollisionRadius(motion_pad,angle);
     for(std::size_t j=0;j<c.object_bounds.size();++j) {
       if(!potentialObjectCollision(c.object_bounds[j],rear_axle,radius))continue;
-      // #TEMPORAL_COLLISION_BOUNDS
-      // 5초 예측 전체에서 차선에 도달하는 뒤차를 모든 짧은 속도 edge에서
-      // 정밀 검사하면 시간 표본 생성이 반복되어 제어 입력이 만료된다.
-      // map 객체의 중심은 기존 samplePrediction과 같은 knot 사이 선형
-      // 보간이므로 검사 시간의 양 끝과 그 사이 모든 예측 knot를 감싼다.
-      // bbox 크기·불확실성·가속도 보간 여유·회전 팽창은 전체 예측의 기존
-      // 상한을 그대로 사용한다. 시각 범위가 불확실하면 전체 범위로 검사한다.
-      // 이 바깥 범위까지 분리된 객체만 생략하고, 겹치는 뒤차·횡단 객체는
-      // 원래 45회 시간 역산·swept SAT를 수행한다. ROI나 안전 한도는 바꾸지 않는다.
-      auto bounded=c.object_bounds[j];
-      const double horizon=c.predictions.step_sec*kPredictionSteps;
-      if(std::isfinite(time0) && std::isfinite(time1) && time0>=0 &&
-         time1>=time0 && time1<=horizon) {
-        const auto center=[&](double time) {
-          const double scaled=time/c.predictions.step_sec;
-          const auto lo=std::min(static_cast<std::size_t>(scaled),kPredictionSteps-1);
-          const auto& a=(lo==0?c.predictions.current:c.predictions.future[lo-1])[j];
-          const auto& b=c.predictions.future[lo][j];
-          return Geometry::lerp(a.pose.position,b.pose.position,scaled-lo);
-        };
-        bounded.centers=Geometry::Bounds{};
-        bounded.centers.include(center(time0));bounded.centers.include(center(time1));
-        for(std::size_t k=1;k<kPredictionSteps;++k) {
-          const double time=k*c.predictions.step_sec;
-          if(time>time0 && time<time1)bounded.centers.include(c.predictions.future[k-1][j].pose.position);
-        }
-      }
+      const auto& bounded=(*bounds)[j];
       // #AXIS_ALIGNED_SWEEP_BOUNDS
       // 평행 차선 차량은 외접원끼리 겹쳐도 실제 폭 방향으로 분리될 수 있다.
       // map X/Y별 반길이를 사용하되 기존 swept SAT의 회전 팽창까지 감싼다.
@@ -3025,44 +3741,63 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       max_acceleration=std::max(max_acceleration,std::abs(edge.acceleration(t)));
       min_speed=std::min(min_speed,edge.speed(t));
     }
-    const double radius=std::hypot(std::max(p_.vehicle.front_m,p_.vehicle.rear_m),p_.vehicle.width_m/2);
-    // 각 시간 구간의 각도/거리 비는 선형 arc의 상한과 반올림 오차로 감싼다.
-    // 기존 d>1e-12 분기와 같은 최소 분모를 사용한다. 큰 좌표의 오차는
-    // 범위를 넓혀 공간 선별의 이득만 줄이며, 충돌 검사 범위를 줄이지 않는다.
-    const double scale=std::max({1.0,std::abs(arc.bounds.min_x),std::abs(arc.bounds.min_y),
-                                std::abs(arc.bounds.max_x),std::abs(arc.bounds.max_y)});
-    const double error=128*std::numeric_limits<double>::epsilon();
-    const double heading_bound=arc.heading_per_meter+
-        (arc.heading_per_meter*error*scale+error*arc.yaw_scale)/1e-12;
-    const double motion_bound=max_acceleration*edge.h*edge.h/8*(1+radius*heading_bound);
-    // #SPEED_EDGE_BOUNDS
-    // 짧은 속도 edge와 관계없는 전체 경로를 사용하면 멀리 있는 장애물 때문에도
-    // 매 후보마다 정밀 SAT가 반복된다. 비음수 속도 edge의 실제 arc 시작·끝과
-    // 그 사이 모든 꺾임점을 포함한다. 선형 arc 보간은 이 AABB 밖으로 나가지
-    // 않으며 곡선 중간 돌출도 빠지지 않는다. 부호가 바뀌는 비단조 구간은 기존
-    // 전체 범위를 유지한다. 객체 예측, 회전 팽창 및 정밀 시간 샘플은 유지한다.
-    Geometry::Bounds edge_bounds=arc.bounds;
-    if(min_speed>=0) {
-      edge_bounds=Geometry::Bounds{};
-      const double end=edge.s0+edge.distance(edge.h);
-      edge_bounds.include(arc.at(edge.s0).pose.position);
-      edge_bounds.include(arc.at(end).pose.position);
-      auto knot=std::upper_bound(arc.station.begin(),arc.station.end(),edge.s0);
-      for(;knot!=arc.station.end() && *knot<end;++knot)
-        edge_bounds.include(arc.points[static_cast<std::size_t>(knot-arc.station.begin())].pose.position);
-    }
-    // 같은 보수적 선별을 객체별로 한 번 적용해, 이미 분리된 먼 객체의 SAT를
-    // 모든 시간 표본에서 반복하지 않는다. 원본 객체 배열과 순서는 보존한다.
-    // #ROTATION_BOUNDS
-    // swept SAT가 각 표본에 부여하는 회전 팽창도 선별 범위에 포함한다. 매번
-    // 최악의 180도 회전을 가정하는 대신 해당 arc의 최대 yaw/거리 비와 이동
-    // 거리로 감싸고, 객체는 예측 knot 사이 최대 회전으로 감싼다. knot에서
-    // 시간 구간을 나누는 원래 정밀 검사와 반올림 여유는 그대로 유지한다.
-    const double angle=std::min(Geometry::kPi,arc.heading_per_meter*
-        std::abs(edge.distance(edge.h))+error*arc.yaw_scale+1e-10);
-    const auto indices=collisionObjectIndices(c,edge_bounds,motion_bound,min_speed>=0?angle:Geometry::kPi,
-        c.prediction_offset+edge.t0,c.prediction_offset+edge.t0+edge.h,arc.at(edge.s0).pose.yaw_rad);
+    const auto candidates=[&](double lo,double hi) {
+      const double begin=edge.s0+edge.distance(lo),end=edge.s0+edge.distance(hi);
+      const double span=hi-lo;
+      const double radius=std::hypot(std::max(p_.vehicle.front_m,p_.vehicle.rear_m),p_.vehicle.width_m/2);
+      // 각 시간 구간의 각도/거리 비는 선형 arc의 상한과 반올림 오차로 감싼다.
+      // 기존 d>1e-12 분기와 같은 최소 분모를 사용한다. 큰 좌표의 오차는
+      // 범위를 넓혀 공간 선별의 이득만 줄이며, 충돌 검사 범위를 줄이지 않는다.
+      const double scale=std::max({1.0,std::abs(arc.bounds.min_x),std::abs(arc.bounds.min_y),
+                                  std::abs(arc.bounds.max_x),std::abs(arc.bounds.max_y)});
+      const double error=128*std::numeric_limits<double>::epsilon();
+      // #LOCAL_SWEEP_ROTATION_BOUND
+      // 짧은 시간 edge에 150m 뒤 커브의 회전율을 적용하면 직선 옆차도 정밀
+      // 검사 대상으로 팽창해 경로가 제어 입력 수명보다 늦어진다. 비음수 속도일
+      // 때 실제 이동 arc 구간의 yaw/거리 비와 yaw 총변동 상한을 사용한다.
+      // headingBounds()는 그 사이 모든 knot 구간을 포함한다. 부호가 바뀌는 이동은
+      // 기존 전체 상한을 쓰고, 반올림·객체 회전 여유와 최종 swept SAT는 유지한다.
+      const auto heading=min_speed>=0 ? arc.headingBounds(begin,end) :
+          std::make_pair(arc.heading_per_meter,Geometry::kPi);
+      const double heading_rate=heading.first;
+      const double heading_bound=heading_rate+
+          (heading_rate*error*scale+error*arc.yaw_scale)/1e-12;
+      const double motion_bound=max_acceleration*span*span/8*(1+radius*heading_bound);
+      // #SPEED_EDGE_BOUNDS
+      // 짧은 속도 edge와 관계없는 전체 경로를 사용하면 멀리 있는 장애물 때문에도
+      // 매 후보마다 정밀 SAT가 반복된다. 비음수 속도 edge의 실제 arc 시작·끝과
+      // 그 사이 모든 꺾임점을 포함한다. 선형 arc 보간은 이 AABB 밖으로 나가지
+      // 않으며 곡선 중간 돌출도 빠지지 않는다. 부호가 바뀌는 비단조 구간은 기존
+      // 전체 범위를 유지한다. 객체 예측, 회전 팽창 및 정밀 시간 샘플은 유지한다.
+      Geometry::Bounds edge_bounds=arc.bounds;
+      if(min_speed>=0) {
+        edge_bounds=Geometry::Bounds{};
+        edge_bounds.include(arc.at(begin).pose.position);
+        edge_bounds.include(arc.at(end).pose.position);
+        auto knot=std::upper_bound(arc.station.begin(),arc.station.end(),begin);
+        for(;knot!=arc.station.end() && *knot<end;++knot)
+          edge_bounds.include(arc.points[static_cast<std::size_t>(knot-arc.station.begin())].pose.position);
+      }
+      // 같은 보수적 선별을 객체별로 한 번 적용해, 이미 분리된 먼 객체의 SAT를
+      // 모든 시간 표본에서 반복하지 않는다. 원본 객체 배열과 순서는 보존한다.
+      // #ROTATION_BOUNDS
+      // swept SAT가 각 표본에 부여하는 회전 팽창도 선별 범위에 포함한다. 매번
+      // 최악의 180도 회전을 가정하는 대신 해당 arc의 최대 yaw/거리 비와 이동
+      // 거리로 감싸고, 객체는 예측 knot 사이 최대 회전으로 감싼다. knot에서
+      // 시간 구간을 나누는 원래 정밀 검사와 반올림 여유는 그대로 유지한다.
+      const double angle=std::min(Geometry::kPi,heading.second+error*arc.yaw_scale+1e-10);
+      return collisionObjectIndices(c,edge_bounds,motion_bound,min_speed>=0?angle:Geometry::kPi,
+          c.prediction_offset+edge.t0+lo,c.prediction_offset+edge.t0+hi,arc.at(begin).pose.yaw_rad);
+    };
+    auto indices=candidates(0,edge.h);
     if(indices.empty())return true;
+    // #COLLIDING_ENDPOINT_PRUNE
+    // edge 끝에서 원래 OBB 검사상 이미 충돌하면 중간 knot의 시간 역산을
+    // 먼저 할 필요가 없다. 끝점은 기존 연속 sweep에 포함되므로 이 후보만
+    // 조기 거부한다. 끝점이 비충돌이라는 이유로 통과시키지 않으며, 나머지는
+    // 동일한 시간 분할·불확실성·swept SAT로 전체 이동을 계속 검사한다.
+    auto last=arc.at(edge.s0+edge.distance(edge.h));last.time_sec=edge.t0+edge.h;
+    if(collisionNarrow(c,last,last,0,&indices))return false;
     return edgeClearNarrow(c,arc,edge,&indices);
   }
   bool edgeClearNarrow(const Context& c,const ArcPath& arc,const SpeedEdge& edge,
@@ -3085,12 +3820,46 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     return true;
   }
 
+  // #SPEED_DEPENDENT_OBSTACLE_APPROACH
+  // map 관측의 접근 판단은 일반도로 기준 속도에서 설정한 거리(시험값 40m)를
+  // 현재 속도에 비례시킨다. 다만 기존 근거리 공간 창 안의 보행자 접근과
+  // 실측 v/a에서 jerk 한도로 정지할 거리, 기존 응답 시간 동안의 이동 및
+  // 뒷차축→앞범퍼/객체 여유보다 짧아지지 않게 한다. 가속 중이면 정지거리도
+  // 커진다. 이는 제동 모델의 시험 여유이며 실제 모든 상황의 정지를 보장하지 않는다.
+  // 보행자 접근 상한에만 사용한다. 시작한 접근 범위는 같은 ID에 보존해
+  // 감속 자체로 범위가 줄어 가속/제동을 반복하지 않게 한다. 객체가 뒤로
+  // 지나가거나 관측에서 없어지거나 범위를 실제 벗어나면 기존처럼 해제한다.
+  // 객체/예측/ROI를 자르지 않으며 거리 밖에서도 원래 swept 충돌 검사와
+  // 매 상태의 남은 거리 대비 정지 가능성 검사는 그대로 수행한다.
+  double approachDistance(const EgoState& ego) const {
+    const double reference_speed=p_.normal_speed_limit_mps>0 ?
+        p_.normal_speed_limit_mps : p_.max_speed_mps;
+    // #FINITE_APPROACH_DISTANCE
+    // brakingDistance의 무한대는 현재 v/a에서 jerk를 지키며 전진 정지가
+    // 불가능하다는 계산 결과다. 공간 감지 반경의 무한대를 뜻하지 않는다.
+    // 이를 객체별 접근 거리로 저장하면 먼 보행자가 사라질 때까지 10km/h
+    // 상한이 남는다. 정상 정지 거리는 그대로 사용하고, 정지 해가 없을 때만
+    // 기존 공간 창·속도 비례 거리·응답 이동 거리로 유한한 감지 범위를 정한다.
+    // 속도 계획의 정지 가능성·jerk·충돌 검사는 별개로 그대로 수행하므로
+    // 불가능한 초기 상태의 경로를 통과시키거나 관측 객체를 제거하지 않는다.
+    const double stopping_distance=brakingDistance(ego.speed_mps,ego.acceleration_mps2);
+    const double preview=ego.speed_mps*p_.speed_limit_response_sec+
+        p_.vehicle.front_m+p_.obstacle_margin_m+
+        (std::isfinite(stopping_distance) ? stopping_distance : 0.0);
+    return std::max({p_.horizon_m,p_.pedestrian_caution_distance_m*ego.speed_mps/reference_speed,preview});
+  }
+
   // Minimum jerk-limited stopping distance on this fixed arc. Ramp to negative
   // peak acceleration, optionally hold -D, then ramp to a=0 at v=0. States
   // below v=a²/(2J) with a<0 cannot reach rest without reversing in this model.
   double brakingDistance(double v,double a) const {
     const double j=p_.max_longitudinal_jerk_mps3,d=p_.max_deceleration_mps2;
     if(a<0 && v<a*a/(2*j)-1e-8) return std::numeric_limits<double>::infinity();
+    if(a<-d) {
+      const double t=(-d-a)/j;
+      const double distance=v*t+a*t*t/2+j*t*t*t/6;
+      return distance+brakingDistance(v+a*t+j*t*t/2,-d);
+    }
     const double peak=std::sqrt(j*v+a*a/2);
     // The release-only boundary v=a²/(2J) has zero initial ramp. Rounded
     // sqrt can put peak one ulp below |a|; the feasibility guard above, not
@@ -3206,7 +3975,18 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     const double cap=std::min(p_.max_speed_mps,limits.maximum_speed_mps);
     const double origin_s=c.reference.project(start.pose.position,0,c.reference.length()).s;
     const auto recovery=ceilingRecovery(ego,limits);
-    const double persistent_stop=std::min(staticStopArc(c,arc),
+    // #STATIC_STANDSTILL_MARGIN
+    // 정적 객체의 실제 bbox 앞 충돌 여유만 남기던 정지 위치에도 기존 앞차
+    // 추종의 정지 여유를 적용한다. 분류·GT ID와 관계없이 정지한 예측을 쓴다.
+    // 기존 jerk/가감속 한도로 그 추가 여유를 확보할 수 있을 때만 정지 위치를
+    // 앞당긴다. 이미 가까운 객체나 정지 상태에서는 원래 정지 공간을 보존해
+    // 추가 여유 때문에 가능했던 정지 경로가 사라지지 않게 한다. 회피 형상과
+    // 속도 비용 목표는 바꾸지 않으며 정지선·전체 차체 충돌 검사는 유지한다.
+    const double static_stop=staticStopArc(c,arc);
+    const double buffered_static_stop=static_stop-p_.following_min_gap_m>=
+        brakingDistance(ego.speed_mps,ego.acceleration_mps2) ?
+        static_stop-p_.following_min_gap_m : static_stop;
+    const double persistent_stop=std::min(buffered_static_stop,
                                          limits.release_time_sec>=duration ? stop_arc :
                                          std::numeric_limits<double>::infinity());
     const double available_space=std::min(persistent_stop,arc.length());
@@ -3220,15 +4000,17 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         std::pow(std::max(0.0,ego.acceleration_mps2),2)/(2*p_.max_longitudinal_jerk_mps3));
     if(available_space<0 || brakingDistance(ego.speed_mps,ego.acceleration_mps2)>available_space) return {};
     // #REACHABLE_TERMINAL_STOP
-    // 최고 속도에 즉시 도달한다고 가정하면 현재 속도로 5초 안에 닿을 수
-    // 없는 먼 장애물도 종료 정지를 강제해 앞의 합법적 회피 후보를 버린다.
-    // 실측 속도에서 최대 가속도를 즉시 적용한 거리조차 못 미치는 경우만
-    // 종료 정지 강제에서 제외한다. jerk·속도/곡률 한도는 이 도달 상한을
-    // 더 줄이므로 과소평가하지 않는다. 모든 상태의 s+brakingDistance 검사와
-    // 실제 장애물 앞 정지 여유, 시간별 충돌 및 최종 검사는 그대로 유지한다.
-    const double reachable_upper=ego.speed_mps*duration+
-        .5*p_.max_acceleration_mps2*duration*duration;
-    const bool finish_stopped=cap==0 || persistent_stop<reachable_upper;
+    // 5초 동안 최대 가속하면 닿는다는 이유만으로 먼 장애물 앞의 종료 정지를
+    // 강제하면, 90m 이상 남아도 약 30m만 진행한 뒤 멈추는 경로를 선택한다.
+    // 현재 속도로 예측 시간 안에 닿거나 기존 정지 여유 안에 있는 지속 정지
+    // 지점과 명시적 0속도 요청은
+    // 기존 종료 정지를 유지한다. 그보다 먼 지점에는 이동 중인 종료 상태도
+    // 허용하되 매 상태의 s+brakingDistance <= available_space로 그 이후의
+    // 정지 가능 공간을 보존한다. 실측 초기 v/a, 정적 bbox 앞 여유, 정지선,
+    // 전체 시간의 swept 충돌·가감속·jerk 및 최종 경로 검사는 바꾸지 않는다.
+    // GT ID나 구간 번호를 사용하지 않으며 같은 계약의 LiDAR 추적에도 적용된다.
+    const bool finish_stopped=cap==0 ||
+        persistent_stop<std::max(ego.speed_mps*duration,p_.following_min_gap_m);
     std::vector<double> clock{0};
     for(double t=p_.speed_time_step_sec;t<duration-1e-10;t+=p_.speed_time_step_sec) clock.push_back(t);
     // Prioritize analytic events over almost coincident regular samples.
@@ -3236,6 +4018,9 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // error into spurious acceleration/jerk during the independent recheck.
     std::vector<double> events;
     const auto event=[&](double t) { if(t>0 && t<duration) events.push_back(t); };
+    const double measured_brake_release_sec=ego.acceleration_mps2<-p_.max_deceleration_mps2 ?
+        (-p_.max_deceleration_mps2-ego.acceleration_mps2)/p_.max_longitudinal_jerk_mps3 : 0;
+    if(measured_brake_release_sec>0)event(measured_brake_release_sec);
     if(limits.release_time_sec>0 && limits.release_time_sec<duration) event(limits.release_time_sec);
     for(std::size_t i=0;i<recovery.count;++i) {
       const double t=recovery.phase[i].t+recovery.phase[i].h;
@@ -3251,8 +4036,22 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     }
     // Only regular samples can be replaced. A short saturated-acceleration
     // phase or a stop just before the horizon still needs both analytic knots.
+    // #BRAKING_EVENT_CLOCK
+    // 실제 초과 제동을 해제하는 동안 a(t)=a0+J*t가 강제되므로 정규 격자는
+    // 새로운 제어 선택을 추가하지 않는다. 해제 경계가 0.500254초일 때
+    // 0.5초 정규 점도 남기면 0.254ms Hermite 구간에서 반올림만으로
+    // jerk 4가 4.000000025가 되어 가능한 전진 경로를 전부 거부했다.
+    // 기존 출력 knot의 1ms 안정화 범위와 같이, 해제 경계 직전의 불필요한
+    // 정규 점만 생략한다. 작은 정규 간격에는 그 간격의 1/4까지만 쓴다.
+    // 실제 해제·정지·상한 전환 등 모든 해석적 이벤트와 초기 상태·전체
+    // 예측 시간은 보존한다. 원래 jerk 허용 오차나 가감속 한도는 바꾸지
+    // 않고 새 다항식도 전체 차체/도로·예측 충돌·속도·jerk로 재검증한다.
+    // 역주행이 불가피한 상태는 여전히 거부하며 GT/LiDAR·ROI와 무관하다.
     clock.erase(std::remove_if(clock.begin(),clock.end(),[&](double t) {
-      return t>0 && std::any_of(events.begin(),events.end(),[&](double q){return std::abs(t-q)<1e-6;});
+      if(t<=0)return false;
+      if(t<measured_brake_release_sec &&
+         measured_brake_release_sec-t<std::min(.001,p_.speed_time_step_sec/4))return true;
+      return std::any_of(events.begin(),events.end(),[&](double q){return std::abs(t-q)<1e-6;});
     }),clock.end());
     clock.insert(clock.end(),events.begin(),events.end());
     clock.push_back(duration); std::sort(clock.begin(),clock.end());
@@ -3270,6 +4069,28 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       for(std::size_t i=1;i<arc.points.size() && physical_proven;++i)
         physical_proven=roadClearWithMargin(c,arc.points[i-1].pose,arc.points[i].pose,0,0,&original);
     }
+    // #REENTRY_INTERVAL_GEOMETRY_REUSE
+    // 실제 차체는 도로 안에 있고 계획 여유만 소모된 경우, 같은 ArcPath를
+    // 이동하는 속도 후보마다 원래 map 도로의 포함 검사를 반복하지 않는다.
+    // 각 공간 구간의 연속 차체 sweep이 road_margin_m까지 포함됨을 먼저
+    // 원래 검사로 증명하고, 빈틈 없이 이어진 검증 구간만 합친다. 속도의
+    // 모든 극값이 비음수이고 이동 전체가 그 안에 있을 때만 도로 복귀 검사가
+    // 자명하게 성립한다. 나머지 이동과 실제 도로 밖의 초기 상태는 기존
+    // 후보별 검사를 유지한다. 이 증명은 현재 planSpeed 호출 안에서만 쓰며,
+    // 객체 예측 시각에 따른 collisionEdgeClear와 최종 전체 경로의 복귀·
+    // 차체·충돌·가감속·jerk 검사를 계속 수행한다. 경계/여유/시각 한도를
+    // 바꾸지 않고, GT·구간 ID 없이 같은 map/ROI 계약의 LiDAR에도 적용한다.
+    std::vector<std::pair<double,double>> reentry_clear_intervals;
+    if(c.native_region && c.native_region->margin_only_recovery) {
+      const auto& original=*c.native_region->recovery_original;
+      for(std::size_t i=1;i<arc.points.size();++i) {
+        if(!roadClearWithMargin(c,arc.points[i-1].pose,arc.points[i].pose,
+                                p_.road_margin_m,0,&original))continue;
+        if(!reentry_clear_intervals.empty() && reentry_clear_intervals.back().second==arc.station[i-1])
+          reentry_clear_intervals.back().second=arc.station[i];
+        else reentry_clear_intervals.emplace_back(arc.station[i-1],arc.station[i]);
+      }
+    }
     using State=SpeedState;
     std::vector<std::vector<State>> layers{{{0,ego.speed_mps,ego.acceleration_mps2,0,-1}}};
     for(std::size_t layer=1;layer<clock.size();++layer) {
@@ -3279,7 +4100,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       for(std::size_t index=0;index<before.size();++index) {
         const auto& q=before[index];
         const double jerk=p_.max_longitudinal_jerk_mps3;
-        const double a_lo=std::max(-p_.max_deceleration_mps2,q.a-jerk*dt);
+        const double a_lo=std::max(minimumPlannedAcceleration(ego,clock[layer]),q.a-jerk*dt);
         const double a_hi=std::min(p_.max_acceleration_mps2,q.a+jerk*dt);
         std::vector<double> accelerations{a_lo,a_hi,Geometry::clamp(0.0,a_lo,a_hi),
           Geometry::clamp(-p_.max_deceleration_mps2/2,a_lo,a_hi),
@@ -3320,11 +4141,17 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
                 q.s+edge.distance(std::min(dt,limits.release_time_sec-clock[layer-1]))>stop_arc+1e-9)) continue;
             const double curvature=arc.curvature(q.s,s);
             if(curvature>p_.max_curvature_inv_m+1e-6) continue;
-            bool lateral_clear=true;
-            for(double t:edge.extrema())
-              if(std::pow(edge.speed(t),2)*curvature>p_.max_lateral_accel_mps2+1e-6) lateral_clear=false;
-            if((!lateral_clear && !lateralAccelerationClear(arc,edge,ego,recovery)) ||
-               !edgeClear(c,arc,edge,physical_proven)) continue;
+            bool lateral_clear=true,forward_only=true;
+            for(double t:edge.extrema()) {
+              const double speed=edge.speed(t);
+              if(speed<0)forward_only=false;
+              if(std::pow(speed,2)*curvature>p_.max_lateral_accel_mps2+1e-6) lateral_clear=false;
+            }
+            if(!lateral_clear && !lateralAccelerationClear(arc,edge,ego,recovery))continue;
+            const bool reentry_proven=forward_only && s>=q.s &&
+                std::any_of(reentry_clear_intervals.begin(),reentry_clear_intervals.end(),
+                    [&](const std::pair<double,double>& interval) {return q.s>=interval.first && s<=interval.second;});
+            if(!(reentry_proven ? collisionEdgeClear(c,arc,edge) : edgeClear(c,arc,edge,physical_proven)))continue;
             const double cost=q.cost+edgeCost(c,arc,edge,origin_s,std::min(cap,limits.preferred_speed_mps));
             // Exact rest must not share a quantization cell with creeping or
             // nonzero acceleration. Those states cannot substitute for a wait.
@@ -3376,21 +4203,31 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     return {};
   }
   void validateParameters() const {
-    for (double x : {p_.vehicle.front_m,p_.vehicle.rear_m,p_.vehicle.width_m,p_.horizon_m,p_.dp_step_m,
+    for(double x:{p_.lane_change_confirmation_sec,p_.lane_change_observation_gap_sec,
+                  p_.lane_change_heading_tolerance_rad,p_.lane_change_steering_tolerance_rad})
+      if(!std::isfinite(x) || x<=0)throw std::invalid_argument("invalid lane change confirmation parameter");
+    if(p_.lane_change_observation_gap_sec>p_.lane_change_confirmation_sec ||
+       p_.lane_change_heading_tolerance_rad>=p_.max_initial_heading_error_rad ||
+       p_.lane_change_steering_tolerance_rad>=1)
+      throw std::invalid_argument("inconsistent lane change confirmation parameter");
+
+    for (double x : {p_.vehicle.front_m,p_.vehicle.rear_m,p_.vehicle.width_m,p_.vehicle.wheelbase_m,p_.horizon_m,p_.dp_step_m,
                     p_.lateral_step_m,p_.dp_slope_sample,p_.output_step_m,p_.corridor_half_width_m,p_.max_curvature_inv_m,
                     p_.max_lateral_accel_mps2,p_.max_speed_mps,p_.max_lateral_slope,p_.max_initial_heading_error_rad,
                     p_.max_initial_distance_m,p_.qp_rho,p_.qp_tolerance,p_.min_horizon_m,p_.road_boundary_step_m,
                     p_.max_acceleration_mps2,p_.max_deceleration_mps2,p_.max_longitudinal_jerk_mps3,
                     p_.speed_time_step_sec,p_.trajectory_output_step_sec,p_.trajectory_horizon_m,
-                    p_.following_time_headway_sec})
+                    p_.following_time_headway_sec,p_.following_headway_transition_mps})
       if (!std::isfinite(x) || x<=0.0) throw std::invalid_argument("nonpositive/nonfinite path parameter");
     for (double x : {p_.obstacle_margin_m,p_.road_margin_m,p_.reference_weight,p_.dp_tracking_weight,
                     p_.slope_weight,p_.bending_weight,p_.jerk_weight,p_.previous_weight,
                     p_.speed_tracking_weight,p_.acceleration_weight,p_.longitudinal_jerk_weight,
-                    p_.following_min_gap_m,p_.preferred_lateral_accel_mps2,
-                    p_.pedestrian_caution_speed_mps,p_.pedestrian_caution_distance_m,p_.pedestrian_near_preferred_speed_mps})
+                    p_.following_min_gap_m,p_.following_low_speed_headway_sec,p_.preferred_lateral_accel_mps2,
+                    p_.pedestrian_caution_speed_mps,p_.pedestrian_caution_distance_m,
+                    p_.pedestrian_caution_lateral_margin_m,p_.pedestrian_near_preferred_speed_mps})
       if (!std::isfinite(x) || x<0.0) throw std::invalid_argument("negative/nonfinite path weight or margin");
-    if (p_.preferred_lateral_accel_mps2>p_.max_lateral_accel_mps2 ||
+    if (p_.following_low_speed_headway_sec>p_.following_time_headway_sec ||
+        p_.preferred_lateral_accel_mps2>p_.max_lateral_accel_mps2 ||
         p_.horizon_m/p_.output_step_m>500 || p_.horizon_m/p_.dp_step_m>100 ||
         p_.output_step_m>0.5 || p_.road_boundary_step_m>0.5 || p_.min_horizon_m>p_.horizon_m ||
         p_.qp_max_iterations<1 ||
@@ -3644,7 +4481,14 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     if(native && !native->allowsMotion(first.position,last.position))return false;
     if (contains(
           Geometry::sweptEgoEnvelope(first,last,p_.vehicle,margin_m))) return true;
-    if (depth>=6 || (Geometry::norm(Geometry::sub(first.position,last.position))<1e-9 &&
+    // #ROAD_SWEEP_SUBDIVISION
+    // 회전하는 차체 sweep의 보수적 사각형은 실제 차체보다 넓다. 도로의
+    // 오목한 경계와 5cm 여유가 가까울 때 6회 분할만으로는 끝점이 모두
+    // 포함되는 안전한 곡선도 거부될 수 있다. 같은 시작/끝 자세를 선형
+    // 보간해 최대 12회까지 enclosure를 정밀화한다. 도로 polygon·차체·여유는
+    // 바꾸지 않으며 각 작은 sweep 전체가 포함될 때만 통과한다. 분할 한도에서도
+    // 증명되지 않으면 기존처럼 거부하므로 점 검사로 연속 검사를 대신하지 않는다.
+    if (depth>=12 || (Geometry::norm(Geometry::sub(first.position,last.position))<1e-9 &&
                     std::abs(Geometry::wrap(first.yaw_rad-last.yaw_rad))<1e-9)) return false;
     if (!contains(
           Geometry::sweptEgoEnvelope(first,first,p_.vehicle,margin_m)) ||
@@ -3762,34 +4606,61 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     const Eigen::VectorXd fixed_constraint=a*fixed;
     lower-=fixed_constraint; upper-=fixed_constraint;
     a=a.rightCols(n-2).eval();
-    const Eigen::MatrixXd ata=a.transpose()*a;
+    Eigen::VectorXd x=guide.tail(n-2);
+    if(!solveBoundedQp(h,q,a,lower,upper,x))return false;
+    output=fixed;
+    output.tail(n-2)=x;
+    return true;
+  }
+
+  // #QP_LINEAR_ALGEBRA_REUSE
+  // map 경로의 동일한 QP에서 H/q/A는 ADMM의 rho·활성 제약 변경과 무관하다.
+  // 정확히 0인 행렬 원소만 희소 표현에서 생략하고 같은 선형식을 계산한다.
+  // H^-1 A^T와 A H^-1 A^T는 한 QP 안에서만 재사용하며 다음 관측/후보와
+  // 공유하지 않는다. 양의 정부호 Schur 계는 Cholesky로 풀고 수치적으로
+  // 불확실한 계는 기존 FullPivLU로 검사한다. KKT의 primal/dual 잔차는
+  // 큰 블록 행렬을 만들지 않고 같은 두 식으로 확인한다. 비용·반복 한도·
+  // 허용 오차·활성 제약 순서와 최종 도로/충돌/가감속 검사는 유지한다.
+  struct QpRefinementCache {
+    bool prepared=false,valid=false;
+    Eigen::VectorXd unconstrained;
+    Eigen::MatrixXd inverse_constraints,schur;
+  };
+  // 초기 연결과 기존 Frenet QP는 같은 ADMM·active-set 계산을 공유한다.
+  bool solveBoundedQp(const Eigen::MatrixXd& h,const Eigen::VectorXd& q,
+                      const Eigen::MatrixXd& a,const Eigen::VectorXd& lower,
+                      const Eigen::VectorXd& upper,Eigen::VectorXd& x) const {
+    const Eigen::SparseMatrix<double> sparse_a=a.sparseView(0.0,0.0);
+    const Eigen::SparseMatrix<double> sparse_h=h.sparseView(0.0,0.0);
+    const Eigen::SparseMatrix<double> ata=sparse_a.transpose()*sparse_a;
     double rho=p_.qp_rho;
-    Eigen::LDLT<Eigen::MatrixXd> factor(h+rho*ata);
+    Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::NaturalOrdering<int>> factor(sparse_h+rho*ata);
     if (factor.info()!=Eigen::Success) return false;
-    Eigen::VectorXd x=guide.tail(n-2),z=a*x,u=Eigen::VectorXd::Zero(a.rows());
+    QpRefinementCache refinement;
+    Eigen::VectorXd z=a*x,u=Eigen::VectorXd::Zero(a.rows());
     for (Eigen::Index j=0;j<z.size();++j) z[j]=Geometry::clamp(z[j],lower[j],upper[j]);
     for (int iteration=1;iteration<=p_.qp_max_iterations;++iteration) {
-      x=factor.solve(-q+rho*a.transpose()*(z-u));
+      x=factor.solve(-q+rho*sparse_a.transpose()*(z-u));
       if (!x.allFinite()) return false;
-      const Eigen::VectorXd ax=a*x;
+      const Eigen::VectorXd ax=sparse_a*x;
       const Eigen::VectorXd relaxed=1.6*ax-0.6*z;
       z=relaxed+u;
       for (Eigen::Index j=0;j<z.size();++j) z[j]=Geometry::clamp(z[j],lower[j],upper[j]);
       u+=relaxed-z;
       const double primal_residual=(ax-z).lpNorm<Eigen::Infinity>();
-      const double dual_residual=(h*x+q+rho*a.transpose()*u).lpNorm<Eigen::Infinity>();
+      const double dual_residual=(sparse_h*x+q+rho*sparse_a.transpose()*u).lpNorm<Eigen::Infinity>();
       if (primal_residual<=p_.qp_tolerance && dual_residual<=p_.qp_tolerance) {
-        output=fixed; output.tail(n-2)=x; return true;
+        return true;
       }
-      if (iteration%100==0 && refineActiveSet(h,q,a,lower,upper,z,x)) {
-        output=fixed; output.tail(n-2)=x; return true;
+      if (iteration%100==0 && refineActiveSet(h,q,a,lower,upper,z,x,&refinement)) {
+        return true;
       }
       if (iteration%50==0) {
         const double ratio=primal_residual/std::max(dual_residual,1e-15);
         if (ratio>3.0 || ratio<1.0/3.0) {
           const double next=Geometry::clamp(rho*std::sqrt(ratio),0.1,1e4);
           u*=rho/next; rho=next;
-          factor.compute(h+rho*ata);
+          factor.compute(sparse_h+rho*ata);
           if (factor.info()!=Eigen::Success) return false;
         }
       }
@@ -3799,7 +4670,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
   }
   bool refineActiveSet(const Eigen::MatrixXd& h,const Eigen::VectorXd& q,const Eigen::MatrixXd& a,
                        const Eigen::VectorXd& lower,const Eigen::VectorXd& upper,const Eigen::VectorXd& z,
-                       Eigen::VectorXd& x) const {
+                       Eigen::VectorXd& x,QpRefinementCache* cache=nullptr) const {
     struct Active { Eigen::Index row; bool upper; };
     std::vector<Active> active;
     for (Eigen::Index i=0;i<a.rows();++i) {
@@ -3814,32 +4685,59 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // C H^-1 C'의 작은 Schur 계로 같은 primal·dual 해를 구한다.
     // 비용·활성 제약 선택·반복 한도는 유지한다. 특이한 제약은 거부하며,
     // 원래 KKT 잔차·전체 부등식·dual 부호와 최종 차체/충돌 검사를 유지한다.
-    const Eigen::LDLT<Eigen::MatrixXd> h_factor(h);
-    if(h_factor.info()!=Eigen::Success || !h_factor.isPositive()) return false;
-    const Eigen::VectorXd unconstrained=h_factor.solve(-q);
+    QpRefinementCache local;auto& matrices=cache?*cache:local;
+    if(!matrices.prepared) {
+      matrices.prepared=true;
+      const Eigen::SparseMatrix<double> sparse_h=h.sparseView(0.0,0.0);
+      const Eigen::SparseMatrix<double> sparse_a=a.sparseView(0.0,0.0);
+      const Eigen::SimplicialLDLT<Eigen::SparseMatrix<double>,Eigen::Lower,Eigen::NaturalOrdering<int>> h_factor(sparse_h);
+      if(h_factor.info()!=Eigen::Success || h_factor.vectorD().minCoeff()<=0)return false;
+      matrices.unconstrained=h_factor.solve(-q);
+      const Eigen::MatrixXd transpose=a.transpose();
+      matrices.inverse_constraints=h_factor.solve(transpose);
+      matrices.schur=sparse_a*matrices.inverse_constraints;matrices.valid=true;
+    }
+    if(!matrices.valid)return false;
+    const auto& unconstrained=matrices.unconstrained;
     for (int iteration=0;iteration<40;++iteration) {
       const Eigen::Index m=static_cast<Eigen::Index>(active.size());
-      Eigen::MatrixXd kkt=Eigen::MatrixXd::Zero(n+m,n+m);
-      Eigen::VectorXd rhs(n+m);
-      kkt.topLeftCorner(n,n)=h; rhs.head(n)=-q;
+      Eigen::MatrixXd constraints(m,n);
+      Eigen::VectorXd bound(m);
       for (Eigen::Index j=0;j<m;++j) {
         const auto item=active[static_cast<std::size_t>(j)];
-        kkt.block(n+j,0,1,n)=a.row(item.row);
-        kkt.block(0,n+j,n,1)=a.row(item.row).transpose();
-        rhs[n+j]=item.upper ? upper[item.row] : lower[item.row];
+        constraints.row(j)=a.row(item.row);
+        bound[j]=item.upper ? upper[item.row] : lower[item.row];
       }
       Eigen::VectorXd candidate(n+m);
       candidate.head(n)=unconstrained;
       if(m>0) {
-        const Eigen::MatrixXd constraints=kkt.bottomLeftCorner(m,n);
-        const Eigen::MatrixXd projected=h_factor.solve(constraints.transpose());
-        const Eigen::MatrixXd schur=constraints*projected;
-        const Eigen::FullPivLU<Eigen::MatrixXd> factor(schur);
-        if(!factor.isInvertible()) return false;
-        candidate.tail(m)=factor.solve(constraints*unconstrained-rhs.tail(m));
+        Eigen::MatrixXd projected(n,m),schur(m,m);
+        for(Eigen::Index j=0;j<m;++j) {
+          projected.col(j)=matrices.inverse_constraints.col(active[static_cast<std::size_t>(j)].row);
+          for(Eigen::Index i=0;i<m;++i)schur(i,j)=matrices.schur(active[static_cast<std::size_t>(i)].row,active[static_cast<std::size_t>(j)].row);
+        }
+        const Eigen::VectorXd residual=constraints*unconstrained-bound;
+        const Eigen::LLT<Eigen::MatrixXd> positive(schur);
+        bool solved=false;
+        if(positive.info()==Eigen::Success) {
+          const auto diagonal=positive.matrixL().toDenseMatrix().diagonal().eval();
+          const double threshold=std::numeric_limits<double>::epsilon()*m*schur.cwiseAbs().maxCoeff();
+          if(diagonal.array().square().minCoeff()>threshold) {
+            candidate.tail(m)=positive.solve(residual);
+            solved=true;
+          }
+        }
+        if(!solved) {
+          const Eigen::FullPivLU<Eigen::MatrixXd> factor(schur);
+          if(!factor.isInvertible())return false;
+          candidate.tail(m)=factor.solve(residual);
+        }
         candidate.head(n)-=projected*candidate.tail(m);
       }
-      if (!candidate.allFinite() || (kkt*candidate-rhs).lpNorm<Eigen::Infinity>()>p_.qp_tolerance) return false;
+      Eigen::VectorXd residual(n+m);
+      residual.head(n)=h*candidate.head(n)+constraints.transpose()*candidate.tail(m)+q;
+      residual.tail(m)=constraints*candidate.head(n)-bound;
+      if(!candidate.allFinite() || residual.lpNorm<Eigen::Infinity>()>p_.qp_tolerance)return false;
       const Eigen::VectorXd ax=a*candidate.head(n);
       double violation=p_.qp_tolerance;
       Active add{-1,false};
@@ -3860,7 +4758,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         if (invalid>wrong_sign) { wrong_sign=invalid; remove=j; }
       }
       if (remove>=0) { active.erase(active.begin()+remove); continue; }
-      const Eigen::VectorXd dual=h*candidate.head(n)+q+kkt.topRightCorner(n,m)*candidate.tail(m);
+      const Eigen::VectorXd dual=h*candidate.head(n)+q+constraints.transpose()*candidate.tail(m);
       if (dual.lpNorm<Eigen::Infinity>()>p_.qp_tolerance) return false;
       x=candidate.head(n);
       return true;
@@ -3957,10 +4855,22 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       convert(predictions[i], native_predictions.future[i]);
 
     const auto body_route=rearFootprintRoute(route);
-    const auto native_reference=nativeReference(body_route);
+    std::vector<LaneKey> mission_ids;
+    for(const auto& lane:*body_route)mission_ids.push_back(laneKey(lane));
+    if(!mission_reference_cache_ || mission_reference_cache_->route_ids!=mission_ids)
+      mission_reference_cache_=nativeReference(body_route);
+    const auto mission_reference=mission_reference_cache_;
+    // 완료 판정은 전파로 만든 위치가 아니라 실제 ego 관측 시각·자세를 사용한다.
+    EgoState observed=state;
+    observed.pose={{position.x,position.y},std::atan2(2*(orientation.w*orientation.z+orientation.x*orientation.y),
+        1-2*(orientation.y*orientation.y+orientation.z*orientation.z))};
+    const auto maneuver_route=laneChangeRoute(body_route,observed,competition.steering_angle_rad,
+                                             ego.header.stamp.toSec());
+    const auto native_reference=lane_change_ ? lane_change_->planned_reference : mission_reference;
     const auto& reference=native_reference->points;
     const auto& centerline=native_reference->heights;
-    const NativeRegionScope region_scope(active_native_region_,nativeRoadRegion(body_route));
+    const NativeRegionScope region_scope(active_native_region_,
+        lane_change_ ? lane_change_->corridor : nativeRoadRegion(body_route));
     // #EXACT_PLANNING_INPUT_STAMPS
     // 실제 조립된 원본 입력 시각을 계산 시작 전에 DEBUG로 남긴다. 수신 시각에
     // 가까운 메시지를 고르는 사후 추정과 구분해 느린 호출을 정확히 재생한다.
@@ -3991,7 +4901,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         // 원본 속도·가속도·경로 시각과 차체·도로·충돌·jerk 검사는 유지한다.
         // GT 객체가 아니라 기존 Competition Status/route 계약만 사용한다.
         if(!approaching_normal_speed_limit_) {
-          const Reference native_road(reference);
+          const Reference native_road(mission_reference->points);
           const auto origin=native_road.project(state.pose.position,0,native_road.length());
           bool passed_exempt=false;
           for(const auto& lane:*body_route) {
@@ -4019,15 +4929,18 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       }
     }
     bool pending_lane_change=false;
-    for(std::size_t i=1;i<body_route->size() && !pending_lane_change;++i) {
-      const auto& source=(*body_route)[i-1];const auto& target=(*body_route)[i];
+    for(std::size_t i=1;i<maneuver_route->size() && !pending_lane_change;++i) {
+      const auto& source=(*maneuver_route)[i-1];const auto& target=(*maneuver_route)[i];
       if(!lanelet::geometry::inside(source,lanelet::BasicPoint2d(state.pose.position.x,state.pose.position.y))) continue;
       for(bool left:{false,true}) {
         const auto neighbor=legalNeighbor(source,left);
         if(neighbor && laneKey(*neighbor)==laneKey(target))pending_lane_change=true;
       }
     }
-    previous_path_ = plan(state, reference, native_predictions, mission_limits, previous_path_,pending_lane_change);
+    const auto hold_reference=laneHoldReference(maneuver_route,state);
+    previous_path_ = plan(state, reference, native_predictions, mission_limits, previous_path_,
+        pending_lane_change || static_cast<bool>(hold_reference),hold_reference ? &hold_reference->points : nullptr,
+        &native_reference->independent_entries);
     // #PLANNING_DIAGNOSTICS: 실패 시 계산에 실제 사용한 초기 조건만 기록한다.
     // 경로·제약을 보정하거나 제어 토픽을 발행하지 않으며 빈 경로의 원인을 추적한다.
     if (previous_path_.empty()) {
@@ -4085,8 +4998,9 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     std::vector<LaneKey> route_ids;
     std::vector<ReferencePoint> points;
     std::vector<Eigen::Vector3d> heights;
+    std::vector<Vec2> independent_entries;
   };
-  std::shared_ptr<const NativeReference> native_reference_cache_;
+  std::shared_ptr<const NativeReference> native_reference_cache_,mission_reference_cache_;
   static Eigen::Vector3d nearestCenterlinePoint(const lanelet::BasicLineString3d& line,
                                                const Eigen::Vector3d& point) {
     Eigen::Vector3d best=line.front();double distance=std::numeric_limits<double>::infinity();
@@ -4113,6 +5027,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     std::vector<LaneKey> ids;for(const auto& lane:*route)ids.push_back(laneKey(lane));
     if(native_reference_cache_ && native_reference_cache_->route_ids==ids)return native_reference_cache_;
     auto result=std::make_shared<NativeReference>();result->route_ids=std::move(ids);
+    bool previous_group_transition=false;
     for(std::size_t begin=0;begin<route->size();) {
       std::size_t end=begin;
       while(end+1<route->size()) {
@@ -4233,7 +5148,17 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         // ego 위치로 전환 시작점을 매번 미루지 않으며 실제 경로는 기존
         // DP/QP와 초기 곡률 정합·시간 계획이 생성한다. native 도로 합집합,
         // 방향별 차선 변경 허용, 차체·충돌·곡률·가감속 검사는 유지한다.
-        const double transition_extent=std::min(total,p_.horizon_m);
+        // #EXIT_LANE_CHANGE_CONNECTOR
+        // 짧은 source를 합법적인 종방향 source/target 쌍으로 연장한 경우,
+        // 남은 도로를 이어 놓고도 횡이동을 25m에 압축하면 고속 접근 경로가
+        // 불필요하게 감속한다. 이 경우만 기존 C2 연결 상한 2*horizon_m까지
+        // 전환에 사용한다. 전환 시작점은 map에 고정하고 긴 일반 차선 변경의
+        // 기존 horizon_m을 유지하고, 바로 앞 그룹도 차선 변경이면 연속 변경의
+        // 기존 완료 거리를 유지한다. 실선·분기·허용 도로,
+        // 차체·객체·곡률·횡가속도·가감속·시간 검사는 그대로 적용한다.
+        const bool independent_connector=connected_end>end && !previous_group_transition;
+        if(independent_connector)result->independent_entries.push_back({source.front().x(),source.front().y()});
+        const double transition_extent=std::min(total,(independent_connector ? 2 : 1)*p_.horizon_m);
         const double transition_start=approach_transition?total-transition_extent:0;
         line.push_back(source.front());
         for(std::size_t i=1;i<source.size();++i) {
@@ -4265,10 +5190,206 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         }
         result->points.push_back({point,lower,upper});result->heights.push_back(line[i]);
       }
+      previous_group_transition=begin!=end;
       begin=connected_end+1;
     }
     native_reference_cache_=result;
     return result;
+  }
+
+  // #SEQUENTIAL_LANE_CHANGE
+  // GlobalPath는 경유 방향을 제공하고, 실제 조작은 인접한 한 차선만 대상으로 한다.
+  // 연속 left/right edge를 두 차선 폭의 한 곡선으로 합치지 않는다. 목표 lanelet이
+  // 종방향으로 잘게 나뉘어도 같은 목표 차선을 이어서 유지하며, 매 계산에서 기존
+  // DP/QP·예측 객체·swept 차체·곡률·속도·가감속 검사를 그대로 적용한다.
+  struct LaneChange {
+    lanelet::ConstLanelets source,target;
+    bool left=false;
+    std::shared_ptr<const NativeRoadRegion> target_region,corridor;
+    Route reference;
+    std::shared_ptr<const NativeReference> planned_reference;
+    std::shared_ptr<const Reference> target_road;
+    double last_observation=-1,stable_since=-1,stable_steering=0;
+    Pose2 stable_pose;
+  };
+  lanelet::Optional<LaneChange> lane_change_;
+
+  std::shared_ptr<const NativeReference> laneHoldReference(const Route& mission,const EgoState& ego) {
+    if(!routing_graph_)return nullptr;
+    const lanelet::BasicPoint2d position(ego.pose.position.x,ego.pose.position.y);
+    for(std::size_t current=0;current<mission->size();++current) {
+      if(!lanelet::geometry::inside((*mission)[current],position))continue;
+      for(std::size_t i=current;i+1<mission->size();++i) {
+        const auto& source=(*mission)[i];const auto& target=(*mission)[i+1];
+        const auto left=legalNeighbor(source,true),right=legalNeighbor(source,false);
+        if(!((left && laneKey(*left)==laneKey(target)) || (right && laneKey(*right)==laneKey(target))))continue;
+        const double duration=kPredictionSteps*.5;
+        const double reachable=ego.speed_mps*duration+.5*p_.max_acceleration_mps2*duration*duration;
+        if(lanelet::geometry::distance2d(source.polygon2d(),position)>
+           std::min(p_.trajectory_horizon_m,reachable))return nullptr;
+        lanelet::ConstLanelets lanes(mission->begin()+current,mission->begin()+i+1);
+        std::set<LaneKey> visited;for(const auto& lane:lanes)visited.insert(laneKey(lane));
+        while((lanes.back().centerline3d().back().basicPoint2d()-position).norm()<
+              p_.trajectory_horizon_m+p_.vehicle.front_m+p_.vehicle.rear_m) {
+          const auto next=routing_graph_->following(lanes.back(),false);
+          lanelet::ConstLanelets planned;
+          for(const auto& lane:*mission)if(std::find(next.begin(),next.end(),lane)!=next.end())planned.push_back(lane);
+          const auto choices=planned.size()==1 ? planned : next;
+          if(choices.size()!=1 || !visited.insert(laneKey(choices.front())).second)break;
+          lanes.push_back(choices.front());
+        }
+        const auto hold_route=rearFootprintRoute(lanelet::routing::LaneletPath(std::move(lanes)));
+        // 실제 출발 차선의 종방향 polygon만 사용한다. 인접 차선은 이 포함
+        // 판정에 합치지 않으며, 전파된 이번 계획 자세의 전체 차체를 검사한다.
+        if(!nativeRoadRegion(hold_route,false)->containsBox(Geometry::sweptEgoEnvelope(
+            ego.pose,ego.pose,p_.vehicle,p_.road_margin_m)))return nullptr;
+        auto result=std::make_shared<NativeReference>(*nativeReference(hold_route));
+        // #SOURCE_LANE_CENTER_JOIN
+        // 공유 경계의 끝점이 같은 두 lanelet도 접속 단면의 중심선 표본 사이에
+        // 13cm 가로 선분을 담을 수 있다. 이 선분은 직진 유지 형상의 Frenet
+        // 횡기울기를 잘못 키운다. 이 후보에만 접속점에서 기존 출력 공간 간격
+        // 이내의 표본을 공유 경계 양 끝의 실제 중앙으로 합친다.
+        // 지도·임무 참조·도로 polygon은 그대로이며 C2/차체/동역학 검사를 유지한다.
+        for(std::size_t j=1;j<hold_route->size();++j) {
+          const auto& before=(*hold_route)[j-1];const auto& after=(*hold_route)[j];
+          if(before.leftBound().back()!=after.leftBound().front() ||
+             before.rightBound().back()!=after.rightBound().front())continue;
+          const Eigen::Vector3d joint=(after.leftBound3d().front().basicPoint()+
+                                       after.rightBound3d().front().basicPoint())/2;
+          for(std::size_t k=0;k<result->points.size();++k) {
+            if((result->heights[k]-joint).head<2>().norm()>p_.output_step_m)continue;
+            result->points[k].position={joint.x(),joint.y()};result->heights[k]=joint;
+          }
+        }
+        for(std::size_t k=1;k<result->points.size();) {
+          if(Geometry::norm(Geometry::sub(result->points[k].position,result->points[k-1].position))>1e-9) {++k;continue;}
+          result->points.erase(result->points.begin()+k);result->heights.erase(result->heights.begin()+k);
+        }
+        return result;
+      }
+      break;
+    }
+    return nullptr;
+  }
+
+  void extendLaneChange(const Route& mission,const EgoState& ego) {
+    auto& change=*lane_change_;
+    const auto old_size=change.target.size();
+    std::set<LaneKey> visited;
+    for(const auto& lane:change.target)visited.insert(laneKey(lane));
+    // Euclidean distance cannot exceed the road arc distance: extending until the
+    // tail is outside this preview never shortens the required forward coverage.
+    while((change.target.back().centerline3d().back().basicPoint2d()-
+           lanelet::BasicPoint2d(ego.pose.position.x,ego.pose.position.y)).norm()<
+          p_.trajectory_horizon_m+p_.vehicle.front_m+p_.vehicle.rear_m) {
+      const auto next=routing_graph_->following(change.target.back(),false);
+      lanelet::ConstLanelets planned;
+      for(const auto& lane:*mission)
+        if(std::find(next.begin(),next.end(),lane)!=next.end())planned.push_back(lane);
+      const auto choices=planned.size()==1 ? planned : next;
+      if(choices.size()!=1 || !visited.insert(laneKey(choices.front())).second)break;
+      const auto target=choices.front();
+      lanelet::ConstLanelets sources;
+      for(const auto& candidate:routing_graph_->following(change.source.back(),false)) {
+        const auto neighbor=legalNeighbor(candidate,change.left);
+        if(neighbor && laneKey(*neighbor)==laneKey(target))sources.push_back(candidate);
+      }
+      if(sources.size()==1)change.source.push_back(sources.front());
+      change.target.push_back(target);
+    }
+    if(change.reference && old_size==change.target.size())return;
+    const auto target_route=rearFootprintRoute(lanelet::routing::LaneletPath(change.target));
+    change.target_region=nativeRoadRegion(target_route,false);
+    change.target_road.reset(new Reference(nativeReference(target_route)->points));
+    lanelet::ConstLanelets region=change.source;
+    region.insert(region.end(),target_route->begin(),target_route->end());
+    change.corridor=nativeRoadRegion(rearFootprintRoute(lanelet::routing::LaneletPath(region)),false);
+    // The first source/target pair anchors the existing connector in map. Later
+    // lateral edges are not appended until the observed maneuver has completed.
+    lanelet::ConstLanelets reference{change.source.front()};
+    reference.insert(reference.end(),change.target.begin(),change.target.end());
+    change.reference=rearFootprintRoute(lanelet::routing::LaneletPath(std::move(reference)));
+    change.planned_reference=nativeReference(change.reference);
+  }
+  // #LANE_CHANGE_COMPLETION_CONFIRMATION
+  // 뒷차축만 경계를 넘거나 조향이 순간 0을 지나는 것을 완료로 보지 않는다.
+  // 전체 차체와 기존 도로 여유가 목표 차선 안에 있고, 목표 중심선에 가깝고,
+  // 도로 방향 및 도로 곡률에 필요한 타이어 조향과 정합된 전진 관측을 누적한다.
+  // 핸들 회전각이나 벽시계는 쓰지 않는다. 같은 ego stamp는 시간이 쌓이지 않고,
+  // 정지·관측 공백·정렬 이탈 시 1초 누적을 다시 시작한다. 목표 차선의 실제
+  // 종방향 연결 polygon을 사용하므로 lanelet ID가 바뀌어도 판정이 끊기지 않는다.
+  bool laneChangeComplete(const EgoState& ego,double steering,double stamp) {
+    auto& change=*lane_change_;
+    const double gap=stamp-change.last_observation;
+    if(gap<0 || gap>p_.lane_change_observation_gap_sec)change.stable_since=-1;
+    const auto& road=*change.target_road;
+    const auto projection=road.project(ego.pose.position,0,road.length());
+    // 기존 C2 끝점 계산과 같은 공간 표본을 쓴다. 조밀한 지도 knot의 순간
+    // 곡률 부호 변화가 정상 곡선 주행의 완료 판정을 계속 초기화하지 않게 한다.
+    const auto sample=cartesianEndpoint(road,projection.s);
+    // 실제 조향 피드백의 부호에 의존하지 않는다. MPC와 동일한 yaw/v 등가
+    // 타이어 조향으로 도로 곡률과의 잔차를 비교하고, 원본 조향은 변화량만 본다.
+    // 0.5m/s 미만의 yaw/v는 안정되지 않으므로 그 관측으로 완료를 누적하지 않는다.
+    const double effective_steering=std::atan(p_.vehicle.wheelbase_m*ego.curvature_inv_m);
+    const bool stable=ego.speed_mps>=.5 &&
+        change.target_region->containsBox(Geometry::sweptEgoEnvelope(
+            ego.pose,ego.pose,p_.vehicle,p_.road_margin_m)) &&
+        projection.distance<=p_.corridor_half_width_m &&
+        std::abs(Geometry::wrap(ego.pose.yaw_rad-sample.yaw))<=p_.lane_change_heading_tolerance_rad &&
+        std::abs(effective_steering-std::atan(p_.vehicle.wheelbase_m*sample.curvature))<=
+            p_.lane_change_steering_tolerance_rad &&
+        (change.stable_since<0 || std::abs(steering-change.stable_steering)<=p_.lane_change_steering_tolerance_rad);
+    // 같은 ego 시각이어도 새 조향 관측에서 불안정이 보이면 누적은 초기화한다.
+    if(!stable) {change.stable_since=-1;change.last_observation=stamp;return false;}
+    if(gap<=0) {change.last_observation=stamp;return false;}
+    change.last_observation=stamp;
+    if(change.stable_since<0) {
+      change.stable_since=stamp;change.stable_pose=ego.pose;change.stable_steering=steering;
+    }
+    const double progress=Geometry::dot(Geometry::sub(ego.pose.position,change.stable_pose.position),
+                                       Geometry::unit(change.stable_pose.yaw_rad));
+    return stamp-change.stable_since>=p_.lane_change_confirmation_sec-1e-9 &&
+           progress>std::max(1e-6,p_.road_margin_m);
+  }
+  Route laneChangeRoute(const Route& mission,const EgoState& ego,
+                        double steering,double stamp) {
+    if(!routing_graph_)return mission;
+    if(lane_change_) {
+      extendLaneChange(mission,ego);
+      // A reset to another part of the map abandons the old maneuver, rather
+      // than steering back to an obsolete target after a scenario reload.
+      double distance=std::numeric_limits<double>::infinity();
+      for(const auto* lanes:{&lane_change_->source,&lane_change_->target})
+        for(const auto& lane:*lanes)distance=std::min(distance,lanelet::geometry::distance2d(
+            lane.polygon2d(),lanelet::BasicPoint2d(ego.pose.position.x,ego.pose.position.y)));
+      if(distance>p_.max_initial_distance_m)lane_change_.reset();
+      else if(laneChangeComplete(ego,steering,stamp)) {
+        ROS_INFO_STREAM("lane_change completed target=" << lane_change_->target.front().id()
+            << " ego_sec=" << std::setprecision(17) << stamp
+            << " stable_since=" << lane_change_->stable_since);
+        lane_change_.reset();
+      } else return lane_change_->reference;
+    }
+    for(std::size_t i=0;i+1<mission->size();++i) {
+      const auto& source=(*mission)[i];const auto& target=(*mission)[i+1];
+      const auto left=legalNeighbor(source,true),right=legalNeighbor(source,false);
+      const bool move_left=left && laneKey(*left)==laneKey(target);
+      if(!move_left && !(right && laneKey(*right)==laneKey(target)))continue;
+      // #LANE_CHANGE_MISSION_ORDER
+      // GlobalPath는 필수 경유 구간을 보존한 채 첫 합법 변경 edge를 앞당긴다.
+      // LocalPath가 그 source보다 앞의 종방향 구간까지 다시 당기면, 먼저 목표
+      // 차선에 도착한 뒤 아직 남은 경유 차선으로 되돌아가는 왕복이 생긴다.
+      // 전달된 edge의 source에서 바로 옆 target만 시작한다. 실제 간격·변경
+      // 시각·속도와 1초 완료 판정은 기존 계산이 결정하며, 경유 조건은 버리지 않는다.
+      if(!lanelet::geometry::inside(source,lanelet::BasicPoint2d(ego.pose.position.x,ego.pose.position.y)))continue;
+      lane_change_=LaneChange{};
+      lane_change_->source={source};lane_change_->target={target};lane_change_->left=move_left;
+      extendLaneChange(mission,ego);
+      ROS_INFO_STREAM("lane_change begin source=" << source.id() << " target=" << target.id()
+          << " ego_sec=" << std::setprecision(17) << stamp);
+      return lane_change_->reference;
+    }
+    return mission;
   }
   static double centerlineHeight(const std::vector<Eigen::Vector3d>& line, Vec2 point) {
     double closest = std::numeric_limits<double>::infinity();

@@ -2,6 +2,7 @@ vehicle:
   front_m: 3.845008
   rear_m: 0.790
   width_m: 2.160835
+  wheelbase_m: 3.0
 horizon_m: 25.0
 min_horizon_m: 0.5
 road_boundary_step_m: 0.25
@@ -47,13 +48,29 @@ speed_tracking_weight: 1.0
 acceleration_weight: 0.15
 longitudinal_jerk_weight: 0.05
 # 같은 방향 앞차와 범퍼 간격에 따른 추종 목표. 기존 충돌 검사는 별도 유지한다.
-following_time_headway_sec: 1.5
-following_min_gap_m: 2.0
+following_time_headway_sec: 1.2
+# 저속 0.8초에서 5m/s 이상의 1.2초까지 연속 보간한다. 정지 간격은 1.5m다.
+following_low_speed_headway_sec: 0.8
+following_headway_transition_mps: 5.0
+following_min_gap_m: 1.5
 # 100km/h의 5초 예측 거리(약139m)를 같은 0.25m 공간 표본으로 포함한다.
 trajectory_horizon_m: 150.0
 # 전방 도로 주변 보행자 접근 비교 시험. 물리 bbox·관측 속도·충돌 한도는 유지한다.
-pedestrian_caution_speed_mps: 8.333333333333334  # 보행자 감지 시 30km/h 상한
-pedestrian_caution_distance_m: 80.0
+pedestrian_caution_speed_mps: 2.777777777777778  # 도로 주변 보행자 접근 시 10km/h 상한
+# 일반도로 기준 속도의 접근 거리. 저속 비례 거리와 jerk 정지/응답 여유 중 큰 값 적용.
+pedestrian_caution_distance_m: 40.0
+# 보행자 중심이 도로 경계 밖 2m 이내이면 접근 대상으로 포함한다.
+# 실제 충돌 bbox·장애물 여유와 별도이며 애니메이션 폭 변화로 판정을 늦추지 않는다.
+pedestrian_caution_lateral_margin_m: 2.0
 
-# 가까운 보행자 접근 비용 목표(21.6km/h). 30km/h 상한과 기존 안전 제약은 별도 유지.
+# 가까운 보행자 접근 비용 목표. 실제 목표는 위 10km/h 상한 이하로 제한한다.
 pedestrian_near_preferred_speed_mps: 6.0
+
+# #LANE_CHANGE_COMPLETION_CONFIRMATION
+# 목표 차선의 전체 차체 포함·중심/방향 정렬·필요 조향 정합을 1초 확인한다.
+# 각도는 시험 초기값이며 실제 도로·객체·동역학의 안전 한도를 대체하지 않는다.
+lane_change:
+  confirmation_sec: 1.0
+  observation_gap_sec: 0.2
+  heading_tolerance_rad: 0.03490658503988659  # 2도
+  steering_tolerance_rad: 0.05235987755982989  # 도로 필요 조향 대비 3도

@@ -579,6 +579,8 @@ struct PedestrianCautionScene {
     parameters.max_speed_mps=6;
     // 이 fixture는 4m/s 접근 한도 자체를 검사하므로 운용 YAML 상한과 분리한다.
     parameters.pedestrian_caution_speed_mps=4;
+    // 기존 bbox 경계와 ID 유지·해제 동작을 새 도로 밖 중심점 설정과 분리한다.
+    parameters.pedestrian_caution_lateral_margin_m=0;
     return path_planner::CorePathPlanner(parameters);
   }
   interfaces::Path run() const {
@@ -738,33 +740,39 @@ TEST(CorePathPlanner, LoadsExistingOperatingTargetsAndOfficialExemptionLinks) {
  EXPECT_EQ(p.speed_exemption_link_ids.count("A2256W000451"),0u);
 }
 
-TEST(CorePathPlanner, ConfiguredPedestrianApproachUsesThirtyKphWithoutDisablingStopConstraints) {
+TEST(CorePathPlanner, ConfiguredPedestrianApproachUsesTenKphWithoutDisablingStopConstraints) {
   ros::Time::init();
   const std::string package=NP_PACKAGE_DIR;
   const auto parameters=path_planner::loadCorePathPlannerParameters(node_pipeline::ParamReader::fromFile(
       package+"/config/path_planner/parameters/core_path_planner.yaml",package));
-  EXPECT_DOUBLE_EQ(parameters.pedestrian_caution_speed_mps,30.0/3.6);
-  PedestrianCautionScene scene(40,3);
+  EXPECT_DOUBLE_EQ(parameters.pedestrian_caution_speed_mps,10.0/3.6);
+  // 속도별 접근 거리 안에서 설정한 10km/h 상한과 초기 속도 보존을 확인한다.
+  PedestrianCautionScene scene(30,3);
   scene.ego.twist.twist.linear.x=12;
   scene.status.velocity_x_mps=scene.status.signed_velocity_mps=12;
   path_planner::CorePathPlanner core(parameters);
   const auto path=scene.run(core);
   ASSERT_GE(path.points.size(),2u);
   EXPECT_DOUBLE_EQ(path.points.front().velocity,12.0);
-  EXPECT_NEAR(path.points.back().velocity,30.0/3.6,1e-6);
-  for(const auto& point:path.points) EXPECT_GE(point.velocity,30.0/3.6-1e-6);
+  EXPECT_LE(path.points.back().velocity,10.0/3.6+1e-6);
+  EXPECT_GE(path.points.back().velocity,2.5);
+  // 10km/h는 하한이 아니다. jerk 제한 감속의 작은 undershoot도 허용한다.
+  for(const auto& point:path.points) {
+    EXPECT_GE(point.velocity,0);EXPECT_GE(point.acceleration,-5-1e-6);
+    EXPECT_LE(point.acceleration,2+1e-6);
+  }
 }
 
-TEST(CorePathPlanner, NearbyPedestrianSlowsBeforeMotionWhilePreservingThirtyKphCeiling) {
+TEST(CorePathPlanner, NearbyPedestrianSlowsBeforeMotionWhilePreservingTenKphCeiling) {
   ros::Time::init();const std::string package=NP_PACKAGE_DIR;
   const auto parameters=path_planner::loadCorePathPlannerParameters(node_pipeline::ParamReader::fromFile(
       package+"/config/path_planner/parameters/core_path_planner.yaml",package));
-  EXPECT_DOUBLE_EQ(parameters.pedestrian_caution_speed_mps,30.0/3.6);
+  EXPECT_DOUBLE_EQ(parameters.pedestrian_caution_speed_mps,10.0/3.6);
   PedestrianCautionScene scene(20,3);scene.ego.twist.twist.linear.x=12;
   scene.status.velocity_x_mps=scene.status.signed_velocity_mps=12;
   path_planner::CorePathPlanner core(parameters);const auto path=scene.run(core);
   ASSERT_GE(path.points.size(),2u);EXPECT_DOUBLE_EQ(path.points.front().velocity,12);
-  EXPECT_LE(path.points.back().velocity,6.1);EXPECT_GT(path.points.back().velocity,0);
+  EXPECT_LE(path.points.back().velocity,10.0/3.6+1e-6);EXPECT_GT(path.points.back().velocity,0);
   EXPECT_GT(path.points.back().pose.pose.position.x,10);
 }
 
@@ -789,4 +797,67 @@ TEST(CorePathPlanner, KeepsSpeedAndCompletesTheChangeWhenTheRearVehicleFallsBehi
   if(it->pose.pose.position.y>3.2){completed=true;break;}
  }
  EXPECT_GE(minimum_speed,9.5);EXPECT_TRUE(completed);
+}
+
+TEST(CorePathPlanner, LowSpeedDoesNotApplyTheDistantPedestrianCeiling) {
+  ros::Time::init();PedestrianCautionScene scene(35,3);
+  auto core=PedestrianCautionScene::makeCore();const auto path=scene.run(core);
+  ASSERT_GE(path.points.size(),2u);
+  EXPECT_NEAR(path.points.back().velocity,6,1e-6);
+}
+TEST(CorePathPlanner, DistantPedestrianPreservesCruiseUntilTheSpeedDependentApproach) {
+  ros::Time::init();const std::string package=NP_PACKAGE_DIR;
+  auto parameters=path_planner::loadCorePathPlannerParameters(node_pipeline::ParamReader::fromFile(
+      package+"/config/path_planner/parameters/core_path_planner.yaml",package));
+  parameters.max_speed_mps=12;
+  PedestrianCautionScene scene(55,3);scene.ego.twist.twist.linear.x=12;
+  scene.status.velocity_x_mps=scene.status.signed_velocity_mps=12;
+  path_planner::CorePathPlanner core(parameters);const auto path=scene.run(core);
+  ASSERT_GE(path.points.size(),2u);EXPECT_DOUBLE_EQ(path.points.front().velocity,12);
+  EXPECT_NEAR(path.points.back().velocity,12,1e-6);
+}
+TEST(CorePathPlanner, SixtyKphApproachKeepsMoreThanFortyMetersOfBrakingReserve) {
+  ros::Time::init();const std::string package=NP_PACKAGE_DIR;
+  auto parameters=path_planner::loadCorePathPlannerParameters(node_pipeline::ParamReader::fromFile(
+      package+"/config/path_planner/parameters/core_path_planner.yaml",package));
+  PedestrianCautionScene scene(50,3);scene.ego.twist.twist.linear.x=60./3.6;
+  scene.status.velocity_x_mps=scene.status.signed_velocity_mps=60./3.6;
+  path_planner::CorePathPlanner core(parameters);const auto path=scene.run(core);
+  ASSERT_GE(path.points.size(),2u);EXPECT_DOUBLE_EQ(path.points.front().velocity,scene.status.velocity_x_mps);
+  EXPECT_LE(path.points.back().velocity,30./3.6+1e-6);
+}
+TEST(CorePathPlanner, DistantStaticBlockerDoesNotForceRestAtThePredictionHorizon) {
+  ros::Time::init();const std::string package=NP_PACKAGE_DIR;
+  auto parameters=path_planner::loadCorePathPlannerParameters(node_pipeline::ParamReader::fromFile(
+      package+"/config/path_planner/parameters/core_path_planner.yaml",package));
+  PedestrianCautionScene scene(80,0);scene.objects.objects[0].label="obstacle";
+  scene.objects.objects[0].bbox_size.x=scene.objects.objects[0].bbox_size.y=1.5;
+  scene.ego.twist.twist.linear.x=12;scene.status.velocity_x_mps=scene.status.signed_velocity_mps=12;
+  path_planner::CorePathPlanner core(parameters);const auto path=scene.run(core);
+  ASSERT_GE(path.points.size(),2u);EXPECT_DOUBLE_EQ(path.points.front().velocity,12);
+  const auto two=std::lower_bound(path.points.begin(),path.points.end(),2.,
+      [](const interfaces::PathPoint& q,double t){return q.time_from_start.toSec()<t;});
+  ASSERT_NE(two,path.points.end());EXPECT_GE(two->velocity,11.8);
+  EXPECT_GT(path.points.back().velocity,0);
+  EXPECT_NEAR(path.points.back().time_from_start.toSec(),5,1e-8);
+  for(const auto& point:path.points) EXPECT_LT(point.pose.pose.position.x+3.845008,79.0);
+}
+
+TEST(CorePathPlanner, SlowingDoesNotReleaseTheSamePedestrianApproachBeforePassing) {
+  // 속도가 내려가 계산 거리가 짧아져도 이미 접근 중인 동일 관측을 놓쳐
+  // 다시 가속하면 안 된다. 객체가 실제로 멀어져 기존 접근 범위를 벗어나면 해제한다.
+  ros::Time::init();const std::string package=NP_PACKAGE_DIR;
+  auto parameters=path_planner::loadCorePathPlannerParameters(node_pipeline::ParamReader::fromFile(
+      package+"/config/path_planner/parameters/core_path_planner.yaml",package));
+  parameters.max_speed_mps=12;
+  PedestrianCautionScene scene(30,3);scene.ego.twist.twist.linear.x=12;
+  scene.status.velocity_x_mps=scene.status.signed_velocity_mps=12;
+  path_planner::CorePathPlanner core(parameters);auto path=scene.run(core);
+  ASSERT_GE(path.points.size(),2u);EXPECT_LE(path.points.back().velocity,30./3.6+1e-6);
+  scene.ego.twist.twist.linear.x=6;scene.status.velocity_x_mps=scene.status.signed_velocity_mps=6;
+  auto& object=scene.objects.objects.front();object.position.x=28;object.bbox_pose.position=object.position;
+  path=scene.run(core);ASSERT_GE(path.points.size(),2u);
+  EXPECT_LE(path.points.back().velocity,30./3.6+1e-6);
+  object.position.x=55;object.bbox_pose.position=object.position;
+  path=scene.run(core);ASSERT_GE(path.points.size(),2u);EXPECT_GT(path.points.back().velocity,30./3.6+1e-6);
 }

@@ -1,0 +1,9 @@
+{
+  "source_run": "r168-lateral3-measured-steering078",
+  "source_plan_stamp_ns": 1792569383858815996,
+  "source_time_sec": 163.18885374069214,
+  "section": 13,
+  "format": "little-endian uint64 plan stamp; five uint32 byte-count-prefixed ROS serialized messages: Odometry, CompetitionVehicleStatus, Objects, TFMessage, Imu",
+  "sha256": "be72f17d01e688f93f5339d7a09a1ad1ad919f9a85aad5aff3b056f8734bc736",
+  "expected": "The validated 5-second path must preserve at least 90 percent of initial speed at t=2 sec through the legal short-source exit connector. Observed baseline 14.815 -> 7.406 m/s."
+}
