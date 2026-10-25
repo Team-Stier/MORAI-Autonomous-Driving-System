@@ -16,10 +16,13 @@ from vlp16_bev.scan import BevBuilder, GridYawRate, SignalTrack
 def main():
     rospy.init_node("vlp16_bev")
     max_signal_age = float(rospy.get_param("~max_signal_age_sec", 0.5))
-    # grid: the training recipe on competition_status yaw (held ~0.3 s behind live); imu: IMU wz. Offline deploy parity
-    # (run1024b-w1-001): BEV occupied IoU median 0.970 (grid) vs 0.985 (imu), README.
-    imu = rospy.get_param("~yaw_rate_source", "grid") == "imu"
-    v_track, r_track = SignalTrack(), (SignalTrack() if imu else GridYawRate())
+    # grid: the training recipe on competition_status yaw (held ~0.3 s behind live); imu: IMU wz.
+    # grid_trend: the same recipe with the missing last ~0.3 s of yaw extended by a line through the last
+    # ~yaw_trend_window_sec of yaw (README: grid vs grid_trend vs imu).
+    src = rospy.get_param("~yaw_rate_source", "grid")
+    imu = src == "imu"
+    trend = float(rospy.get_param("~yaw_trend_window_sec", 0.3)) if src == "grid_trend" else 0.0
+    v_track, r_track = SignalTrack(), (SignalTrack() if imu else GridYawRate(trend_window=trend))
 
     def on_status(m):
         t = m.header.stamp.to_sec()

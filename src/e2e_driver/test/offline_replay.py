@@ -57,8 +57,9 @@ def main():
     ap.add_argument("--mode", choices=["gt", "deploy"], required=True)
     ap.add_argument("--ego", required=True); ap.add_argument("--rows", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--route", default=os.path.join(HERE, "..", "assets", "route.json"))
-    ap.add_argument("--r-source", choices=["grid", "imu"], default="grid",
-                    help="deploy: LiDAR yaw rate from competition_status yaw (the node's GridYawRate) or IMU wz")
+    ap.add_argument("--r-source", default="grid",
+                    help="deploy: LiDAR yaw rate: grid (the node's GridYawRate, hold), trend<window s> (GridYawRate with "
+                         "the trend extension, e.g. trend0.3), imu (IMU wz)")
     ap.add_argument("bags", nargs="+")
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
@@ -66,7 +67,10 @@ def main():
     rows = sorted(int(x) for x in a.rows.split(","))
     route = Route(a.route); tracker, odo = RouteTracker(route), Odometer()
     inp, bev = Inputs(horizon=3.0), BevBuilder()
-    v_trk, r_trk = SignalTrack(), (GridYawRate() if a.r_source == "grid" else SignalTrack())
+    imu_r = a.r_source == "imu"
+    trend = float(a.r_source[5:]) if a.r_source.startswith("trend") else 0.0
+    v_trk, r_trk = SignalTrack(), (SignalTrack() if imu_r else GridYawRate(trend_window=trend))
+    r_err = []                                      # deploy: per scan (mean |r - training r|, max, training |r| mean)
     mode = a.mode if a.mode == "gt" else "deploy_" + a.r_source
     grid = list(zip(z["tau"], z["v"].astype(np.float64), z["yaw"])) if a.mode == "gt" else []   # gt: the tau grid is the
     pending, meta, n_scans = list(rows), [], 0                                                  # history signal
@@ -103,21 +107,26 @@ def main():
                 else:
                     if not (v_trk.ready() and r_trk.ready()): continue
                     v, r = v_trk.at(tt), r_trk.at(tt)
+                    rt = clk.vr(ns)[1]; r_err.append((float(np.abs(r - rt).mean()), float(np.abs(r - rt).max()), float(np.abs(rt).mean())))
                 h, d, npts, pose = bev.scan(b"".join(bytes(p.data) for p in m.packets), tt, v, r)
                 inp.add_scan(f32(clk.tau_at(int(ns[-1]))), h, d, pose, bev.epoch); n_scans += 1
             elif topic == STATUS:
                 ts = float(clk.tau_at(m.header.stamp.to_nsec()))
                 v_trk.add(ts, m.signed_velocity_mps); odo.add(ts, m.signed_velocity_mps)
-                if a.r_source == "grid": r_trk.add(ts, m.yaw_rad)
+                if not imu_r: r_trk.add(ts, m.yaw_rad)
                 if a.mode == "deploy": inp.add_status(ts, m.signed_velocity_mps, m.yaw_rad)
-            elif topic == IMU and a.r_source == "imu":
+            elif topic == IMU and imu_r:
                 r_trk.add(float(clk.tau_at(m.header.stamp.to_nsec())), m.angular_velocity.z)
             elif topic == EKF and a.mode == "deploy":
                 p = m.pose.pose
                 tracker.update(float(clk.tau_at(m.header.stamp.to_nsec())), p.position.x, p.position.y, yaw_of(p.orientation), odo.d)
         b.close()
     while pending: emit(pending.pop(0))
-    json.dump(dict(mode=mode, scans=n_scans, rows=meta), open(os.path.join(a.out, "meta.json"), "w"), indent=1)
+    e = np.array(r_err).reshape(-1, 3); turn = e[:, 2] > 0.1
+    r_summary = None if not len(e) else dict(
+        mean=round(float(e[:, 0].mean()), 5), max=round(float(e[:, 1].max()), 4),
+        turn_mean=round(float(e[turn, 0].mean()), 5) if turn.any() else None, turn_scans=int(turn.sum()), scans=len(e))
+    json.dump(dict(mode=mode, scans=n_scans, r_err_radps=r_summary, rows=meta), open(os.path.join(a.out, "meta.json"), "w"), indent=1)
     print(mode, "rows ok", sum(r["ok"] for r in meta), "/", len(meta), "scans", n_scans)
 
 

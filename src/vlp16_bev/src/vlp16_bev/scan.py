@@ -49,8 +49,10 @@ class GridYawRate:
     end): r lags the training value by up to ~0.3 s at turn onset and exit. Grid points are multiples of 0.1 s of the
     stamp clock (the training grid started at the episode's tau 0; only the sampling phase differs)."""
 
-    def __init__(self, dt=0.1, horizon=3.0):
-        self.dt, self.horizon, self.t, self.yaw = dt, horizon, [], []
+    def __init__(self, dt=0.1, horizon=3.0, trend_window=0.0):
+        """trend_window > 0: instead of holding, extend the yaw past the newest sample with a straight-line fit of the
+        last trend_window s of yaw, far enough to give the queried times their 0.3 s support, then apply the same recipe."""
+        self.dt, self.horizon, self.trend, self.t, self.yaw = dt, horizon, trend_window, [], []
 
     def add(self, t, yaw):
         t = float(t)
@@ -70,9 +72,16 @@ class GridYawRate:
 
     def at(self, tq):
         t, y = np.array(self.t), np.array(self.yaw)
+        tq = np.asarray(tq, np.float64)
+        if self.trend > 0:
+            m = t >= t[-1] - self.trend
+            if m.sum() >= 2:
+                k, c = np.polyfit(t[m] - t[-1], y[m], 1)
+                fut = t[-1] + self.dt * np.arange(1, int(math.ceil((float(tq.max()) - t[-1] + 0.4) / self.dt)) + 1)
+                t, y = np.r_[t, fut], np.r_[y, c + k * (fut - t[-1])]
         g = self.dt * np.arange(math.ceil(t[0] / self.dt), math.floor(t[-1] / self.dt) + 1)
         r = np.convolve(np.gradient(np.interp(g, t, y), self.dt), np.ones(5) / 5, "same")
-        return np.interp(np.asarray(tq, np.float64), g[3:-3], r[3:-3])    # only points with their full 0.3 s support
+        return np.interp(tq, g[3:-3], r[3:-3])                             # only points with their full 0.3 s support
 
 
 class BevBuilder:

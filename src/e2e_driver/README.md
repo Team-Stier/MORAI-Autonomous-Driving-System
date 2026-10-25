@@ -80,7 +80,19 @@ MORAI ──UDP 2368 (VLP16)──> velodyne_driver ──/velodyne_packets─�
 | nav text | 100 % 동일 | 91.6 % 동일. 나머지 8행은 거리 ±1–2 m 차이 | 같음 |
 | input_ids / pixel_values | 100 % 동일 / 차이 0 | 91.6 % 동일(nav 차이 때문) / BEV 영상 차이 | 같음 |
 
-- **yaw rate 두 방식**: 학습식은 실시간에서 0.3 s 늦은 값을 유지하는 탓에, 학습 BEV와의 일치가 IMU보다 낮다. vlp16_bev의 `~yaw_rate_source`(`grid` 기본, `imu`)로 바꿀 수 있다.
+- **LiDAR yaw rate 비교** (`tools/winpc/yawcmp.sh`, 같은 96행, 회전 행 = 학습 |yaw rate| > 0.1 rad/s인 28행)
+
+  | r 출처 | BEV IoU 중앙값 | IoU 하위 10 % | 회전 행 IoU 중앙값 | r 오차 평균 / 최대 (rad/s) | 회전 중 r 오차 평균 |
+  |---|---|---|---|---|---|
+  | 학습식 + 마지막 값 유지 (`grid`, 기본) | 0.970 | 0.882 | 0.944 | 0.028 / 0.339 | 0.055 |
+  | 학습식 + 추세 외삽 0.3 s (`grid_trend`) | 0.980 | 0.914 | 0.960 | 0.014 / 0.180 | 0.026 |
+  | 학습식 + 추세 외삽 0.6 s | 0.970 | 0.891 | 0.944 | 0.021 / 0.275 | 0.041 |
+  | IMU wz (`imu`) | 0.985 | 0.947 | 0.957 | 0.010 / 0.183 | 0.020 |
+
+  - 추세 외삽: 실시간에 없는 마지막 약 0.3 s의 yaw만, 최근 창(0.3 또는 0.6 s)의 yaw 직선 적합으로 채운다. 그다음 같은 학습식(중앙 차분 + 5탭)을 적용한다.
+  - r 오차는 스캔의 패킷마다 잰 |r − 학습 r|(`_ego` yaw_rate를 패킷 시각에 보간한 값)다.
+  - ego 이력은 r을 쓰지 않으므로 세 방식 모두 같다.
+  - vlp16_bev의 `~yaw_rate_source`(`grid` | `grid_trend` | `imu`)와 `~yaw_trend_window_sec`(기본 0.3)로 고른다. 기본값은 `grid`다.
 - **두 모드**
   - gt 모드는 학습과 같은 신호(`_ego` v, yaw rate, path_s)를 넣어 코드가 같은지 본다.
   - deploy 모드는 대회 입력(competition_status, IMU, 스택 EKF)을 넣어 신호 차이의 크기를 본다.
