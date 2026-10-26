@@ -21,10 +21,11 @@ msc() {  # <action> [option] [timeout]
   fi
 }
 wsl() { ssh winpc-wsl "$@"; }
-reset() {  # <scene>: reload it paused, restart localization (it does not follow a teleport), play
-  msc pause > /dev/null; msc load-scene "$1" 90 > /dev/null
-  wsl "cd $W && ./chroot.sh ctl 'source devel/setup.bash; rosnode kill /localization_node'" > /dev/null 2>&1   # respawns
-  sleep 4; msc play > /dev/null
+loc_restart() {  # localization does not follow a teleport (or a new run): it respawns from the next GPS fix
+  wsl "cd $W && ./chroot.sh ctl 'source devel/setup.bash; rosnode kill /localization_node'" > /dev/null 2>&1; sleep 4
+}
+reset() {  # <scene>: reload it paused, restart localization, play
+  msc pause > /dev/null; msc load-scene "$1" 90 > /dev/null; loc_restart; msc play > /dev/null
 }
 
 case ${1:-} in
@@ -53,7 +54,7 @@ case ${1:-} in
       (setsid nohup ./chroot.sh probes 'bash src/e2e_driver/tools/winpc/probes.sh $NAME' > ~/morai-eval/run/probe_$NAME.log 2>&1 < /dev/null &)
       (setsid nohup ./chroot.sh rec 'source devel/setup.bash; rostopic echo -p /e2e_driver/debug/data > /data/dbg_$NAME.csv & rostopic echo -p /localization/ego/pose/pose/position > /data/loc_$NAME.csv & rostopic echo -p /section_annotation/state > /data/sec_$NAME.csv & until [ -e /data/stop_$NAME ]; do sleep 1; done; kill %1 %2 %3' > /dev/null 2>&1 < /dev/null &)
       (setsid nohup python3 ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/test/gtraw.py ~/morai-eval/data/gtraw_$NAME.txt ~/morai-eval/data/stop_$NAME > /dev/null 2>&1 < /dev/null &)"
-    sleep 8; msc play; t0=$(date +%s); te=$t0; still=0; resets=0
+    loc_restart; sleep 4; msc play; t0=$(date +%s); te=$t0; still=0; resets=0
     while (( $(date +%s) - t0 < SECS )); do
       sleep 5
       v=$(wsl "tail -1 ~/morai-eval/data/dbg_$NAME.csv" | python3 -c 'import json,sys; print(abs(json.loads(sys.stdin.read().split(",", 1)[1])["v"]))' 2>/dev/null || echo 0)
