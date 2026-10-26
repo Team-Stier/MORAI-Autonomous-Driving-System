@@ -20,6 +20,8 @@ struct ScoredStopLineStraightParameters {
     double projection_m = 0;
   };
   std::vector<Corridor> corridors;
+  std::vector<std::int64_t> scored_stop_line_ids;
+  std::vector<std::int64_t> left_signal_stop_line_ids;
 };
 
 class ScoredStopLineStraight {
@@ -45,7 +47,8 @@ class ScoredStopLineStraight {
       return legacy(path, light, competition, tf);
     }
     const auto target_id = scored_latch ? state_.stop_line_id : contact.id;
-    const bool straight = target_id != 4356;
+    const bool straight = std::find(parameters_.left_signal_stop_line_ids.begin(),
+        parameters_.left_signal_stop_line_ids.end(), target_id) == parameters_.left_signal_stop_line_ids.end();
     if (state_.stop_line_id != target_id || state_.accepts_circular_green != straight) {
       state_.green_frames = 0;
       state_.stop_line_id = target_id;
@@ -102,8 +105,9 @@ class ScoredStopLineStraight {
 
  private:
   enum class Signal { Ignore, Stop, Yellow, Go };
-  static bool isScored(std::int64_t id) {
-    return id == 7294 || id == 6254 || id == 4188 || id == 4356;
+  bool isScored(std::int64_t id) const {
+    return std::find(parameters_.scored_stop_line_ids.begin(),
+        parameters_.scored_stop_line_ids.end(), id) != parameters_.scored_stop_line_ids.end();
   }
 
   static Signal scoredSignal(std::uint8_t state, bool straight) {
