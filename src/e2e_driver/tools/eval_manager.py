@@ -287,6 +287,7 @@ class Manager:
         threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
         tr, clock = self.track, self.clock
         tr.i, clock.last, passed = 0, None, 0
+        tau_prev = clock.tau
         t_play, w_play, t_move, x0 = None, time.time(), None, None
         best_s = prog_s = 0.0
         prog_t, crash_t, off_t, grace = math.inf, -math.inf, None, math.inf
@@ -329,9 +330,13 @@ class Manager:
                 # drive failures -> return to the last checkpoint passed
                 if e["hit"]:
                     crash_t = tau
-                # a red light is not "stuck": waits at C1256W000016 ran 53-61 s and were returned (10/27 W1 lap)
-                if s > prog_s + PROGRESS_M or (e["tl"] and e["color"] & 1 and not e["color"] & 16):
-                    prog_s, prog_t = max(s, prog_s), tau
+                if s > prog_s + PROGRESS_M:
+                    prog_s, prog_t = s, tau
+                elif e["tl"] and e["color"] & 1 and not e["color"] & 16:
+                    # red time does not count as stuck: waits at C1256W000016 ran 53-61 s and were returned; resetting
+                    # instead kept a car that let greens pass for 229 s from ever being returned (10/27 W1 laps)
+                    prog_t += tau - tau_prev
+                tau_prev = tau
                 off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
                 off_t = (off_t if off_t is not None else tau) if off else None
                 why = None
