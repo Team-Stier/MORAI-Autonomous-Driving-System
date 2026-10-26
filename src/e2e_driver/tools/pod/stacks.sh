@@ -5,7 +5,8 @@
 # vlp16_bev, tf_publisher, lidar_leveler, localization, section_annotator, e2e_driver, speed_filter.
 # Stack n: ROS master 11310+n, every UDP port +(n-1)*1000 (as mk-clone.sh shifts world n's presets: the bridge config and
 # the VLP-16 port), model server port 47011 (one batched engine) or 47011+n-1 with ENGINE_PORT_STEP=1, CPU affinity
-# STACK_CPUS (all stacks share it). Logs and pids: /root/stack/n/. E2E_FAKE_FOLLOW_ROUTE_M passes through (fake backend).
+# STACK_CPUS (all stacks share it), node param world = n (in its requests). Logs and pids: /root/stack/n/.
+# E2E_FAKE_FOLLOW_ROUTE_M passes through (fake backend).
 set -uo pipefail
 V=${V:-/workspace}; WS=${WS:-$V/MORAI-Autonomous-Driving-System}; R=${STACK_ROOT:-/root/stack}
 
@@ -30,7 +31,7 @@ up1() {
   [[ -e $d/stack.pid ]] && kill -0 "$(cat "$d/stack.pid")" 2>/dev/null && { echo "stack $n already up"; return; }
   # TMPDIR: the bridge writes its runtime config to $TMPDIR/morai-udp-bridge-<uid>.yaml, one name for every stack
   ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=$d/ros TMPDIR=$d/tmp MORAI_BRIDGE_CONFIG=$d/bridge.yaml \
-  E2E_SERVER_PORT=$((47011 + (n - 1) * ${ENGINE_PORT_STEP:-0})) OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
+  E2E_SERVER_PORT=$((47011 + (n - 1) * ${ENGINE_PORT_STEP:-0})) E2E_WORLD=$n OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
   VLP_PORT=$((2368 + off)) MASTER_PORT=$((11310 + n)) \
   setsid taskset -c "${STACK_CPUS:-0-$(($(nproc) - 1))}" bash -c '
     source /opt/ros/noetic/setup.bash; source devel/setup.bash

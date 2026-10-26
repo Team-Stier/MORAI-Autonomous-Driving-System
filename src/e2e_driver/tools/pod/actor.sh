@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # actor.sh up NAME [N] | down: one RL actor pod (RL_PLAN.md 3.1): N (3) MORAI worlds, the model server, N ROS stacks and
-# an episode manager per world (rl_episode.py, records under $V/rl-out/NAME_wn). After setup.sh.
+# an episode manager per world (rl_episode.py). After setup.sh. Records: the learner spool $V/spool/NAME_wn/epK/
+# (steps.jsonl with the engine dumps of $V/dump moved in, critic_obs, done.json); LoRA version from $V/out/lora/latest.json.
 #   ENGINE_ARGS   model_server.py arguments (default: the batched RL engine of branch rl/actor-engine on the volume's
 #                 delivery, all N nodes on one port, slots in connection order; add the RL flags --rl-sigma S --expert2
 #                 --lora-watch FILE, side-session-notes rl-actor-engine-20261027.md; "--backend fake --sims N
@@ -19,7 +20,7 @@ engine() {  # n server(s): one batched engine on 47011, or one per stack with EN
   for k in $(seq 0 $(( ${ENGINE_PORT_STEP:-0} ? N - 1 : 0 ))); do
     OMP_NUM_THREADS=4 MALLOC_MMAP_MAX_=0 MALLOC_TRIM_THRESHOLD_=1073741824 HF_HUB_OFFLINE=1 HF_HOME=$V/models/hf \
     MORAI_VLA_PYLIB=$V/morai-student/pylib setsid taskset -c "$ENGINE_CPUS" $V/venv-engine/bin/python -u $E2E/server/model_server.py \
-      $ENGINE_ARGS --port $((47011 + k)) > $R/server$k.log 2>&1 < /dev/null &
+      $ENGINE_ARGS --port $((47011 + k)) --dump $V/dump > $R/server$k.log 2>&1 < /dev/null &
     echo $! >> $R/server.pids
   done
 }
@@ -33,7 +34,8 @@ case ${1:-} in
     for n in $(seq "$N"); do
       d=$([[ $n == 1 ]] && echo /root/Workspaces/scratches/morai || echo /root/inst/$n/morai)
       SCORER=$V/Alpamayo-Cosmos/tools/scorer setsid $V/venv-rl/bin/python -u $E2E/tools/rl_episode.py "${NAME}_w$n" \
-        --scorer $V/Alpamayo-Cosmos/tools/scorer --out $V/rl-out --host local --direct --grpc 127.0.0.1:$((7788 + n)) \
+        --scorer $V/Alpamayo-Cosmos/tools/scorer --out $V/spool --host local --direct --grpc 127.0.0.1:$((7788 + n)) \
+        --world $n --dump-dir $V/dump --objinfo-port $((7505 + 1000 * (n - 1))) --lora-latest $V/out/lora/latest.json \
         --launcher $d/MoraiLauncher_Lin_Data --port $((8091 + n)) --seed $n \
         --loc-restart "source /opt/ros/noetic/setup.bash; ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode kill /localization_node" \
         ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
