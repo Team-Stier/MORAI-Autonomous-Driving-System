@@ -16,7 +16,7 @@ sys.path[:0] = [str(HERE.parent / "server"), str(HERE.parent / "src"), str(HERE.
 
 import torch  # noqa: E402
 
-from backends import rl_logp  # noqa: E402
+from backends import rl_logp, sigmas  # noqa: E402
 from e2e_driver import wire  # noqa: E402
 
 
@@ -30,6 +30,12 @@ def test_logp():
     ref[0] = 0.0                                                           # sigma 0: a deterministic step
     got = rl_logp(eps, sigma)
     assert torch.allclose(got, ref, rtol=1e-4, atol=1e-2), (got, ref)
+    for bad in ([0.0] + [0.1] * 9, [0.1] * 9):                                # a deterministic step in an RL decision; length
+        try:
+            sigmas(bad, 10); raise AssertionError(bad)
+        except (ValueError, RuntimeError):
+            pass
+    assert sigmas(0.1, 10).tolist() == [0.1] * 10 or torch.allclose(sigmas(0.1, 10), torch.full((10,), 0.1))
     print("rl_logp ok", got[:3].tolist())
 
 
@@ -45,7 +51,7 @@ def test_server():
     p = subprocess.Popen([sys.executable, str(HERE.parent / "server" / "model_server.py"), "--backend", "fake", "--sims", "3",
                           "--port", str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
-        for _ in range(100):
+        for _ in range(600):                                               # a loaded host imports torch slowly
             try:
                 connect(port).close(); break                               # (that client takes a slot and goes)
             except OSError:

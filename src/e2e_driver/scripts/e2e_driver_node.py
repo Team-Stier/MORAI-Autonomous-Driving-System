@@ -179,7 +179,7 @@ class Node:
             if rest > 0:
                 rospy.sleep(rest)                               # on tau when /use_sim_time: 10 Hz of simulation time
             next_t = max(next_t + period, rospy.get_time() - period)        # do not burst after a stall
-            t0, w0 = rospy.get_time(), time.perf_counter()               # t0 on tau (sim clock), w0 wall for timings
+            t0, w0, t_wall = rospy.get_time(), time.perf_counter(), time.time()   # t0 on tau (sim clock), w0 wall for timings
             s = self.tracker.s_at(self.odo.at(t0))
             if s is None:
                 rospy.logwarn_throttle(5.0, "e2e_driver: no route progress yet (waiting for /localization/ego)")
@@ -194,6 +194,7 @@ class Node:
                 continue
             if self.follow_m > 0 and self.pose is not None:
                 req["route_kappa"] = float(self.route.pursuit_kappa(s, *self.pose, self.follow_m))
+            req["t_wall"] = t_wall                      # host clock at t0: the RL episode manager joins rewards on it
             if self.expert2_zone and self.expert2_zone[0] <= s < self.expert2_zone[1]:
                 req["expert"] = 1                       # RL_PLAN 5 A: the section expert (model_server --expert2)
             try:

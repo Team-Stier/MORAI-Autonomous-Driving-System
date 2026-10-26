@@ -14,6 +14,7 @@ signals.
         expert set picked per request, LoRA updates merged in place (EngineBackend).
 """
 import copy
+import json
 import math
 import os
 import time
@@ -112,9 +113,9 @@ class EngineBackend(HFBackend):
     __init__ warms up on stored requests (model_server --dump files) before the server listens.
 
     expert2 (RL_PLAN 5 A): a second expert set in VRAM, the delivery's expert + that LoRA file (engine.read_lora; ''
-    = a plain copy), picked per request by sample["expert"] (the node: by route position s). lora_watch: a LoRA file the
-    learner replaces atomically; poll_lora() merges each new one into the last expert set in place (seconds; graphs
-    stay). sims >= 1: the RL actor (model_server --sims): run_batch over up to `sims` simulators, one ViT cache each,
+    = a plain copy), picked per request by sample["expert"] (the node: by route position s). lora_watch: the learner's
+    <out>/lora/latest.json {version, path} (Alpamayo-Cosmos train/rl/learner.py publish); poll_lora() merges each new
+    version into the last expert set in place (seconds; graphs stay). Version 0 = the delivered expert. sims >= 1: the RL actor (model_server --sims): run_batch over up to `sims` simulators, one ViT cache each,
     one expert graph per batch; warm-up compiles that path instead of the single one."""
 
     def __init__(self, ckpt, vlm="Qwen/Qwen3-VL-4B-Instruct", num_steps=10, seed=None, device="cuda:0", warmup=(), pad_to=1792,
@@ -126,7 +127,7 @@ class EngineBackend(HFBackend):
         self.fast, self.fingerprints, self.layout = FastEngine(self.model, num_steps=num_steps, pad_to=pad_to, batch=max(sims, 1)), fingerprints, layout
         self.device, self.num_steps, self.seed, self.n, self.want_xyz = device, num_steps, seed, 0, want_xyz
         self.sp_cpu = copy.deepcopy(self.model.action_space).cpu()          # output conversion off the GPU
-        self.lora_watch, self.lora_mtime, self.lora_version, self.base = lora_watch, None, None, None
+        self.lora_watch, self.lora_mtime, self.lora_version, self.base = lora_watch, None, 0, None
         if expert2 is not None or lora_watch:            # LoRAs merge onto the delivery's BF16 expert (host memory)
             self.base = engine.expert_base(ckpt, self.fast.parts[0])
         if expert2 is not None:
@@ -170,17 +171,18 @@ class EngineBackend(HFBackend):
         else:
             self.fast.caches.pop(sim, None)
 
-    def load_lora(self, path):
+    def load_lora(self, path, version=None):
         """merge a LoRA file into the last expert set (the section expert, or the only one) in place -> seconds taken."""
         import engine
         t = time.perf_counter()
-        lora, scale, version = engine.read_lora(path)
+        lora, scale, meta_version = engine.read_lora(path)
         engine.apply_lora(self.fast.parts[-1], self.base, lora, scale)
-        self.lora_version = version
+        v = meta_version if version is None else version
+        self.lora_version = int(v) if str(v).isdigit() else v
         return time.perf_counter() - t
 
     def poll_lora(self):
-        """a new lora_watch file (mtime changed) -> load_lora; returns its seconds, or None when nothing changed."""
+        """a new latest.json (mtime changed) -> load_lora of its version; returns the seconds, or None when unchanged."""
         try:
             mtime = os.stat(self.lora_watch).st_mtime_ns
         except (TypeError, FileNotFoundError):
@@ -188,7 +190,10 @@ class EngineBackend(HFBackend):
         if mtime == self.lora_mtime:
             return None
         self.lora_mtime = mtime
-        return self.load_lora(self.lora_watch)
+        latest = json.loads(open(self.lora_watch).read())
+        if latest["version"] == self.lora_version:
+            return None
+        return self.load_lora(os.path.join(os.path.dirname(self.lora_watch), latest["path"]), latest["version"])
 
     def expert_of(self, sample):
         return min(int(sample.get("expert", 0)), len(self.fast.parts) - 1)   # no second set loaded: the base
@@ -249,7 +254,7 @@ class EngineBackend(HFBackend):
             b = self._dev(b)
             x0 = self._x0()
             eps = torch.randn(self.num_steps, *x0.shape, device=self.device)
-            sig = torch.as_tensor(sigma, dtype=torch.float32).expand(self.num_steps).clone()
+            sig = sigmas(sigma, self.num_steps)
             items.append(dict(sim=sim, td=b["tokenized_data"], hx=b["ego_history_xyz"], hr=b["ego_history_rot"], keys=keys, lay=lay,
                               x0=x0, noise=sig.to(self.device).view(-1, 1, 1, 1) * eps, eps=eps, sigma=sig, timing=timing,
                               expert=self.expert_of(sample)))
@@ -274,6 +279,15 @@ class EngineBackend(HFBackend):
         for out in outs:
             out["timing"].update(model_ms=round(1e3 * (t3 - t1), 1), post_ms=round(1e3 * (t3 - t2), 1))
         return outs
+
+
+def sigmas(sigma, steps):
+    """exploration std per Euler step from a scalar or `steps` values: all > 0 (an RL decision: the learner needs every
+    step's log-prob) or all 0 (deterministic)."""
+    sig = torch.as_tensor(sigma, dtype=torch.float32).expand(steps).clone()
+    if not (bool((sig > 0).all()) or bool((sig == 0).all())):
+        raise ValueError("sigma %s: all > 0 or all 0" % sig.tolist())
+    return sig
 
 
 def rl_logp(eps, sigma):

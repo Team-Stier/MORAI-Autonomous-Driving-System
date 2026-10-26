@@ -156,7 +156,7 @@ def serve_batch(a, backend):
     simulator (its own ViT cache, dropped when the client goes). The GPU thread takes one ready request per simulator
     and runs them as one batch (backend.run_batch) without waiting for the others: while the GPU is the bottleneck
     every simulator has one ready. Exploration std: --rl-sigma, or a request's own "sigma" (0 for an evaluation lap).
-    --lora-watch: a new LoRA file is merged in between batches. --dump DIR keeps DIR/simK/req_ID.bin (the request) and
+    --lora-watch: a new LoRA version (latest.json) is merged in between batches. --dump DIR keeps DIR/simK/req_ID.bin (the request) and
     out_ID.bin (the response: actions, chain, logp, expert, lora_version) per decision."""
     sims = a.sims
     poke, lock = threading.Event(), threading.Lock()
@@ -166,8 +166,10 @@ def serve_batch(a, backend):
         from prep_proc import PrepProcess
         assert a.backend == "engine", "--prep process is for the engine backend"
         procs = [PrepProcess(a.ckpt, a.vlm, "sdpa", backend.fast.image_token, backend.fast.vlm.visual.spatial_merge_size) for _ in range(sims)]
+    from backends import sigmas
     sigma = [float(x) for x in a.rl_sigma.split(",")]
     sigma = sigma[0] if len(sigma) == 1 else sigma                          # one std, or one per Euler step
+    sigmas(sigma, a.steps)                                                  # all > 0 or all 0, else ValueError
     dump = Path(a.dump) if a.dump else None
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -221,13 +223,17 @@ def serve_batch(a, backend):
             if req.get("reset") and hasattr(backend, "reset"):
                 backend.reset(k)
             to_sample(req, sample)
-            batch.append((k, sample, prepared, req.get("sigma", sigma)))
+            try:
+                sig = sigmas(req["sigma"], a.steps) if "sigma" in req else sigma
+            except ValueError as e:                           # the episode manager's request: keep the server's own
+                log.error("simulator %d request %s: %s", k, req.get("id"), e); sig = sigma
+            batch.append((k, sample, prepared, sig))
         outs = backend.run_batch(batch) if hasattr(backend, "run_batch") else [backend.run(s, p) for _, s, p, _ in batch]
         t4 = time.perf_counter()
         for (k, (req, sample, prepared, t_in, t, t1, t2)), out in zip(jobs, outs):
             out["timing"] = dict(out.get("timing", {}), wait_prep_ms=ms(t - t_in), assemble_ms=ms(t1 - t), prep_ms=ms(t2 - t),
                                  wait_run_ms=ms(t3 - t2), run_ms=ms(t4 - t3), total_ms=ms(t4 - t_in))
-            out["id"], out["sim"] = req.get("id"), k
+            out["id"], out["sim"], out["t_wall"] = req.get("id"), k, req.get("t_wall")   # t_wall: rl_reward joins on it
             if out.get("xyz") is None: out.pop("xyz", None)
             if dump: (dump / f"sim{k}" / f"out_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(out))
             try:
@@ -261,8 +267,8 @@ def main():
     ap.add_argument("--expert2", nargs="?", const="", default=None, metavar="LORA",
                     help="engine: a second expert set picked by the request's 'expert' (RL_PLAN 5 A): the delivery's expert "
                          "+ this LoRA file (train/rl LoRA.export); no file = a copy of the base")
-    ap.add_argument("--lora-watch", metavar="FILE", help="engine: merge FILE into the last expert set whenever the learner "
-                    "replaces it (--sims servers check between batches, once a second)")
+    ap.add_argument("--lora-watch", metavar="LATEST_JSON", help="engine: the learner's <out>/lora/latest.json; each new "
+                    "version is merged into the last expert set (--sims servers check between batches, once a second)")
     ap.add_argument("--warmup", default=str(HERE.parent / "assets" / "warmup"),
                     help="engine: dumped requests (req_*.bin) to compile and capture the graphs on before listening")
     a = ap.parse_args()

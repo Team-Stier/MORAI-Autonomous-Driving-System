@@ -56,7 +56,7 @@ def main():
     stages = sys.argv[3] if len(sys.argv) > 3 else "ABCDE"
     out_json = sys.argv[4] if len(sys.argv) > 4 else None
     reqs = [wire.unpack(f.read_bytes()) for f in sorted(Path(reqdir).glob("req_*.bin"))]
-    watch = Path(tempfile.mkdtemp()) / "expert_lora.safetensors"
+    watch = Path(tempfile.mkdtemp()) / "latest.json"                      # the learner's <out>/lora/latest.json
     be = EngineBackend(deliver, seed=0, sims=3, expert2="", lora_watch=str(watch))
     fe = be.fast
     report("load", dict(s=round(be.load_s, 1), info=be.model.engine_info, max_gb=gb(), requests=len(reqs)))
@@ -190,9 +190,10 @@ def main():
                 o, i_ = be.base[n].shape
                 t[n + ".lora_A"] = (torch.randn(16, i_, generator=g) / math.sqrt(i_)).to(torch.bfloat16)
                 t[n + ".lora_B"] = (torch.randn(o, 16, generator=g) * 0.02).to(torch.bfloat16)
+            name = f"v{version:05d}.safetensors"                 # as the learner's publish(): the file, then latest.json
+            save_file(t, str(watch.parent / name), metadata={"scale": "2.0", "rank": "16", "version": str(version)})
             tmp = watch.with_suffix(".tmp")
-            save_file(t, str(tmp), metadata={"scale": "2.0", "rank": "16", "version": str(version)})
-            os.replace(tmp, watch)                            # as the learner's LoRA.export
+            tmp.write_text(json.dumps({"version": version, "path": name, "scale": 2.0, "rank": 16})); os.replace(tmp, watch)
 
         p, _ = prep(nxt)
         run = lambda e: single(p, 777, e, cache={})[0]         # every image new each time: identical inputs
@@ -200,7 +201,7 @@ def main():
         write_lora(1, 1)
         took1 = be.poll_lora()
         a1, a0_after = run(1), run(0)
-        lora, scale, version = engine.read_lora(watch)
+        lora, scale, version = engine.read_lora(watch.parent / "v00001.safetensors")
         fresh_equal = []
         for n in names[::max(1, len(names) // 6)]:            # merged = load() of a merged delivery (F4Linear/F8Linear init)
             A, B = lora[n]
