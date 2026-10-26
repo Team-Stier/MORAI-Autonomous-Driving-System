@@ -2,6 +2,7 @@
 consecutive live requests (model_server --dump):
   A  the deployment path (FastEngine.run, deterministic Euler) is bit for bit the one before the RL changes
      (BASE_FAST_ENGINE = fast_engine.py of eval 1b69cef), and as fast;
+  F  the same without Inductor (compile=False: eager ops in CUDA graphs), i.e. the refactor alone;
   B  RL sampler, one simulator: sigma 0 equals the single path; with sigma the chain and logp agree with an eager
      recomputation of v(x_k, t_k) on the same prefix (what the learner does); step time vs the deterministic path;
   C  three simulators in one batch: decisions/s vs one at a time (one ViT cache per simulator either way), each row vs
@@ -12,7 +13,7 @@ consecutive live requests (model_server --dump):
   E  a batch with both expert sets (2 + 1 rows).
 
   winpc (cwd src/e2e_driver/server): HF_HUB_OFFLINE=1 MORAI_VLA_PYLIB=~/morai-student/pylib BASE_FAST_ENGINE=<old file> \
-      ~/morai-eval/venv-engine/bin/python ../test/rl_engine_check.py <deliver dir> <dir of req_*.bin> [stages ABCDE] [out.json]
+      ~/morai-eval/venv-engine/bin/python ../test/rl_engine_check.py <deliver dir> <dir of req_*.bin> [stages ABCDEF] [out.json]
 """
 import importlib.util
 import json
@@ -96,9 +97,24 @@ def main():
     zeros = torch.zeros(K, 1, 64, 2, device="cuda")
     nxt = 0                                              # next request index (stages use their own stretches)
 
+    spec = importlib.util.spec_from_file_location("fast_engine_base", os.environ["BASE_FAST_ENGINE"])
+    old = importlib.util.module_from_spec(spec); spec.loader.exec_module(old)
+
+    if "F" in stages:                                    # the refactor alone: eager ops in CUDA graphs, no Inductor
+        from fast_engine import FastEngine
+        ofe, nfe = old.FastEngine(be.model, compile=False), FastEngine(be.model, compile=False)
+        rows = []
+        for i in range(10):
+            p, _ = prep(500 + i)
+            d1, d2 = inputs(p), inputs(p)
+            a1, _ = ofe.run(d1["td"], d1["hx"], d1["hr"], x0(i), d1["keys"], d1["lay"])
+            a2, _ = nfe.run(d2["td"], d2["hx"], d2["hr"], x0(i), d2["keys"], d2["lay"])
+            rows.append((torch.equal(a1, a2), (a1 - a2).abs().max().item()))
+            print("F", i, rows[-1], flush=True)
+        report("F_refactor_eager_bit_identical", dict(all_equal=all(r[0] for r in rows), max_abs=max(r[1] for r in rows), n=len(rows)))
+        del ofe, nfe
+
     if "A" in stages:
-        spec = importlib.util.spec_from_file_location("fast_engine_base", os.environ["BASE_FAST_ENGINE"])
-        old = importlib.util.module_from_spec(spec); spec.loader.exec_module(old)
         ofe = old.FastEngine(be.model)
         rows = []
         for i in range(14):

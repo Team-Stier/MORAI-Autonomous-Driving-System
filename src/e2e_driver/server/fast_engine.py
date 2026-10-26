@@ -77,6 +77,34 @@ def _graph(fn):
     return g
 
 
+def _euler_step(self, m, b, llm, B, n, nq, g, Lp):
+    """one Euler step of the expert over B rows (FastEngine._exp_buffers); self = the FastEngine (or a stand-in with
+    expert, hd, kvh) and m = the model (or one with action_in_proj, action_out_proj): the pre-RL closure names."""
+    def step(x, t, dt):
+        h = m.action_in_proj(x, t)
+        for i, layer in enumerate(self.expert.layers):
+            a = layer.self_attn
+            y = layer.input_layernorm(h)
+            q = a.q_norm(a.q_proj(y).view(B, n, nq, self.hd)).transpose(1, 2)
+            k = a.k_norm(a.k_proj(y).view(B, n, self.kvh, self.hd)).transpose(1, 2)
+            v = a.v_proj(y).view(B, n, self.kvh, self.hd).transpose(1, 2)
+            q, k = mq.apply_rotary_pos_emb(q, k, b["cos"], b["sin"])
+            llm["K"][i][:, :, Lp:].copy_(k); llm["V"][i][:, :, Lp:].copy_(v)
+            # attention as two bf16 batched GEMMs and an fp32 softmax over [prefix | action] keys, GQA folded into
+            # the query length (query heads j*g..j*g+g-1 read KV head j). Measured alternatives for 64 queries x
+            # ~1.8k keys with the padding: masked SDPA fell back to fp32 SIMT (enable_gqa) or a 16-CTA mem-efficient
+            # kernel (46 ms), cuDNN 2x slower, varlen flash (exact lengths, no mask) 64 vs 44 ms (16 CTAs, no split-KV),
+            # FlexAttention (every key block partial for a variable L) 330 us a call vs ~35 us
+            qf = q.reshape(B, self.kvh, g * n, self.hd)
+            att = (torch.matmul(qf, llm["K"][i].transpose(-1, -2)).float() * a.scaling + b["mask"]).softmax(-1)
+            o = torch.matmul(att.to(torch.bfloat16), llm["V"][i]).reshape(B, nq, n, self.hd)
+            h = h + a.o_proj(o.transpose(1, 2).reshape(B, n, nq * self.hd))
+            h = h + layer.mlp(layer.post_attention_layernorm(h))
+        vel = m.action_out_proj(self.expert.norm(h)).view(B, n, 2)
+        return x + dt * vel
+    return step
+
+
 class FastEngine:
     def __init__(self, model, num_steps=10, use_graphs=True, compile=True, pad_to=1792, batch=1):
         self.m, self.steps, self.use_graphs, self.pad_to, self.batch = model, num_steps, use_graphs, pad_to, batch
@@ -197,30 +225,16 @@ class FastEngine:
         nq = ec.num_attention_heads
         g = nq // self.kvh
         P = self.parts[0] if parts is None else parts
-        expert, in_proj, out_proj = P["expert"], P["action_in_proj"], P["action_out_proj"]
+        # the model's own set traces through the closure names of the pre-RL step (self.expert, m.action_*): the same FX
+        # graph, so the deployment path keeps its cached compiled kernels (renamed closures compiled and autotuned anew
+        # and moved actions by up to 2e-4, 10/27); another set goes through stand-ins with the same attributes
+        if P is self.parts[0]:
+            sf, m = self, self.m
+        else:                                     # the ModuleDict has expert / action_in_proj / action_out_proj
+            P.hd, P.kvh = self.hd, self.kvh
+            sf = m = P
         t_start = self.t_start if B == 1 else [t.expand(B, 1, 1) for t in self.t_start]   # action_in_proj cats per row
-        def step(x, t, dt):
-            h = in_proj(x, t)
-            for i, layer in enumerate(expert.layers):
-                a = layer.self_attn
-                y = layer.input_layernorm(h)
-                q = a.q_norm(a.q_proj(y).view(B, n, nq, self.hd)).transpose(1, 2)
-                k = a.k_norm(a.k_proj(y).view(B, n, self.kvh, self.hd)).transpose(1, 2)
-                v = a.v_proj(y).view(B, n, self.kvh, self.hd).transpose(1, 2)
-                q, k = mq.apply_rotary_pos_emb(q, k, b["cos"], b["sin"])
-                llm["K"][i][:, :, Lp:].copy_(k); llm["V"][i][:, :, Lp:].copy_(v)
-                # attention as two bf16 batched GEMMs and an fp32 softmax over [prefix | action] keys, GQA folded into
-                # the query length (query heads j*g..j*g+g-1 read KV head j). Measured alternatives for 64 queries x
-                # ~1.8k keys with the padding: masked SDPA fell back to fp32 SIMT (enable_gqa) or a 16-CTA mem-efficient
-                # kernel (46 ms), cuDNN 2x slower, varlen flash (exact lengths, no mask) 64 vs 44 ms (16 CTAs, no split-KV),
-                # FlexAttention (every key block partial for a variable L) 330 us a call vs ~35 us
-                qf = q.reshape(B, self.kvh, g * n, self.hd)
-                att = (torch.matmul(qf, llm["K"][i].transpose(-1, -2)).float() * a.scaling + b["mask"]).softmax(-1)
-                o = torch.matmul(att.to(torch.bfloat16), llm["V"][i]).reshape(B, nq, n, self.hd)
-                h = h + a.o_proj(o.transpose(1, 2).reshape(B, n, nq * self.hd))
-                h = h + layer.mlp(layer.post_attention_layernorm(h))
-            vel = out_proj(expert.norm(h)).view(B, n, 2)
-            return x + dt * vel
+        step = _euler_step(sf, m, b, llm, B, n, nq, g, Lp)
         # max-autotune times Triton templates against cuBLAS for the bf16 attention GEMMs (cuBLAS picks 32x32 WMMA kernels
         # for 64 queries x ~1.8k keys): expert 44.2 -> 39.8 ms (the 10/24 benchmark: 39.5); minutes once, then cached
         step = self.compile(step, mode="max-autotune-no-cudagraphs")
