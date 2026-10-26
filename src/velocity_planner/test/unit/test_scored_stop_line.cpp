@@ -6,6 +6,7 @@
 #include <velocity_planner/cores/stop_line_pass_through.hpp>
 #include <velocity_planner/parameters/scored_stop_line_straight.hpp>
 #include <velocity_planner/parameters/scored_stop_line_left.hpp>
+#include <velocity_planner/parameters/scored_stop_line_pass_through.hpp>
 #include <gtest/gtest.h>
 #include <cmath>
 #include <fstream>
@@ -14,6 +15,17 @@
 #include <string>
 
 namespace {
+using StraightParameters = velocity_planner::ScoredStopLineStraightParameters;
+using LeftParameters = velocity_planner::ScoredStopLineLeftParameters;
+using PassParameters = velocity_planner::ScoredStopLinePassThroughParameters;
+
+template <typename Parameters>
+Parameters scoredParameters() {
+  Parameters result;
+  result.scored_stop_line_ids = {7294, 6254, 4188, 4356};
+  result.left_signal_stop_line_ids = {4356};
+  return result;
+}
 interfaces::Path path(double length = 40) {
   interfaces::Path result;
   result.header.frame_id = "map";
@@ -55,8 +67,8 @@ TEST(ScoredStopLine, AllEnumsRequireDirectionalConfirmation) {
                          false, true, true, false, true, true, true, true};
   for (std::uint8_t value = 0; value <= 16; ++value) {
     velocity_planner::StopLineState straight_state(parameters()), left_state(parameters(4356));
-    velocity_planner::ScoredStopLineStraight straight({}, straight_state);
-    velocity_planner::ScoredStopLineLeft left({}, left_state);
+    velocity_planner::ScoredStopLineStraight straight(scoredParameters<StraightParameters>(), straight_state);
+    velocity_planner::ScoredStopLineLeft left(scoredParameters<LeftParameters>(), left_state);
     for (int stamp = 1; stamp <= 3; ++stamp) {
       straight.process(path(), light(value, stamp), status(), {});
       left.process(path(), light(value, stamp), status(), {});
@@ -70,7 +82,7 @@ TEST(ScoredStopLine, BrakingProfileKeepsApproachAndStopsAheadOfFrontAxle) {
   auto params = parameters();
   params.x_m = 0;
   velocity_planner::StopLineState state(params);
-  velocity_planner::ScoredStopLineStraight core({}, state);
+  velocity_planner::ScoredStopLineStraight core(scoredParameters<StraightParameters>(), state);
   auto input = path();
   input.points[19].velocity = 2;
   tf2_msgs::TFMessage tf;
@@ -91,7 +103,7 @@ TEST(ScoredStopLine, BrakingProfileKeepsApproachAndStopsAheadOfFrontAxle) {
 TEST(ScoredStopLine, UnknownStopsAtEachOfTheFourJudgedIds) {
   for (const auto id : {7294, 6254, 4188, 4356}) {
     velocity_planner::StopLineState state(parameters(id));
-    velocity_planner::ScoredStopLineStraight core({}, state);
+    velocity_planner::ScoredStopLineStraight core(scoredParameters<StraightParameters>(), state);
     const auto output = core.process(path(), light(0, 1), status(), {});
     EXPECT_TRUE(state.stopping) << id;
     EXPECT_EQ(id, state.stop_line_id);
@@ -101,7 +113,7 @@ TEST(ScoredStopLine, UnknownStopsAtEachOfTheFourJudgedIds) {
 
 TEST(ScoredStopLine, RepeatedStampCannotReleaseAndThirdFreshGoReleasesImmediately) {
   velocity_planner::StopLineState state(parameters());
-  velocity_planner::ScoredStopLineStraight core({}, state);
+  velocity_planner::ScoredStopLineStraight core(scoredParameters<StraightParameters>(), state);
   core.process(path(), light(2, 1), status(), {});
   for (int i = 0; i < 10; ++i) core.process(path(), light(4, 2), status(), {});
   EXPECT_EQ(1, state.green_frames);
@@ -119,7 +131,7 @@ TEST(ScoredStopLine, RepeatedStampCannotReleaseAndThirdFreshGoReleasesImmediatel
 TEST(ScoredStopLine, UnknownAndOffResetVotesAndTimeoutNeverReleases) {
   for (const std::uint8_t value : {0, 1, 2}) {
     velocity_planner::StopLineState state(parameters());
-    velocity_planner::ScoredStopLineStraight core({}, state);
+    velocity_planner::ScoredStopLineStraight core(scoredParameters<StraightParameters>(), state);
     core.process(path(), light(2, 1), status(), {});
     core.process(path(), light(4, 2), status(), {});
     core.process(path(), light(4, 3), status(), {});
@@ -136,7 +148,7 @@ TEST(ScoredStopLine, UnknownAndOffResetVotesAndTimeoutNeverReleases) {
 TEST(ScoredStopLine, YellowOnlyCreatesStopWhenBrakingIsPossible) {
   for (const double speed : {5.0, 20.0}) {
     velocity_planner::StopLineState state(parameters());
-    velocity_planner::ScoredStopLineStraight core({}, state);
+    velocity_planner::ScoredStopLineStraight core(scoredParameters<StraightParameters>(), state);
     core.process(path(), light(3, 1), status(speed), {});
     EXPECT_EQ(speed == 5, state.stopping);
   }
@@ -144,8 +156,8 @@ TEST(ScoredStopLine, YellowOnlyCreatesStopWhenBrakingIsPossible) {
 
 TEST(ScoredStopLine, LostContactAndPassThroughKeepScoredStopWithoutTimeout) {
   velocity_planner::StopLineState state(parameters(4356));
-  velocity_planner::ScoredStopLineLeft core({}, state);
-  velocity_planner::ScoredStopLinePassThrough pass(state);
+  velocity_planner::ScoredStopLineLeft core(scoredParameters<LeftParameters>(), state);
+  velocity_planner::ScoredStopLinePassThrough pass(scoredParameters<PassParameters>(), state);
   core.process(path(), light(2, 1), status(), {});
   auto short_path = path(10);
   short_path.header.stamp.fromSec(500);
@@ -164,7 +176,7 @@ TEST(ScoredStopLine, NewScoredTargetDoesNotInheritConfirmedGo) {
   auto params = parameters();
   params.stop_lines.push_back({6254, {{{60, -1}}, {{60, 1}}}});
   velocity_planner::StopLineState state(params);
-  velocity_planner::ScoredStopLineStraight core({}, state);
+  velocity_planner::ScoredStopLineStraight core(scoredParameters<StraightParameters>(), state);
   for (int stamp = 1; stamp <= 3; ++stamp) core.process(path(), light(4, stamp), status(), {});
   EXPECT_FALSE(state.stopping);
   auto next = path();
@@ -180,9 +192,9 @@ TEST(ScoredStopLine, NonScoredResultsAndSharedStateMatchLegacy) {
     velocity_planner::StopLineState old_straight(parameters(123)), new_straight(parameters(123));
     velocity_planner::StopLineState old_left(parameters(123)), new_left(parameters(123));
     velocity_planner::StopLineCutoffStraight legacy_straight(old_straight);
-    velocity_planner::ScoredStopLineStraight scored_straight({}, new_straight);
+    velocity_planner::ScoredStopLineStraight scored_straight(scoredParameters<StraightParameters>(), new_straight);
     velocity_planner::StopLineCutoffLeft legacy_left(old_left);
-    velocity_planner::ScoredStopLineLeft scored_left({}, new_left);
+    velocity_planner::ScoredStopLineLeft scored_left(scoredParameters<LeftParameters>(), new_left);
     for (int stamp = 1; stamp <= 3; ++stamp) {
       EXPECT_EQ(legacy_straight.process(path(), light(value, stamp), status(), {}),
                 scored_straight.process(path(), light(value, stamp), status(), {}));
@@ -196,7 +208,7 @@ TEST(ScoredStopLine, NonScoredResultsAndSharedStateMatchLegacy) {
   old_state.stopping = new_state.stopping = true;
   old_state.stop_line_id = new_state.stop_line_id = 123;
   velocity_planner::StopLinePassThrough legacy(old_state);
-  velocity_planner::ScoredStopLinePassThrough scored(new_state);
+  velocity_planner::ScoredStopLinePassThrough scored(scoredParameters<PassParameters>(), new_state);
   auto later = path();
   later.header.stamp.fromSec(500);
   EXPECT_EQ(legacy.process(later, {}), scored.process(later, light(0, 1), {}));
@@ -277,7 +289,7 @@ TEST(ScoredStopLine, LaneletEndProjectionIsFinite) {
   for (const double projection : {8.0, 10.0}) {
     auto params = parameters(6254);
     params.stop_lines = {{6254, {{{-0.1, 0}}, {{0.1, 0}}}}};
-    velocity_planner::ScoredStopLineStraightParameters geometry;
+    auto geometry = scoredParameters<StraightParameters>();
     velocity_planner::ScoredStopLineStraightParameters::Corridor corridor;
     corridor.stop_line_id = 6254;
     corridor.left = {{{-1, 10}}, {{-1, 20}}};
@@ -293,5 +305,69 @@ TEST(ScoredStopLine, LaneletEndProjectionIsFinite) {
     velocity_planner::ScoredStopLineStraight core(geometry, state);
     core.process(input, light(0, 1), status(), {});
     EXPECT_EQ(projection == 10, state.stopping);
+  }
+}
+
+TEST(ScoredStopLine, ConfiguredArbitraryIdsSelectScoringAndDirectionInBothCutoffCores) {
+  for (const auto id : {9001, 9002}) {
+    auto straight_parameters = scoredParameters<StraightParameters>();
+    straight_parameters.scored_stop_line_ids = {9001, 9002};
+    straight_parameters.left_signal_stop_line_ids = {9002};
+    auto left_parameters = scoredParameters<LeftParameters>();
+    left_parameters.scored_stop_line_ids = {9001, 9002};
+    left_parameters.left_signal_stop_line_ids = {9002};
+    velocity_planner::StopLineState straight_state(parameters(id)), left_state(parameters(id));
+    velocity_planner::ScoredStopLineStraight straight(straight_parameters, straight_state);
+    velocity_planner::ScoredStopLineLeft left(left_parameters, left_state);
+    straight.process(path(), light(0, 1), status(), {});
+    left.process(path(), light(0, 1), status(), {});
+    EXPECT_TRUE(straight_state.stopping);
+    EXPECT_TRUE(left_state.stopping);
+    for (int stamp = 2; stamp <= 4; ++stamp) {
+      straight.process(path(), light(id == 9002 ? 5 : 4, stamp), status(), {});
+      left.process(path(), light(id == 9002 ? 5 : 4, stamp), status(), {});
+    }
+    EXPECT_FALSE(straight_state.stopping);
+    EXPECT_FALSE(left_state.stopping);
+  }
+  auto configured = scoredParameters<StraightParameters>();
+  configured.scored_stop_line_ids = {9001};
+  configured.left_signal_stop_line_ids.clear();
+  velocity_planner::StopLineState original_id_state(parameters(7294));
+  velocity_planner::ScoredStopLineStraight only_configured(configured, original_id_state);
+  only_configured.process(path(), light(0, 1), status(), {});
+  EXPECT_FALSE(original_id_state.stopping);
+}
+
+TEST(ScoredStopLine, PassThroughUsesConfiguredIdsAndValidatesLists) {
+  const auto config = node_pipeline::ParamReader::fromString(
+      "scored_stop_line_ids: [9001, 9002, -50]\nleft_signal_stop_line_ids: [9002]\n");
+  const auto loaded = velocity_planner::loadScoredStopLinePassThroughParameters(config);
+  ASSERT_EQ(3u, loaded.scored_stop_line_ids.size());
+  EXPECT_EQ(-50, loaded.scored_stop_line_ids.back());
+  for (const auto id : {9001, 9002}) {
+    velocity_planner::StopLineState state(parameters(id));
+    state.stopping = true;
+    state.stop_line_id = id;
+    velocity_planner::ScoredStopLinePassThrough pass(loaded, state);
+    auto later = path();
+    later.header.stamp.fromSec(500);
+    pass.process(later, light(0, 1), {});
+    EXPECT_TRUE(state.stopping);
+    for (int stamp = 2; stamp <= 4; ++stamp)
+      pass.process(later, light(id == 9002 ? 5 : 4, stamp), {});
+    EXPECT_FALSE(state.stopping);
+  }
+  for (const std::string& yaml : {
+      "scored_stop_line_ids: []\nleft_signal_stop_line_ids: []\n",
+      "scored_stop_line_ids: [0]\nleft_signal_stop_line_ids: []\n",
+      "scored_stop_line_ids: [9001, 9001]\nleft_signal_stop_line_ids: []\n",
+      "scored_stop_line_ids: [9001]\nleft_signal_stop_line_ids: [9002]\n",
+      "scored_stop_line_ids: [9001.5]\nleft_signal_stop_line_ids: []\n",
+      "scored_stop_line_ids: [.inf]\nleft_signal_stop_line_ids: []\n",
+      "scored_stop_line_ids: [9223372036854775808]\nleft_signal_stop_line_ids: []\n",
+      "scored_stop_line_ids: [9001]\nleft_signal_stop_line_ids: [9001, 9001]\n"}) {
+    EXPECT_THROW(velocity_planner::loadScoredStopLinePassThroughParameters(
+        node_pipeline::ParamReader::fromString(yaml)), std::invalid_argument);
   }
 }

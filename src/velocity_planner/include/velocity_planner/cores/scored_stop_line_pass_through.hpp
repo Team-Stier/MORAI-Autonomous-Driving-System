@@ -3,21 +3,31 @@
 #include <interfaces/Path.h>
 #include <interfaces/TrafficLight.h>
 #include <tf2_msgs/TFMessage.h>
+#include <algorithm>
 #include <array>
+#include <vector>
 #include <utility>
 
 namespace velocity_planner {
+struct ScoredStopLinePassThroughParameters {
+  std::vector<std::int64_t> scored_stop_line_ids;
+  std::vector<std::int64_t> left_signal_stop_line_ids;
+};
+
 class ScoredStopLinePassThrough {
  public:
-  explicit ScoredStopLinePassThrough(StopLineState& state) : state_(state) {}
+  explicit ScoredStopLinePassThrough(ScoredStopLinePassThroughParameters value, StopLineState& state)
+      : parameters_(std::move(value)), state_(state) {}
   std::pair<interfaces::Path, tf2_msgs::TFMessage> process(
       const interfaces::Path& path, const interfaces::TrafficLight& light,
       const tf2_msgs::TFMessage& tf) {
     interfaces::Path output = path;
     const auto id = state_.stop_line_id;
-    const bool scored = id == 7294 || id == 6254 || id == 4188 || id == 4356;
+    const bool scored = std::find(parameters_.scored_stop_line_ids.begin(),
+        parameters_.scored_stop_line_ids.end(), id) != parameters_.scored_stop_line_ids.end();
     if (state_.stopping && scored) {
-      const bool straight = id != 4356;
+      const bool straight = std::find(parameters_.left_signal_stop_line_ids.begin(),
+          parameters_.left_signal_stop_line_ids.end(), id) == parameters_.left_signal_stop_line_ids.end();
       if (state_.accepts_circular_green != straight) {
         state_.accepts_circular_green = straight;
         state_.green_frames = 0;
@@ -57,6 +67,7 @@ class ScoredStopLinePassThrough {
     return {std::move(output), tf};
   }
  private:
+  ScoredStopLinePassThroughParameters parameters_;
   StopLineState& state_;
 };
 }  // namespace velocity_planner

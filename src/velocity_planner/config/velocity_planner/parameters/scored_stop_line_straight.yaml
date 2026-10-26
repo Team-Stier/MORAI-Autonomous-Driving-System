@@ -1,3 +1,5 @@
+scored_stop_line_ids: [7294, 6254, 4188, 4356]
+left_signal_stop_line_ids: [4356]
 map_file: ../map/kcity_lanelet2.osm
 corridor_lanelets:
   "7294": [100487, 101629, 101623]
