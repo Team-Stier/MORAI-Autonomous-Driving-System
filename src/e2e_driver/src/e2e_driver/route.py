@@ -92,14 +92,17 @@ class PoseGuard:
 class TeleportDetector:
     """the Ego moved in one step (a checkpoint return by the operators, a scene reload): the stack is not told, so it
     watches for jumps no driving can make. competition_status heading changing by more than max_yaw between messages
-    less than 0.3 s apart (also inside a GPS blackout), or the GPS fix moving more than max_jump + 2 |v| dt (positions
-    from NMEA, ~0.2 m steps). An event is reported once; detections within hold s after it are the same event.
-    Known gap: a return to a spot with the same heading inside a GPS blackout is not seen (checkpoints lie outside it)."""
+    less than 0.3 s apart (also inside a GPS blackout), the GPS fix moving more than max_jump + 2 |v| dt (positions
+    from NMEA, ~0.2 m steps), or moving backwards against the heading by more than max_back + 2 max(-v, 0) dt: a
+    return to the previous checkpoint or a lap restart is a few metres back along the road with the same heading.
+    An event is reported once; detections within hold s after it are the same event.
+    Known gap: a return to a spot with the same heading inside a GPS blackout is not seen (the CP14 spawn gets GPS
+    (0, 0), MORAI 10/15)."""
 
-    def __init__(self, max_yaw=0.5, max_jump=20.0, hold=2.0):
-        self.max_yaw, self.max_jump, self.hold = max_yaw, max_jump, hold
+    def __init__(self, max_yaw=0.5, max_jump=20.0, max_back=2.0, hold=2.0):
+        self.max_yaw, self.max_jump, self.max_back, self.hold = max_yaw, max_jump, max_back, hold
         self.last_status = self.last_fix = self.origin = None
-        self.v, self.event_t = 0.0, -1e18
+        self.v, self.yaw, self.event_t = 0.0, None, -1e18
 
     def _event(self, t):
         fire = t - self.event_t > self.hold
@@ -107,7 +110,7 @@ class TeleportDetector:
         return fire
 
     def status(self, t, yaw, v):
-        last, self.last_status, self.v = self.last_status, (t, yaw), v
+        last, self.last_status, self.v, self.yaw = self.last_status, (t, yaw), v, yaw
         if last is None or not 0 < t - last[0] < 0.3:
             return False
         return abs(np.arctan2(np.sin(yaw - last[1]), np.cos(yaw - last[1]))) > self.max_yaw and self._event(t)
@@ -122,7 +125,11 @@ class TeleportDetector:
         last, self.last_fix = self.last_fix, (t, x, y)
         if last is None:
             return False
-        return np.hypot(x - last[1], y - last[2]) > self.max_jump + 2.0 * abs(self.v) * max(t - last[0], 0.0) and self._event(t)
+        dx, dy, dt = x - last[1], y - last[2], max(t - last[0], 0.0)
+        jump = np.hypot(dx, dy) > self.max_jump + 2.0 * abs(self.v) * dt
+        # heading: competition_status yaw (map frame; grid vs true north ~1.3 deg, nothing at a 2 m threshold)
+        back = self.yaw is not None and -(dx * np.cos(self.yaw) + dy * np.sin(self.yaw)) > self.max_back + 2.0 * max(-self.v, 0.0) * dt
+        return (jump or back) and self._event(t)
 
 
 class Odometer:

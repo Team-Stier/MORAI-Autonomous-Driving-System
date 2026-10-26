@@ -51,6 +51,17 @@ def test_teleport():
     assert not d.status(30.10, 2.5, 0.0) and not d.gps(30.1, lat0 + 300 * m, lon0)   # the same event
     assert d.gps(33.0, lat0 + 900 * m, lon0)                                    # later, a 600 m GPS jump: a new event
 
+    d, east = TeleportDetector(), lambda x: lon0 + x / (111320.0 * np.cos(np.radians(lat0)))
+    rng = np.random.default_rng(0)
+    for k in range(200):                                                        # 8 m/s east, GPS noise 0.2 m
+        d.status(0.05 * k, 0.0, 8.0)
+        assert not d.gps(0.05 * k, lat0 + rng.normal(0, 0.2) * m, east(0.4 * k + rng.normal(0, 0.2)))
+    for k in range(40):                                                         # stopped, then rolling back 0.5 m/s
+        d.status(10 + 0.05 * k, 0.0, -0.5 if k >= 20 else 0.0)
+        assert not d.gps(10 + 0.05 * k, lat0, east(80.0 - 0.025 * max(k - 20, 0)))
+    d.status(15.0, 0.0, 0.0)                                                    # lap restart: 5 m back, same heading
+    assert d.gps(15.0, lat0, east(75.0))
+
 
 if __name__ == "__main__":
     test_pursuit(); test_guard(); test_teleport(); print("ok")
