@@ -1,6 +1,7 @@
 #pragma once
 #include <node_pipeline/extension.hpp>
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/Imu.h>
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -10,6 +11,13 @@
 
 namespace localization {
 struct TunnelInputs {
+  void operator()(const sensor_msgs::Imu& imu, const node_pipeline::HealthLimits&,
+                  std::vector<node_pipeline::Kind>& issues) const {
+    for (const auto value : {imu.angular_velocity.x, imu.angular_velocity.y, imu.angular_velocity.z}) {
+      if (std::isnan(value)) { issues.push_back(node_pipeline::Kind::NaN); return; }
+      if (std::isinf(value)) { issues.push_back(node_pipeline::Kind::Inf); return; }
+    }
+  }
   void operator()(const sensor_msgs::PointCloud2& cloud, const node_pipeline::HealthLimits&,
                   std::vector<node_pipeline::Kind>& issues) const {
     if (cloud.is_bigendian || cloud.point_step == 0 ||

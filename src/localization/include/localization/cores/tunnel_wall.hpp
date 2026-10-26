@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <deque>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,11 @@ struct TunnelWallParameters {
   double wall_max_station_m = 60.0;
   double wall_min_height_m = 0.3;
   double wall_max_height_m = 3.5;
+  double clock_window_sec = 0.5;
+  double clock_min_speed_change_mps = 0.5;
+  double clock_min_yaw_change_rad = 0.1;
+  double clock_min_scale = 0.2;
+  double clock_max_scale = 1.5;
   Eigen::Matrix<double, 6, 1> initial_state = Eigen::Matrix<double, 6, 1>::Zero();
   Eigen::Matrix<double, 6, 6> initial_covariance = Eigen::Matrix<double, 6, 6>::Identity();
   std::uint64_t initial_previous_imu_stamp = 0;
@@ -67,7 +73,9 @@ class TunnelWall {
     acceleration.z() = 0;  // Same vertical constant-velocity model as FullEkf.
     const auto stamp = imu.header.stamp.toNSec();
     if (stamp != previous_imu_stamp_) {
-      const double dt = (static_cast<double>(stamp) - previous_imu_stamp_) * 1e-9;
+      const double host_dt = (static_cast<double>(stamp) - previous_imu_stamp_) * 1e-9;
+      updateTimeScale(imu, status, rotation.col(0).dot(acceleration), host_dt);
+      const double dt = host_dt * time_scale_;
       previous_imu_stamp_ = stamp;
       state_.head<3>() += state_.tail<3>() * dt + 0.5 * acceleration * dt * dt;
       state_.tail<3>() += acceleration * dt;
@@ -88,7 +96,9 @@ class TunnelWall {
          std::pow(parameters_.velocity_noise_mps, 2));
       // Velocity observations constrain motion; absolute position is anchored separately.
       gain.head<3>().setZero();
-      const double status_age_sec = imu.header.stamp.toSec() - status.header.stamp.toSec();
+      gain[5] = 0;  // Forward speed supplies no independent vertical observation.
+      const double status_age_sec = time_scale_ *
+        (imu.header.stamp.toSec() - status.header.stamp.toSec());
       const double forward_velocity_mps = status.velocity_x_mps +
         status_age_sec * rotation.col(0).dot(acceleration);
       correct(observation, forward_velocity_mps, gain,
@@ -105,14 +115,15 @@ class TunnelWall {
     }
     if (cloud.header.stamp.toNSec() != previous_lidar_stamp_) {
       previous_lidar_stamp_ = cloud.header.stamp.toNSec();
-      const double orientation_dt = (cloud.header.stamp.toSec() - status.header.stamp.toSec());
-      const Eigen::Vector3d angular_velocity(status.angular_velocity_x_radps,
-        status.angular_velocity_y_radps, status.angular_velocity_z_radps);
+      const double orientation_dt = time_scale_ *
+        (cloud.header.stamp.toSec() - status.header.stamp.toSec());
+      const Eigen::Vector3d angular_velocity(imu.angular_velocity.x,
+        imu.angular_velocity.y, imu.angular_velocity.z);
       const double angle = angular_velocity.norm() * orientation_dt;
       Eigen::Quaterniond scan_orientation = orientation;
       if (angle != 0) scan_orientation = orientation * Eigen::Quaterniond(
         Eigen::AngleAxisd(angle, angular_velocity.normalized()));
-      const double age = imu.header.stamp.toSec() - cloud.header.stamp.toSec();
+      const double age = time_scale_ * (imu.header.stamp.toSec() - cloud.header.stamp.toSec());
       const Eigen::Quaterniond body_from_level = (Eigen::Quaterniond(
         Eigen::AngleAxisd(status.pitch_rad, Eigen::Vector3d::UnitY()) *
         Eigen::AngleAxisd(status.roll_rad, Eigen::Vector3d::UnitX()))).conjugate();
@@ -160,6 +171,46 @@ class TunnelWall {
  private:
   using Vector6 = Eigen::Matrix<double, 6, 1>;
   using Matrix6 = Eigen::Matrix<double, 6, 6>;
+  struct MotionSample {
+    double stamp, speed, yaw, acceleration_integral, yaw_integral;
+  };
+  void updateTimeScale(const sensor_msgs::Imu& imu,
+                       const interfaces::CompetitionVehicleStatus& status,
+                       double forward_acceleration, double dt) {
+    if (last_tunnel_stamp_ != previous_imu_stamp_) {
+      motion_.clear();
+      acceleration_integral_ = yaw_integral_ = 0;
+      time_scale_ = 1;
+    }
+    last_tunnel_stamp_ = imu.header.stamp.toNSec();
+    acceleration_integral_ += forward_acceleration * dt;
+    const double yaw_rate = (std::sin(status.roll_rad) * imu.angular_velocity.y +
+      std::cos(status.roll_rad) * imu.angular_velocity.z) / std::cos(status.pitch_rad);
+    yaw_integral_ += yaw_rate * dt;
+    const double stamp = imu.header.stamp.toSec();
+    motion_.push_back({stamp, status.velocity_x_mps, status.yaw_rad,
+                       acceleration_integral_, yaw_integral_});
+    while (motion_.size() > 1 && stamp - motion_[1].stamp >= parameters_.clock_window_sec)
+      motion_.pop_front();
+    const auto& first = motion_.front();
+    if (stamp - first.stamp < 0.9 * parameters_.clock_window_sec) return;
+    const double delta_yaw = std::atan2(std::sin(status.yaw_rad - first.yaw),
+                                       std::cos(status.yaw_rad - first.yaw));
+    const double integrated_yaw = yaw_integral_ - first.yaw_integral;
+    const double delta_speed = status.velocity_x_mps - first.speed;
+    const double integrated_acceleration = acceleration_integral_ - first.acceleration_integral;
+    if (std::abs(delta_yaw) > parameters_.clock_min_yaw_change_rad &&
+        std::abs(integrated_yaw) > parameters_.clock_min_yaw_change_rad &&
+        delta_yaw * integrated_yaw > 0) {
+      time_scale_ = delta_yaw / integrated_yaw;
+    } else if (delta_speed > parameters_.clock_min_speed_change_mps &&
+               integrated_acceleration > parameters_.clock_min_speed_change_mps) {
+      time_scale_ = delta_speed / integrated_acceleration;
+    }
+    // shortcut: straight constant-speed motion holds its last scale; add station observations for long unobserved intervals.
+    time_scale_ = std::max(parameters_.clock_min_scale,
+                          std::min(parameters_.clock_max_scale, time_scale_));
+  }
   struct WallInformation { double precision = 0, weighted_position = 0; };
   void addConsensus(std::vector<double> values, WallInformation& information) const {
     std::sort(values.begin(), values.end());
@@ -204,7 +255,7 @@ class TunnelWall {
         float coordinates[4];
         for (std::size_t i = 0; i < 4; ++i)
           std::memcpy(&coordinates[i], record + offsets[i], sizeof(float));
-        const double point_dt = coordinates[3];
+        const double point_dt = time_scale_ * coordinates[3];
         Eigen::Quaterniond point_orientation = orientation;
         if (angular_speed != 0) point_orientation = orientation * Eigen::Quaterniond(
           Eigen::AngleAxisd(angular_speed * point_dt, angular_velocity / angular_speed));
@@ -240,5 +291,8 @@ class TunnelWall {
   Matrix6& covariance_;
   std::uint64_t &previous_imu_stamp_, &previous_status_stamp_, &previous_lidar_stamp_;
   Eigen::Vector3d tangent_, normal_;
+  std::deque<MotionSample> motion_;
+  std::uint64_t last_tunnel_stamp_ = 0;
+  double time_scale_ = 1, acceleration_integral_ = 0, yaw_integral_ = 0;
 };
 }  // namespace localization
