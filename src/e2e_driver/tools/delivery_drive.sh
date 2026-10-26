@@ -6,9 +6,13 @@
 # 15 fps 1280 wide), and on winpc telemetry_rec.py + /e2e_driver/debug + /sim_clock/state; everything lands in
 # ~/morai-eval/drives/NAME on the Mac. The last step stops the stack, server, tunnels, viewer and simulator, so the hosts
 # can go back right away; the 1x videos (lap_video.py make) are made afterwards on the Mac.
+# SIM=w1: MORAI is the W1 copy on winpc next to the engine (one PC; bc-250 hard-reset twice under the dense scenario,
+# 10/27), started here if it is not running; eval.sh runs with EVAL_SIM=w1 (gRPC returns/weather, winview.ps1).
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
-DELIVER=$1; NAME=$2; SEED=${3:-7}
+DELIVER=$1; NAME=$2; SEED=${3:-7}; SIM=${SIM:-bc250}
+PS="python3 $HOME/.claude/skills/morai-use/scripts/remote_ps.py --host winpc-win"
+WIN=$HOME/.claude/skills/morai-parallel-collect/scripts/win; W1='C:\morai\multi-03-20261007'
 OUT=$HOME/morai-eval/drives/$NAME; mkdir -p "$OUT"
 W=morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver
 L='~/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/SaveFile/LinkConnection.txt'
@@ -20,7 +24,18 @@ rsync -a --exclude __pycache__ --exclude '*.pyc' "$HERE/../" "winpc-wsl:$W/"
 ssh winpc-wsl "cd $W && sed -i 's|^E2E_MODEL_CKPT=.*|E2E_MODEL_CKPT=$DELIVER|' config/runtime.env && \
   sed -i 's|^  mode: .*|  mode: map|' config/e2e_driver.yaml && grep -n '^E2E_MODEL_CKPT\|^  mode:' config/runtime.env config/e2e_driver.yaml" | tee -a "$OUT/drive.log"
 
-if ! ssh bc-250 'pgrep -f "[S]imulator[.](x86_64|real)" > /dev/null'; then
+if [[ $SIM == w1 ]]; then
+  if ! ssh winpc-win 'tasklist | grep -q Simulator.exe'; then   # as morai-parallel-collect's start_sim + simctl start
+    log "W1: start (RTX 5080) and load K-City"
+    ssh winpc-win 'rm -f /c/morai/multi-03-20261007/Player.log'
+    $PS --interactive "$WIN/start_winsim.ps1" "Exe=$W1\\MoraiLauncher_Win_Data\\Project\\Simulator\\Simulator_v.S4.251001.MolitComp03_Window\\Simulator.exe" \
+      "SimArgs=-force-d3d11 -force-device-index 0 -logFile $W1\\Player.log" | tail -1
+    ssh winpc-win 'for i in $(seq 60); do grep -q "Login success" /c/morai/multi-03-20261007/Player.log 2> /dev/null && break; sleep 3; done
+      grep -m1 "Renderer:" /c/morai/multi-03-20261007/Player.log' | tee -a "$OUT/drive.log"
+    ssh winpc-wsl '$HOME/.morai-wsl-rebuild-20261007-a1/client-venv/bin/python ~/.claude-morai-wslros-20261018/bin/simctl.py \
+      --host $(ip route | awk "/default/{print \$3}") --port 7789 --key claude-wslros-win start' | tee -a "$OUT/drive.log"
+  fi
+elif ! ssh bc-250 'pgrep -f "[S]imulator[.](x86_64|real)" > /dev/null'; then
   log "simulator: execute"
   msc status "" 8 | grep -q platform || { log "launcher sends no MSC status: restart it (README two-PC rehearsal)"; exit 1; }
   msc execute "" 120
@@ -28,8 +43,8 @@ if ! ssh bc-250 'pgrep -f "[S]imulator[.](x86_64|real)" > /dev/null'; then
 fi
 log "5080 before the server (Windows desktop baseline): $(ssh winpc-wsl 'nvidia-smi --query-gpu=memory.used --format=csv,noheader')"
 log "two_pc up + prep"
-(SIM=bc250 FAKE_FOLLOW_ROUTE_M=0 bash "$HERE/two_pc.sh" up > "$OUT/up.log" 2>&1 &)
-SIM=bc250 bash "$HERE/two_pc.sh" prep 2>&1 | tail -6 | tee -a "$OUT/drive.log"
+(SIM=$SIM FAKE_FOLLOW_ROUTE_M=0 bash "$HERE/two_pc.sh" up > "$OUT/up.log" 2>&1 &)
+SIM=$SIM bash "$HERE/two_pc.sh" prep 2>&1 | tail -6 | tee -a "$OUT/drive.log"
 ssh winpc-wsl 'timeout 900 bash -c "until grep -q \"listening on\|Error\|Traceback\" ~/morai-eval/run/server.log; do sleep 3; done"; grep "loaded in\|Error" ~/morai-eval/run/server.log | cut -c1-600' | tee -a "$OUT/drive.log"
 log "5080 after the server warm-up: $(ssh winpc-wsl 'nvidia-smi --query-gpu=memory.used --format=csv,noheader; nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader' | tr '\n' ' ')"
 
@@ -44,12 +59,13 @@ for MODE in ${MODES:-map}; do
   ssh winpc-wsl "cd $W/tools/winpc && rm -f ~/morai-eval/data/stop_$N && (setsid nohup ./chroot.sh rec \"source devel/setup.bash; \
     python3 src/e2e_driver/tools/telemetry_rec.py /data/tel_$N.csv & PYTHONUNBUFFERED=1 rostopic echo -p /e2e_driver/debug/data > /data/dbg_$N.csv & \
     rostopic echo -p /sim_clock/state > /data/clk_$N.csv & until [ -e /data/stop_$N ]; do sleep 1; done; kill %1 %2 %3\" > /dev/null 2>&1 < /dev/null &)"
-  uv run --no-project -q --with numpy python "$HERE/lap_video.py" record http://192.168.0.15:8090/ "$OUT/frames_$MODE" > /dev/null 2>&1 &
+  [[ $SIM == w1 ]] && VIEW=http://127.0.0.1:8090/ || VIEW=http://192.168.0.15:8090/     # w1: eval.sh's ssh forward
+  uv run --no-project -q --with numpy python "$HERE/lap_video.py" record $VIEW "$OUT/frames_$MODE" > /dev/null 2>&1 &
   REC=$!
   ssh winpc-wsl "(setsid nohup python3 -u $W/tools/objinfo_rec.py ~/morai-eval/data/obj_$N.csv > /dev/null 2>&1 < /dev/null & echo \$! > ~/morai-eval/run/obj.pid)"
   ssh winpc-wsl "(setsid nohup nvidia-smi --query-gpu=timestamp,memory.used --format=csv,noheader,nounits -lms 1000 > ~/morai-eval/data/vram_$N.csv 2>&1 < /dev/null & echo \$! > ~/morai-eval/run/vram.pid)"
   log "drive $N: eval lap seed $SEED"
-  VIEW_FPS=15 VIEW_WIDTH=1280 bash "$HERE/eval.sh" "$N" --laps 1 --seed "$SEED" 2>&1 | grep -v "ev_poll_posix" | tee -a "$OUT/drive.log"
+  EVAL_SIM=$SIM VIEW_FPS=15 VIEW_WIDTH=1280 bash "$HERE/eval.sh" "$N" --laps 1 --seed "$SEED" 2>&1 | grep -v "ev_poll_posix" | tee -a "$OUT/drive.log"
   kill $REC 2>/dev/null
   ssh winpc-wsl "touch ~/morai-eval/data/stop_$N; kill \$(cat ~/morai-eval/run/vram.pid) \$(cat ~/morai-eval/run/obj.pid) 2>/dev/null"; sleep 3
   log "5080 during the lap: max $(ssh winpc-wsl "cut -d, -f2 ~/morai-eval/data/vram_$N.csv | sort -n | tail -1") MiB; server peaks: $(ssh winpc-wsl 'grep -o "gpu {[^}]*}" ~/morai-eval/run/server.log | tail -1')"
@@ -62,8 +78,16 @@ done
 log "hosts back: stack, server, tunnels, viewer, simulator down"
 scp -q winpc-wsl:morai-eval/run/server.log "$OUT/server.log"
 ssh winpc-wsl "cd $W && sed -i 's|^  mode: .*|  mode: map|' config/e2e_driver.yaml"
-SIM=bc250 bash "$HERE/two_pc.sh" down 2>&1 | tail -2
-ssh bc-250 'python3 ~/morai-eval-wtc.py down > /dev/null 2>&1; kill $(cat ~/morai-eval-viewer.pid 2>/dev/null) 2>/dev/null; true'
-ssh bc-250 'p=$(pgrep -f "[S]imulator[.](x86_64|real)" | head -1); [ -n "$p" ] && kill $p; true'
+SIM=$SIM bash "$HERE/two_pc.sh" down 2>&1 | tail -2
+if [[ $SIM == w1 ]]; then
+  $PS --interactive "$WIN/close_by_path.ps1" "ExePrefix=$W1\\" | tail -1
+  sleep 10   # Unity saved winview's 1280x720 window in the shared PlayerPrefs: back to the 4K size found on 10/27
+  for v in 'Width_h182942802 3840' 'Height_h2627697771 2160'; do set -- $v
+    ssh winpc-win "MSYS_NO_PATHCONV=1 reg add 'HKCU\Software\MORAI\Simulator' /v 'Screenmanager Resolution $1' /t REG_DWORD /d $2 /f" > /dev/null
+  done
+else
+  ssh bc-250 'python3 ~/morai-eval-wtc.py down > /dev/null 2>&1; kill $(cat ~/morai-eval-viewer.pid 2>/dev/null) 2>/dev/null; true'
+  ssh bc-250 'p=$(pgrep -f "[S]imulator[.](x86_64|real)" | head -1); [ -n "$p" ] && kill $p; true'
+fi
 ssh winpc-wsl 'nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader; echo "compute apps: $(nvidia-smi --query-compute-apps=pid --format=csv,noheader | wc -l)"' | tee -a "$OUT/drive.log"
 log "done: $OUT"

@@ -74,6 +74,15 @@ SKIP_M = 10.0
 GRACE_S = 10.0          # no failure checks right after a start or a return: the stack starts over from standstill
 HZ = 20.0
 VIEW_FPS, VIEW_WIDTH = os.environ.get("VIEW_FPS", "5"), os.environ.get("VIEW_WIDTH", "960")   # 15 1280 for a lap video
+VIEW_URL = f"http://{HOST}:8090/"
+# EVAL_SIM=w1: the W1 copy on winpc (two_pc.sh SIM=w1, gRPC on the cable address). Scenes are written from WSL into its
+# scenario folder, MSC goes through windows_msc.ps1, returns and weather use gRPC (the official programs here are the
+# Linux builds), and winview.ps1 serves the window on winpc's loopback, forwarded to the Mac's 127.0.0.1:8090.
+SIM = os.environ.get("EVAL_SIM", "bc250")
+if SIM == "w1":
+    BC, HOST, VIEW_URL = "winpc-wsl", "192.168.0.1", "http://127.0.0.1:8090/"
+    W1_DATA = "C:/morai/multi-03-20261007/MoraiLauncher_Win_Data"
+    SCEN = "/mnt/c/morai/multi-03-20261007/MoraiLauncher_Win_Data/SaveFile/Scenario/R_KR_PR_K-city_2025"
 OFFICIAL = "~/morai-eval-official"      # on bc-250 (fetch_official_tools.sh)
 SPAWN_SHA = "5ecc827f5fcbd1cbe00aabb5b01aa01e6d1f87293345d61c20ba5d139210a2f6"    # morai-docs assets/catalog.json
 WTC_SHA = "8c47f48a8d54b79b657920a661f582bd587c9f9065b6b55c9e911d42a0369609"
@@ -178,6 +187,16 @@ def ssh(cmd, timeout=150):
 
 
 def msc(action, option="", timeout=30):
+    if SIM == "w1":                                   # windows_msc.ps1 prints one JSON line; msc.py's form is "ok {...}"
+        out = subprocess.run(["ssh", "-o", "BatchMode=yes", "winpc-win", "powershell -NoProfile -ExecutionPolicy Bypass -File"
+                              f" C:/morai-par/windows_msc.ps1 -Action {action} {'-Option ' + option if option else ''}"
+                              f" -Timeout {min(timeout, 120)} -LinkFile {W1_DATA}/SaveFile/LinkConnection.txt"],
+                             capture_output=True, text=True, timeout=timeout + 30).stdout.replace("\0", "").strip()
+        line = out.splitlines()[-1] if out else "{}"
+        try:
+            return ("ok " if json.loads(line).get("ok") else "failed ") + line
+        except ValueError:
+            return "failed " + line
     out = ssh(f"python3 ~/morai-eval-msc.py {LAUNCHER}/SaveFile/LinkConnection.txt {action} '{option}' {timeout}",
               timeout + 30).strip().splitlines()
     return out[-1] if out else ""
@@ -363,7 +382,7 @@ class Manager:
 def serve(mgr, port):
     page = (f"<!doctype html><meta charset=utf-8><title>MORAI eval</title><style>body{{margin:0;background:#111;"
             f"color:#ddd;font:14px monospace}}img{{width:100%;max-width:1280px;display:block}}pre{{margin:0;padding:8px}}"
-            f"</style><img src='http://{HOST}:8090/'><pre id=s></pre><script>setInterval(async()=>{{try{{"
+            f"</style><img src='{VIEW_URL}'><pre id=s></pre><script>setInterval(async()=>{{try{{"
             f"s.textContent=await (await fetch('/status')).text()}}catch(e){{}}}},1000)</script>").encode()
 
     class Page(BaseHTTPRequestHandler):
@@ -381,6 +400,8 @@ def serve(mgr, port):
 
 
 def deploy(a):
+    if SIM == "w1":
+        return deploy_w1(a)
     if not a.direct:
         ok = ssh(f"cd {OFFICIAL} && sha256sum -c --quiet - <<'E' && echo verified\n{SPAWN_SHA}  MORAI_Spawn_Linux\n"
                  f"{WTC_SHA}  WeatherTimeChanger_Linux\nE\n")
@@ -400,6 +421,29 @@ def deploy(a):
             " 2>&1 < /dev/null & echo $! > ~/morai-eval-viewer.pid; }")
 
 
+WINVIEW_STOP = "powershell -NoProfile -ExecutionPolicy Bypass -File C:/morai-par/winview.ps1 -Stop"
+
+
+def winview_down():
+    subprocess.run(["pkill", "-f", "[s]sh -N -L 8090:127.0.0.1:8090 winpc-win"])
+    subprocess.run(["ssh", "winpc-win", WINVIEW_STOP], capture_output=True)
+
+
+def deploy_w1(a):
+    for src, dst in ((HERE / "scenario_variants.py", "morai-eval-scenario-variants.py"),
+                     (MAP / "2026_molit_comp_global_path.txt", "morai-eval-global-path.txt")):
+        subprocess.run(["scp", "-q", str(src), f"{BC}:{dst}"], check=True)
+    if a.no_view:
+        return
+    subprocess.run(["scp", "-q", str(HERE / "winview.ps1"), "winpc-win:C:/morai-par/winview.ps1"], check=True)
+    winview_down()                                        # a fresh one, with this run's FPS and width
+    print(subprocess.run(["python3", str(Path.home() / ".claude/skills/morai-use/scripts/remote_ps.py"), "--host", "winpc-win",
+                          "--interactive", str(HERE / "winview.ps1"), f"Fps={VIEW_FPS}", f"Width={VIEW_WIDTH}"],
+                         capture_output=True, text=True).stdout.strip(), flush=True)
+    subprocess.Popen(["ssh", "-N", "-L", "8090:127.0.0.1:8090", "winpc-win"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)    # the forward must not hold the caller's pipes
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("name")
@@ -412,6 +456,7 @@ def main():
     ap.add_argument("--no-view", action="store_true")
     ap.add_argument("--direct", action="store_true", help="returns and weather over gRPC instead of the official programs")
     a = ap.parse_args()
+    a.direct = a.direct or SIM == "w1"
     mgr = Manager(a)
     deploy(a)
     serve(mgr, a.port)
@@ -426,7 +471,9 @@ def main():
         msc("pause")
         if not a.direct:
             ssh("python3 ~/morai-eval-wtc.py down")
-        if not a.no_view:
+        if not a.no_view and SIM == "w1":
+            winview_down()
+        elif not a.no_view:
             ssh("kill $(cat ~/morai-eval-viewer.pid) 2>/dev/null; true")
 
 

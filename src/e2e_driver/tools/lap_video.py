@@ -7,7 +7,7 @@ eval_manager.py). bc-250 runs below real time, so the recording is put on the es
     lap_video.py debug-telemetry DBG.csv STACK.log OUT.csv     (a run without telemetry_rec.py: the node's commands only)
 
 make: CLOCK = eval_manager's lapK.clock.json, (wall, tau) at 20 Hz; each frame's wall time -> tau by interpolation;
-FPS (30) frames per simulator second, each the newest frame at or before its tick; 1280x720 H.264 (ffmpeg, CRF 23):
+FPS (30) frames per simulator second, each the newest frame at or before its tick; 1280x720 H.264 (ffmpeg, CRF 23, LAP_CRF):
 the (square) simulator window on the left 720 x 720, a dashboard on the right 560 px (it covers nothing of the car):
 speedometer, steering wheel icon + front wheel angle, accel / brake over the last 10 s of simulator time, applied
 values (competition_status, solid) and the node's command (/control_cmd, dashed). TELEMETRY = telemetry_rec.py's CSV
@@ -161,7 +161,9 @@ def make(d, clock, out, fps=30.0, telemetry=None, offset=0.0):
     pick = np.searchsorted(tau, ticks, side="right") - 1          # newest frame at or before each tick
     tel = load_telemetry(telemetry, c, offset) if telemetry else {}
     import os
-    size = f"{W}x{H}" if tel else f"{SIDE}x{SIDE}"
+    first = Image.open(d / names[0])                               # no telemetry: the whole view, SIDE high (W1: 1280)
+    vw = SIDE if tel else 2 * round(first.width * SIDE / first.height / 2)
+    size = f"{W}x{H}" if tel else f"{vw}x{SIDE}"
     enc = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", size,
                             "-r", "%g" % fps, "-i", "-", "-c:v", "libx264", "-crf", os.environ.get("LAP_CRF", "23"), "-preset", "veryfast",
                             "-pix_fmt", "yuv420p", str(out)], stdin=subprocess.PIPE)
@@ -174,8 +176,8 @@ def make(d, clock, out, fps=30.0, telemetry=None, offset=0.0):
             canvas = Image.new("RGB", (W, H), (18, 18, 22))
             canvas.paste(view.crop((0, 0, min(view.width, SIDE), SIDE)), (0, 0))
             dashboard(canvas, tel, float(tick), float(ticks[0]))
-        else:                                                  # no telemetry: the simulator view alone, SIDE x SIDE
-            canvas = view.crop((0, 0, SIDE, SIDE))
+        else:                                                  # no telemetry: the simulator view alone, vw x SIDE
+            canvas = view.crop((0, 0, vw, SIDE))
         enc.stdin.write(canvas.tobytes())
     enc.stdin.close()
     if enc.wait():

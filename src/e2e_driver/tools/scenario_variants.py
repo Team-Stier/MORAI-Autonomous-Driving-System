@@ -2,8 +2,9 @@
 """Random variants of the collection scene for data balance (Alpamayo-Cosmos DATA_PLAN.md §6).
 Copy of the collection skill's scripts/wsl/scenario-variants.py (sha256 50c7e3e1, 2026-10-26); eval_manager.py makes
 one lap scene per lap with it (no checkpoints csv: the Ego keeps the base scene's START spawn). Eval changes (10/27): a
-pedestrian's standardPos follows its new position (it stayed at the sample's, and the 10/27 lap's pedestrian never walked;
-in the sample standardPos == initPos), and spawn points keep the base scene's vehicle type.
+pedestrian's standardPos follows its new position (in the sample standardPos == initPos), a moved pedestrian gets its own
+copy of the sample's waypoint path (without it the 10/27 laps' pedestrian never walked), and spawn points keep the base
+scene's vehicle type.
 
 Usage: scenario-variants.py <scenario dir> <base> <count> <seed> <global path txt> [prefix] [checkpoints csv] [starts]
 With a checkpoints csv the Ego starts at a checkpoint just before a mission (section episodes, E1), 30% of them
@@ -153,6 +154,19 @@ def make(base, route, rng, uid0, cps=None):
         x, y, z, h = route.at(s, lat)
         p.update(DataID=rng.choice(PEDESTRIANS), UNIQUEID=uid[0], pos=vec(x, y, z), initPos=vec(-x, z, -y), standardPos=vec(-x, z, -y),
                  activeDistance=rng.uniform(8, 25), speed=rng.uniform(4, 12), movingDistance=rng.uniform(4, 10))
+        # Waypoint mode walks the path named "PedPath - <UNIQUEID>" (manual 24.R2/26.R1 Pedestrian Waypoint); with a new id
+        # and no path of its own the pedestrian stood still (10/27 laps). It gets the sample's path (across the road, 13.8 m)
+        # turned by the route's heading change and moved with it. Unity coordinates: (-x, z, -y).
+        src = next((w for w in base.get("waypointDataList", []) if w["pathName"] == f"PedPath - {template['UNIQUEID']}"), None)
+        if src:
+            tx, ty = template["pos"]["x"], template["pos"]["y"]
+            dh = math.radians(h - route.at(route.project(tx, ty)[0], lat)[3])
+            wps = []
+            for w in src["waypointData"]:
+                dx, dy = -w["pos"]["x"] - tx, -w["pos"]["z"] - ty
+                wx, wy = x + dx * math.cos(dh) - dy * math.sin(dh), y + dx * math.sin(dh) + dy * math.cos(dh)
+                wps.append(dict(copy.deepcopy(w), pos=vec(-wx, z, -wy)))
+            d["waypointDataList"].append({"pathName": f"PedPath - {uid[0]}", "waypointData": wps})
         uid[0] += 1
         return p, dict(zone=tag, id=p["DataID"], s=round(s, 1), active=round(p["activeDistance"], 1),
                        speed=round(p["speed"], 1), move=round(p["movingDistance"], 1))
