@@ -567,8 +567,8 @@ src/e2e_driver/tools/delivery_drive.sh /home/taeyun_kim/morai-eval/engine/wowmay
 1. 코드를 winpc로 동기화하고, `runtime.env`의 `E2E_MODEL_CKPT`를 납품물로, `control.mode`를 map으로 둔다.
 2. bc-250에 시뮬레이터가 없으면 MSC `execute`로 띄운다. 런처가 MSC 상태를 안 보내면 멈추고 알린다.
 3. `two_pc.sh up`(엔진 서버, 스택, 터널)과 `prep`(맵, 프리셋, 장면)을 실행한다.
-4. 주행 1, map: winpc에서 `telemetry_rec.py`, `/e2e_driver/debug`, `/sim_clock/state`를 기록하고, Mac에서 시뮬레이터 화면을 녹화한다. `eval.sh NAME_map --laps 1 --seed SEED`.
-5. 주행 2, mlp: 엔진은 그대로 두고 `control.mode: mlp`로 스택만 다시 띄워 같은 seed로 한 바퀴 돈다.
+4. map으로 한 바퀴 돈다(고정 변환표, hold_brake 0.2). winpc에서 `telemetry_rec.py`, `/e2e_driver/debug`, `/sim_clock/state`를 기록하고, Mac에서 시뮬레이터 화면을 녹화한다. `eval.sh NAME_map --laps 1 --seed SEED`.
+5. MLP는 사용자 결정으로 쓰지 않는다(10/27). `MODES="map mlp"`이면 엔진은 그대로 두고 `control.mode: mlp`로 스택만 다시 띄워 같은 seed로 한 바퀴를 더 돈다.
 6. 기록(`~/morai-eval/drives/NAME`)을 Mac에 모은 뒤 스택, 서버, 터널, 뷰어, 시뮬레이터를 내린다. 호스트를 바로 돌려줄 수 있다.
 7. 반납 뒤 Mac에서 영상을 만든다:
    `lap_video.py make DRIVE/frames_MODE DRIVE/eval_MODE/lap000.clock.json OUT.mp4 30 DRIVE/tel_NAME_MODE.csv 0.04`

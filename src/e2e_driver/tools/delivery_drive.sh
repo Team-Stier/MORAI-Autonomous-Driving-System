@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The delivery drive, from the Mac, once both hosts are ours: one lap with control.mode map, then the same scenario seed
-# with control.mode mlp (the engine stays up; only the ROS stack restarts with the other mode).
+# The delivery drive, from the Mac, once both hosts are ours: one lap with control.mode map (the fixed tables; the user
+# dropped the MLP on 10/27). MODES="map mlp" would add a lap with the mlp node on the same seed (engine stays up).
 #   delivery_drive.sh DELIVER_DIR(on winpc) NAME [SEED]
 # Per drive: eval.sh NAME_<mode> --laps 1 --seed SEED, the simulator window recorded on the Mac (lap_video.py record,
 # 15 fps 1280 wide), and on winpc telemetry_rec.py + /e2e_driver/debug + /sim_clock/state; everything lands in
@@ -31,7 +31,7 @@ log "two_pc up + prep"
 SIM=bc250 bash "$HERE/two_pc.sh" prep 2>&1 | tail -6 | tee -a "$OUT/drive.log"
 ssh winpc-wsl 'timeout 900 bash -c "until grep -q \"listening on\|Error\|Traceback\" ~/morai-eval/run/server.log; do sleep 3; done"; grep "loaded in\|Error" ~/morai-eval/run/server.log | cut -c1-400' | tee -a "$OUT/drive.log"
 
-for MODE in map mlp; do
+for MODE in ${MODES:-map}; do
   N=${NAME}_$MODE
   if [[ $MODE == mlp ]]; then
     log "stack restart with control.mode mlp (engine stays)"
