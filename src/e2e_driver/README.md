@@ -422,12 +422,65 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
 - **실행**: `./run.sh` 한 번이면 된다.
   - 빌드한 뒤 모델 서버를 띄우고(모델이 로드되는 동안 ROS 노드가 함께 뜬다), 시뮬레이터 시계, 브릿지, LiDAR, localization, e2e_driver, speed_filter를 띄운다.
   - 평가 관리자(아래)는 `run.sh`에 들어 있지 않고, 없어도 그대로 돈다.
+- **순간이동 자체 감지** (`route.TeleportDetector`): 운영요원이 체크포인트로 복귀시켜도 스택은 통보를 받지 않는다. 그래서 주행으로는 불가능한 변화를 직접 본다.
+  - competition_status 방향이 0.3 s 안에 0.5 rad 넘게 바뀜. GPS 음영 안에서도 동작한다.
+  - GPS fix가 20 m + 2|v|Δt 넘게 이동함.
+  - GPS fix가 진행 방향 반대로 2 m + 2·max(−v, 0)·Δt 넘게 이동함. 직전 체크포인트 복귀와 랩 재시작은 같은 방향으로 수 m 뒤로 가는 경우라 이 규칙이 잡는다.
+  - 감지하면 프레임·스캔·ego 이력, 경로 진행, 가드, 계획을 비운다. localization을 재시작하고 `/e2e_driver/teleport`를 내보낸다. vlp16_bev는 새 추적과 odometry epoch를, sim_clock은 ρ 창을 새로 시작한다. 차는 정지 상태에서 다시 출발한다.
+  - 놓치는 경우: GPS 음영 안에서 같은 방향으로 옮겨진 경우. CP14 소환 위치는 GPS (0, 0)을 받는다(MORAI 10/15 답변).
 - **학습 코드 고정 사본**: 모델 서버가 쓰는 `morai_vla`(전처리, 모델 정의, lidar_bev)는 `server/vendor`에 고정 사본으로 둔다(`MANIFEST.sha256`).
   - 납품 체크포인트의 학습 코드가 바뀌면 `tools/vendor_sync.sh <train dir>`로 갱신한다.
   - `test/test_vendor.py [train dir]`가 목록과 바이트 단위 일치, vlp16_bev의 `lidar_bev.py` 사본을 확인한다.
   - alpamayo 계열 패키지는 `requirements.lock`의 공개 GitHub 고정 커밋이다.
 - **winpc**: 아래 '실행 (winpc WSL)'처럼 ROS는 Noetic chroot에서, 모델 서버는 그 밖에서 띄운다(`tools/winpc/stack.sh`, `server.sh`). `runtime.env`의 `E2E_MODEL_PYTHON`은 비워 둔다.
   - 운영측 PC의 UDP를 LAN에서 WSL로 받으려면 WSL mirrored 네트워킹이나 Windows 쪽 UDP 전달이 필요하다. 아직 정하지 않았다.
+
+## 평가 관리자 (`tools/eval.sh`, Mac에서 실행)
+
+운영측 역할을 하는 별도 도구다(`tools/eval_manager.py`). 스택은 운전만 하고, MORAI 제어는 관리자가 맡는다. bc-250에는 MSC를 ssh로, gRPC는 192.168.0.15:7789로 보낸다.
+
+```bash
+tools/two_pc.sh up && tools/two_pc.sh prep          # 스택(학생: up --backend hf --ckpt <dir>)과 맵·프리셋
+tools/eval.sh <이름> [--laps N] [--seed S]          # N = 0이면 멈출 때까지; 보기: http://localhost:8091
+tools/eval.sh <이름> --weather SUNNY:13              # 날씨·시각 고정
+```
+
+- **랩**: 랩 k마다 clcol 장면의 랜덤 변형을 만든다(`scenario_variants.py`, 시드 S·1000 + k, bc-250에서 생성).
+  - Ego는 START에서 출발한다. 신호 위상, NPC 교통, 정적 장애물, 보행자, GPS 음영 구역을 무작위로 뽑는다.
+  - 일시정지 상태로 로드하고 날씨를 맞춘 뒤 play한다.
+  - 랩이 끝나면 바로 다음 랩 장면을 로드한다. 랩 종료 조건은 세 가지다: 체크포인트 14개를 순서대로 지나고 경로 마지막 점에 닿음, 15분 제한, 시작 1분 안에 경로 5 % 미도달(규정 §3-2).
+- **체크포인트**: 10/7 공식 표(`checkpoints_20261007.csv`), 반경 3 m.
+  - `src/map/checkpoints.csv`는 초기 15개 표라 section_annotator용으로 그대로 둔다.
+- **날씨·시각** (§2-7-2): 체크포인트 구간(지난 체크포인트 수)마다 (Sunny | Foggy 밀도 1) × (11 | 13 | 15시)를 (랩 시드, 구간)으로 뽑는다(`env_follow.combo`).
+  - Time Scale 1, Target FPS 60, Rendering High는 시뮬레이터 프리셋 값을 그대로 쓴다.
+- **체크포인트 복귀** (§3-2: 직전 체크포인트, +15 s): 운영요원은 세 경우를 주행 불능으로 판단한다. 관리자의 기준은 다음과 같다.
+
+  | 규정의 주행 불능 | 관리자 기준 |
+  |---|---|
+  | 음영 밖에서 네 바퀴가 주행 영역을 벗어남 | 네 바퀴가 모두 lanelet과 경로 ±2 m 밖에 2 s 있음 (scorer의 drive_inoperable 판정) |
+  | 충돌로 진행 불가 | 충돌 뒤 15 s 동안 경로 진행 1 m 미만. 충돌이 없어도 60 s 동안 진행이 없으면 복귀 |
+  | 체크포인트 순서 끊김 | 다음 체크포인트를 3 m 안에서 지나지 않고 경로상 10 m 넘게 지나감 |
+
+  - 복귀는 SetVelocity 0 → SetTransform(마지막으로 지난 체크포인트, CP1 전이면 START, z는 노면 + 0.4 m) → SetVelocity 0 순서다. 스택에는 알리지 않는다.
+  - 출발 직후와 복귀 뒤 10 s는 판정하지 않는다.
+  - 60 s는 신호 대기나 양보 대기보다 길게 잡은 값이다. 신호 주기가 비공개라 실측으로 다시 정해야 한다.
+- **기록** (`~/morai-eval/runs/<이름>/`):
+  - `laps.jsonl`: 랩마다 한 줄. 장면과 변형 값, 구간별 날씨, 체크포인트 통과 시각, 복귀(시각, 대상, 사유), 랩 시간(시뮬 시계와 벽시계), scorer 판정, 총시간을 담는다.
+  - 총시간 = 랩 시간 + scorer 패널티(충돌, 신호, 속도, 차로) + 15 s × 복귀 횟수.
+  - `lapNNN.rows.json.gz`: 판정에 쓴 20 Hz Ego 상태다. scorer 기준이 바뀌면 다시 판정할 수 있다.
+  - scorer는 Alpamayo-Cosmos `tools/scorer`를 그대로 쓴다(`SCORER`, 기본값은 옆 체크아웃).
+  - Ego 상태 출처는 gRPC GetActorState다. transform은 뒷차축(base_link)이고, 속도는 global_velocity를 방향에 투영한 값이다. 충돌은 collision_objects, 신호는 tl_id/tl_color(MORAI 신호 비트와 같은 값)에서 얻는다.
+  - 차로 면제 구역은 장면의 GPS 음영 상자다.
+- **시계**: bc-250은 실시간보다 느리고 gRPC GetTimestamp는 호스트 시계(μs)다. 그래서 랩 시간과 판정은 Ego 상태로 추정한 시뮬 시계로 낸다.
+  - ρ = Σ|Δpos| / Σ|v|Δt를 최근 5 s 주행 구간에서 구한다. 정지 중이거나 점프가 있으면 직전 값을 유지한다.
+  - 벽시계 랩 시간도 함께 기록한다.
+- **보기**: Mac 브라우저로 `http://localhost:8091`을 연다. 시뮬레이터 창과 랩 상태(랩 시간, ρ, 체크포인트, 속도, 날씨, 복귀)가 나온다.
+  - 화면은 bc-250의 `viewer.py`가 XComposite로 잡아 MJPEG으로 보낸다(192.168.0.15:8090, 5 fps, 폭 960). 보는 사람이 있을 때만 캡처한다.
+- **시험**: `test/test_eval_manager.py`는 가짜 시뮬레이터로 한 바퀴를 돈다. RTF 0.7, 8 m/s로 달리다 s 600 m에서 멈춘다.
+  - 시뮬 시계로 60 s 뒤 직전 체크포인트로 복귀한다.
+  - 랩 시간은 예상값의 2 % 안, ρ는 0.70이다.
+  - scorer 완주와 체크포인트 15개를 확인한다.
+  - 음영 상자는 경로 s 1880.7–1977.7(터널)을 덮는다.
 
 ## 실행 (winpc WSL)
 
