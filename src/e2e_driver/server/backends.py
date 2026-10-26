@@ -132,13 +132,13 @@ class EngineBackend(HFBackend):
         self.fast.vit_cache.clear()
 
     def prepare(self, sample):
-        b, timing = super().prepare(sample)
-        t = time.perf_counter()
-        td = b["tokenized_data"]
-        keys = self.fingerprints(td["pixel_values"], td["image_grid_thw"])
-        lay = self.layout(td["input_ids"], td["image_grid_thw"], self.fast.image_token, self.fast.vlm.visual.spatial_merge_size)
-        td["pixel_values"] = td["pixel_values"].to(torch.bfloat16).pin_memory()   # the ViT input dtype; async copies of new images
-        return (b, keys, lay), dict(timing, fingerprint_ms=round(1e3 * (time.perf_counter() - t), 1))
+        from prep_proc import cpu_prepare                    # the same calls the --prep process worker makes
+        return self.pin(cpu_prepare(sample, self.model.config, self.fast.image_token, self.fast.vlm.visual.spatial_merge_size))
+
+    def pin(self, prepared):
+        (b, keys, lay), timing = prepared
+        b["tokenized_data"]["pixel_values"] = b["tokenized_data"]["pixel_values"].pin_memory()   # async copies of new images
+        return prepared
 
     def run(self, sample, prepared):
         m, ((b, keys, lay), timing) = self.model, prepared

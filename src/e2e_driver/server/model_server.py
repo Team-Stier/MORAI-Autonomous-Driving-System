@@ -41,6 +41,11 @@ def make_backend(a):
 
 
 def serve(a, backend):
+    proc = None
+    if a.prep == "process":
+        from prep_proc import PrepProcess
+        assert a.backend == "engine", "--prep process is for the engine backend"
+        proc = PrepProcess(a.ckpt, a.vlm, "sdpa", backend.fast.image_token, backend.fast.vlm.visual.spatial_merge_size)
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((a.host, a.port)); srv.listen(1)
@@ -70,6 +75,11 @@ def serve(a, backend):
                 req, t_in = job
                 t = time.perf_counter()
                 if dump: (dump / f"req_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(req))
+                if proc is not None:                   # --prep process: build + tokenize in the worker, pin here
+                    prepared, timing, assemble_s = proc(req, f"live/{req.get('id', 0)}")
+                    sample, t1, prepared = {}, t + assemble_s, backend.pin((prepared[0], timing))
+                    ready.put((req, sample, prepared, t_in, t, t1, time.perf_counter()))
+                    continue
                 sample = build_sample(req, key=f"live/{req.get('id', 0)}")
                 t1 = time.perf_counter()
                 prepared = backend.prepare(sample)
@@ -117,6 +127,9 @@ def main():
     ap.add_argument("--fake-speed", type=float, default=4.0); ap.add_argument("--fake-kappa", type=float, default=0.0)
     ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=47011)
     ap.add_argument("--dump")
+    ap.add_argument("--prep", choices=["thread", "process"], default="thread",
+                    help="engine: request preprocessing in the server's thread or in a worker process (no GIL contention "
+                         "with the run thread; prep_proc.py)")
     ap.add_argument("--warmup", default=str(HERE.parent / "assets" / "warmup"),
                     help="engine: dumped requests (req_*.bin) to compile and capture the graphs on before listening")
     a = ap.parse_args()
