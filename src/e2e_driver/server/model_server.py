@@ -77,7 +77,7 @@ def serve(a, backend):
                 if dump: (dump / f"req_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(req))
                 if proc is not None:                   # --prep process: build + tokenize in the worker, pin here
                     prepared, timing, assemble_s = proc(req, f"live/{req.get('id', 0)}")
-                    sample, t1, prepared = {}, t + assemble_s, backend.pin((prepared[0], timing))
+                    sample, t1, prepared = {}, t + assemble_s, backend.pin((prepared, timing))
                     ready.put((req, sample, prepared, t_in, t, t1, time.perf_counter()))
                     continue
                 sample = build_sample(req, key=f"live/{req.get('id', 0)}")

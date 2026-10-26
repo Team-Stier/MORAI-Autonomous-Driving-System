@@ -4,8 +4,12 @@ thread, ~35-60 ms of this Python holds the GIL while the run thread launches the
 10/27 rehearsal's 100 ms overruns at <= 6 new images had post 5.9 ms instead of 1.5. The worker runs the same calls, so
 the batch is bit-identical (test/prep_proc_check.py); tensors come back through shared memory (torch.multiprocessing)
 and the parent only pins the pixels (CUDA stays out of the worker).
+Measured 10/27 (winpc, Mac fake host, 4.75-bit stand-in): worse than the thread, so the default stays thread: prep
+p50 94 vs 58 ms (the shared-memory hand-off and the pin copy), the prepare stage near the 100 ms budget, loop 7.7 vs
+9.8 Hz, model_ms > 100 ms 44 vs 20 %; post-processing at <= 6 new images p95 5.8 vs 7.3 ms.
 """
 import os
+import queue
 import time
 from pathlib import Path
 
@@ -32,8 +36,14 @@ def _worker(qin, qout, ckpt, vlm, attn, image_token, merge, threads):
     torch.set_num_threads(threads)
     from morai_vla.model import load_config
     config = load_config(Path(ckpt) / "final", vlm, attn)                     # as engine.load builds it
+    parent = os.getppid()
     while True:
-        job = qin.get()
+        try:
+            job = qin.get(timeout=2.0)
+        except queue.Empty:
+            if os.getppid() != parent:                  # the server was killed (SIGTERM skips the daemon cleanup)
+                return
+            continue
         if job is None:
             return
         req, key = job

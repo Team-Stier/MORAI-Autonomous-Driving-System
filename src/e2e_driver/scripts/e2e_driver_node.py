@@ -149,6 +149,7 @@ class Node:
             rospy.logerr("e2e_driver: model server connection: %s", e)
         if self.sock is sock:
             self.sock = None
+            self.pending.clear()           # unanswered on a dead connection: else max_inflight blocks the reconnect (10/27)
 
     def on_reply(self, resp, t_resp):
         meta = self.pending.pop(resp.get("id"), None)
