@@ -186,6 +186,25 @@ TEST_F(RoundaboutMergeTest, RequestsStopForMapObstacleRegardlessOfEgoHeading) {
   }
 }
 
+TEST_F(RoundaboutMergeTest, DrivesBesideAStaticRoadsideObject) {
+  interfaces::Object object;
+  object.id = 7;
+  object.label = "barrier";
+  object.position.x = 2.0;
+  object.position.y = 1.90;
+  object.bbox_pose.position = object.position;
+  object.bbox_pose.orientation.w = 1.0;
+  object.bbox_size.x = 80.0;
+  object.bbox_size.y = 0.4;
+  object.bbox_size.z = 1.0;
+  objects.objects = {object};
+  predictions.fill(objects);
+  pp::RoundaboutMerge core(parameters);
+  const auto path = plan(core);
+  ASSERT_FALSE(path.points.empty());
+  EXPECT_GT(path.points.front().velocity, 0.0);
+}
+
 TEST_F(RoundaboutMergeTest, RequestsStopForCrossingBetweenSamplesAndReleasesOnNewObservation) {
   observe(4.0, -10.0, 0.0, 80.0);
   pp::RoundaboutMerge core(parameters);

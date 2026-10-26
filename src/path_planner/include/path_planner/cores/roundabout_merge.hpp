@@ -54,11 +54,6 @@ class RoundaboutMerge {
     planned_ego.pose.pose.orientation.z = planned_rotation.z();
     planned_ego.pose.pose.orientation.w = planned_rotation.w();
     auto path = rddfPath(planned_ego);
-    const auto& projected = path.points.front().pose.pose;
-    tracking_padding_ = std::hypot(planned_ego.pose.pose.position.x - projected.position.x,
-                                   planned_ego.pose.pose.position.y - projected.position.y) +
-        std::hypot(p_.vehicle_front_m, p_.vehicle_half_width_m)*
-        std::abs(angle(yaw(planned_ego.pose.pose.orientation) - yaw(projected.orientation)));
     std::vector<double> station(path.points.size(), 0.0);
     for (std::size_t i = 1; i < station.size(); ++i) {
       const auto& a = path.points[i - 1].pose.pose.position;
@@ -419,17 +414,21 @@ class RoundaboutMerge {
       const double vmax = std::max(edge.velocity(t), edge.velocity(end)) + p_.max_acceleration_mps2*dt;
       const double deviation = (std::max(p_.max_acceleration_mps2, p_.max_deceleration_mps2) + vmax*vmax*k)*dt*dt/8;
       const double offset = std::abs(p_.vehicle_front_m - p_.vehicle_rear_m) / 2;
-      const double pad = p_.collision_margin_m + tracking_padding_ +
-                         p_.prediction_uncertainty_mps*(age + edge.start.t + end) +
-                         deviation + 2*offset*std::abs(angle(a1.pose.yaw - a0.pose.yaw));
+      // Speed uncertainty extends the obstacle along its heading.
+      const double pad = p_.collision_margin_m + deviation +
+                         2*offset*std::abs(angle(a1.pose.yaw - a0.pose.yaw));
+      const double extra = p_.prediction_uncertainty_mps*(age + edge.start.t + end);
       for (const auto& tube : obstacles) {
         const double begin_time = std::max(t, tube.start - age - edge.start.t);
         const double end_time = std::min(end, tube.end - age - edge.start.t);
         if (begin_time > end_time) continue;
         const auto from = egoBox(poseAt(path, station, edge.station(begin_time)));
         const auto to = egoBox(poseAt(path, station, edge.station(end_time)));
-        if (sweptOverlap(from, to, boxAt(tube, age + edge.start.t + begin_time),
-                         boxAt(tube, age + edge.start.t + end_time), pad)) return false;
+        auto obstacle_from = boxAt(tube, age + edge.start.t + begin_time);
+        auto obstacle_to = boxAt(tube, age + edge.start.t + end_time);
+        obstacle_from.half_length += extra;
+        obstacle_to.half_length += extra;
+        if (sweptOverlap(from, to, obstacle_from, obstacle_to, pad)) return false;
       }
       t = end;
     }
@@ -601,6 +600,5 @@ class RoundaboutMerge {
   double last_speed_ = 0;
   double last_speed_time_ = -std::numeric_limits<double>::infinity();
   double last_acceleration_ = 0;
-  double tracking_padding_ = 0;
 };
 }  // namespace path_planner

@@ -203,7 +203,7 @@ TEST(NpcHistoryPrediction, KeepsMapMotionIndependentOfEgoPoseAndTimeForDuplicate
     const auto& predictions = std::get<6>(result);
     for (std::size_t j = 0; j < predictions.size(); ++j) {
       const double horizon_sec = 0.5 * (j + 1);
-      const auto expected = point_map + horizon_sec * Eigen::Vector3d(2.0, 0.5, 0.1);
+      const Eigen::Vector3d expected = point_map + horizon_sec * Eigen::Vector3d(2.0, 0.5, 0.1);
       ASSERT_EQ(predictions[j].objects.size(), 1u);
       EXPECT_EQ(predictions[j].header, objects.header);
       const auto& predicted = predictions[j].objects.front();
@@ -281,7 +281,7 @@ TEST(NpcHistoryPrediction, PreservesMapHistoryAcrossAnInactiveSectionGap) {
     if (time_sec != 120.0 && time_sec != 121.0) continue;
     for (std::size_t i = 0; i < std::get<6>(result).size(); ++i) {
       const double future_angle = angle+0.5*(i+1)*3.0/18.0;
-      const auto expected = kCircleCenter +
+      const Eigen::Vector3d expected = kCircleCenter +
           Eigen::Vector3d(18.0*std::cos(future_angle), 18.0*std::sin(future_angle), 0.0);
       expectPosition(std::get<6>(result)[i].objects.front(), expected, 0.015);
     }
