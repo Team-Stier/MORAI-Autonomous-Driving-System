@@ -1,0 +1,5 @@
+stage: limit
+inputs: [command, competition]
+validator: speed_limit59_inputs.hpp
+policy: remove_invalid.hpp
+allowed_issues: {command: [ReceiveTimeout], competition: [Stale, ReceiveTimeout]}

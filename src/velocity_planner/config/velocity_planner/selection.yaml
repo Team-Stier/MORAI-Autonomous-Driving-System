@@ -1,26 +1,26 @@
 inject:
   section_core_map:
-    "0": curvature_velocity60.hpp
-    "1": curvature_velocity60.hpp
-    "2": curvature_velocity60.hpp
-    "3": curvature_velocity60.hpp
-    "4": curvature_velocity60.hpp
-    "5": curvature_velocity60.hpp
-    "6": curvature_velocity60.hpp
-    "7": curvature_velocity60.hpp
-    "8": curvature_velocity60.hpp
-    "9": curvature_velocity60.hpp
-    "10": curvature_velocity60.hpp
+    "0": curvature_velocity58.hpp
+    "1": curvature_velocity58.hpp
+    "2": curvature_velocity58.hpp
+    "3": curvature_velocity58.hpp
+    "4": curvature_velocity58.hpp
+    "5": curvature_velocity58.hpp
+    "6": curvature_velocity58.hpp
+    "7": curvature_velocity58.hpp
+    "8": curvature_velocity58.hpp
+    "9": curvature_velocity58.hpp
+    "10": curvature_velocity58.hpp
     "11": curvature_velocity100.hpp
     "12": curvature_velocity100.hpp
     "18": curvature_velocity100.hpp
-    "13": curvature_velocity60.hpp
-    "14": curvature_velocity60.hpp
-    "20": curvature_velocity60.hpp
-    "15": curvature_velocity60.hpp
-    "19": curvature_velocity60.hpp
-    "16": curvature_velocity60.hpp
-    "17": curvature_velocity60.hpp
+    "13": curvature_velocity58.hpp
+    "14": curvature_velocity58.hpp
+    "20": curvature_velocity58.hpp
+    "15": curvature_velocity58.hpp
+    "19": curvature_velocity58.hpp
+    "16": curvature_velocity58.hpp
+    "17": curvature_velocity58.hpp
   health_core_map: []
 cutoff:
   section_core_map:
