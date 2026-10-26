@@ -148,7 +148,29 @@ def test_eval_lap_collisions_signals():
     print("live3", sm["counts"], round(tot["r_penalty"], 1), round(tot["r"], 1))
 
 
+def test_rejoin_actor_decisions(tmp=None):
+    """rl_reward.py TIMELINE DECISIONS: the actor's own decision times (wall clock, uneven, some outside the episode)
+    get the same totals; their other fields are copied through."""
+    import subprocess
+    import tempfile
+    rows, end, t_end, t_play = episode(npz_rows("run1020s-w1-020"))
+    tl, sm, recs, t_dec, t0 = run(rows, end, t_end, t_play)
+    tmp = Path(tempfile.mkdtemp())
+    json.dump(dict(tl, episode="x/0", reward_args=dict(v_ref=V_REF, fail_s=FAIL_S)), open(tmp / "tl.json", "w"))
+    rng = np.random.default_rng(0)
+    walls = [t_play + 1000.0 - 5.0] + list(t_play + 1000.0 + np.cumsum(rng.uniform(0.08, 0.14, 2000)))
+    with open(tmp / "dec.jsonl", "w") as f:
+        f.writelines(json.dumps(dict(id=i, t_wall=w)) + "\n" for i, w in enumerate(walls))
+    out = [json.loads(l) for l in subprocess.run([sys.executable, str(HERE.parent / "tools" / "rl_reward.py"), str(tmp / "tl.json"),
+                                                  str(tmp / "dec.jsonl")], capture_output=True, text=True, check=True).stdout.splitlines()]
+    assert out[0]["id"] == 1 and out[-1]["done"] and out[-1]["end"] == end and out[0]["episode"] == "x/0", out[0]
+    assert abs(sum(r["r_time"] for r in out) + (t_end - out[0]["t_sim"])) < 2e-3          # t_sim is rounded to ms
+    assert abs(sum(r["r_shape"] for r in out) - (S_GOAL / V_REF - out[0]["s"] / V_REF)) < 0.01
+    print("rejoin", len(out), "decisions of", len(walls), round(sum(r["r"] for r in out), 2))
+
+
 if __name__ == "__main__":
-    for f in (test_cp9_to_exit_recorded, test_fast_exit_speed_penalties, test_lane_repeats, test_eval_lap_collisions_signals):
+    for f in (test_cp9_to_exit_recorded, test_fast_exit_speed_penalties, test_lane_repeats, test_eval_lap_collisions_signals,
+              test_rejoin_actor_decisions):
         f()
     print("ok")

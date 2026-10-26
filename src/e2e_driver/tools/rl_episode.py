@@ -157,6 +157,11 @@ def put(host, src, dst):
 
 def deploy(a):
     """the scene tools on the simulator host (the official programs: tools/fetch_official_tools.sh, as for eval.sh)."""
+    if not a.direct:
+        ok = em.ssh(f"cd {em.OFFICIAL} && sha256sum -c --quiet - <<'E' && echo verified\n{em.SPAWN_SHA}  MORAI_Spawn_Linux\n"
+                    f"{em.WTC_SHA}  WeatherTimeChanger_Linux\nE\n")
+        if "verified" not in ok:
+            raise SystemExit(f"official programs missing or changed on {a.host}:{em.OFFICIAL}: tools/fetch_official_tools.sh (or --direct)")
     for src, dst in ((HERE / "scenario_variants.py", "~/morai-eval-scenario-variants.py"),
                      (em.MAP / "2026_molit_comp_global_path.txt", "~/morai-eval-global-path.txt"),
                      (HERE / "msc.py", "~/morai-eval-msc.py"), (HERE / "wtc.py", "~/morai-eval-wtc.py")):
