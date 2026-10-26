@@ -76,13 +76,16 @@ def quant_nvfp4_torch(x, g):
     return q, sw.permute(0, 3, 2, 1, 4).reshape(-1)
 
 
-GEMM = os.environ.get("NVFP4_GEMM", "cublas")   # cublas: torch._scaled_mm; b12x: FlashInfer's sm_120 CuTe-DSL kernels
-_tuned = set()                                     # (the study: b12x 1.8-2.2x faster at M=64; needs the cu130 / flashinfer stack)
+# MODEL_PLAN 5.2: prefill (M ~ 1.75k) on cuBLASLt (torch._scaled_mm, 635-737 TFLOPS), the expert (M = 64) on FlashInfer
+# 0.7.2's b12x sm_120 kernels (1.8-2.2x cuBLASLt there). NVFP4_GEMM=auto (default) picks by M; cublas / b12x force one.
+GEMM = os.environ.get("NVFP4_GEMM", "auto")
+SMALL_M = 256
+_tuned = set()
 
 
 @torch.library.custom_op("nvfp4::gemm", mutates_args=())
 def nvfp4_gemm(xq: torch.Tensor, xs: torch.Tensor, wq: torch.Tensor, ws: torch.Tensor) -> torch.Tensor:
-    if GEMM == "cublas":
+    if GEMM == "cublas" or (GEMM == "auto" and xq.shape[0] > SMALL_M):
         return torch._scaled_mm(xq.view(F4), wq.t(), xs.view(E4), ws, out_dtype=torch.bfloat16)
     import flashinfer
     M, N, K = xq.shape[0], wq.shape[0], xq.shape[1] * 2
@@ -91,8 +94,8 @@ def nvfp4_gemm(xq: torch.Tensor, xs: torch.Tensor, wq: torch.Tensor, ws: torch.T
     if (M, N, K) not in _tuned and not torch.cuda.is_current_stream_capturing():   # pick the schedule once per shape
         _tuned.add((M, N, K))
         with flashinfer.autotune(True):
-            flashinfer.mm_fp4(*args, None, torch.bfloat16, None, backend=GEMM)
-    return flashinfer.mm_fp4(*args, None, torch.bfloat16, None, backend=GEMM)
+            flashinfer.mm_fp4(*args, None, torch.bfloat16, None, backend="b12x")
+    return flashinfer.mm_fp4(*args, None, torch.bfloat16, None, backend="b12x")
 
 
 @nvfp4_gemm.register_fake

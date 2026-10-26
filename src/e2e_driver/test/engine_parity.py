@@ -20,6 +20,7 @@ import torch  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
 import engine  # noqa: E402
+from fast_engine import FastEngine, fingerprints  # noqa: E402
 from morai_vla.processor import collate_fn  # noqa: E402
 from morai_vla.student import StudentVLA  # noqa: E402
 
@@ -33,6 +34,7 @@ def main():
                            device_map={"": 0}).eval()
     bf16 = engine.load(deliver, vlm, quantize=False)
     eng = engine.load(deliver, vlm)
+    fast = FastEngine(eng)
     print(json.dumps(eng.engine_info))
     ref, got = qad.state_dict(), bf16.state_dict()                                   # the streamed load = the HF load
     diff = [k for k in got if k in ref and not torch.equal(got[k].cpu(), ref[k].cpu())]
@@ -48,14 +50,20 @@ def main():
             item = ds[i]
             gt = item["ego_future_xyz"][0, :, :2]
             pred = {}
-            for name, m in (("qad", qad), ("bf16", bf16), ("eng", eng)):
+            for name, m in (("qad", qad), ("bf16", bf16), ("eng", eng), ("fast", eng)):
                 b = collate_fn([item], model_config=m.config)
+                keys = fingerprints(b["tokenized_data"]["pixel_values"], b["tokenized_data"]["image_grid_thw"])
                 b = {k: ({kk: vv.cuda() for kk, vv in v.items()} if isinstance(v, dict) else v.cuda() if torch.is_tensor(v) else v) for k, v in b.items()}
-                torch.manual_seed(i)                                                   # the same initial noise for all three
-                xyz, _ = m.sample_trajectories(b["tokenized_data"], b["ego_history_xyz"], b["ego_history_rot"], num_samples=1)
+                torch.manual_seed(i)                                                   # the same initial noise for all
+                if name == "fast":                                                     # the served path (CUDA graphs)
+                    x0 = torch.randn(1, *m.action_space.get_action_space_dims(), device="cuda")
+                    act, _ = fast.run(b["tokenized_data"], b["ego_history_xyz"], b["ego_history_rot"], x0, keys)
+                    xyz = m.action_space.action_to_traj(act, b["ego_history_xyz"][:, 0], b["ego_history_rot"][:, 0])[0][:, None]
+                else:
+                    xyz, _ = m.sample_trajectories(b["tokenized_data"], b["ego_history_xyz"], b["ego_history_rot"], num_samples=1)
                 pred[name] = xyz[0, 0, :, :2].float().cpu()
             d = lambda a, b: float((pred[a] - pred[b]).norm(dim=-1).mean())
-            r = dict(key=item["key"], eng_vs_qad=d("eng", "qad"), bf16_vs_qad=d("bf16", "qad"),
+            r = dict(key=item["key"], fast_vs_qad=d("fast", "qad"), eng_vs_qad=d("eng", "qad"), bf16_vs_qad=d("bf16", "qad"),
                      eng_max=float((pred["eng"] - pred["qad"]).norm(dim=-1).max()),
                      **{f"{k}_ade": float((pred[k] - gt).norm(dim=-1).mean()) for k in pred})
             rows.append(r)

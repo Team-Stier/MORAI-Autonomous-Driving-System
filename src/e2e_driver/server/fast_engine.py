@@ -2,8 +2,9 @@
 TeacherVLA.sample_trajectories (no CoC, prefix prefill, Euler flow matching), laid out like the 5080 latency study
 (winpc ~/claude-bench/bench2.py) but on the real modules and the real request:
 
-  ViT     per image, one CUDA graph per (encoder, image size); an image already seen (same pixels: a camera frame that is
-          still in the history window, or an unchanged LiDAR BEV) reuses its cached merger and DeepStack outputs;
+  ViT     the new images only (normally the newest frame of each camera + the 2 LiDAR BEVs; MODEL_PLAN 5.2), one batched
+          pass per encoder (camera FP8, LiDAR BF16), one CUDA graph per size combination; an image already seen (same
+          pixels: a camera frame still in the history window) reuses its cached merger and DeepStack outputs;
   LLM     prefill of the prefix right-padded to pad_to tokens (1792; the prompts are ~1.73k; causal: real tokens never
           see the padding), K/V written into static buffers, DeepStack added at the image tokens after the first layers;
           a longer prefix gets its own length (a multiple of 64), compiled on first use;
@@ -12,6 +13,8 @@ TeacherVLA.sample_trajectories (no CoC, prefix prefill, Euler flow matching), la
 Runs under bf16 autocast like sample_trajectories (LayerNorms in fp32, the Euler state fp32). Inputs differ from HF's
 only by the padding; outputs match the eager engine to bf16 rounding (test/fast_parity.py).
 """
+import time
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -32,6 +35,27 @@ def fingerprints(pixel_values, grid):
         keys.append((t, h, w, int(seg.sum()), int(seg[::7].sum())))
         at += n
     return keys
+
+
+def layout(input_ids, grid, image_token, merge):
+    """M-RoPE positions of a one-sample prefix with images only, as Qwen3VLModel.get_rope_index computes them (text
+    positions continue after each image at its start + max(grid h, w) / merge), but vectorised on the CPU so it runs in
+    the prepare thread: -> positions (3, 1, L), rope delta (1, 1), image token indices."""
+    ids = input_ids.reshape(-1).cpu().numpy()
+    L = len(ids)
+    vis = np.flatnonzero(ids == image_token)
+    starts = vis[np.r_[True, np.diff(vis) > 1]] if len(vis) else vis
+    pos, st, prev = np.zeros((3, L), np.int64), 0, 0
+    for a, (t, h, w) in zip(starts.tolist(), grid.tolist()):
+        gh, gw = h // merge, w // merge
+        n = t * gh * gw
+        pos[:, prev:a] = np.arange(st, st + a - prev); st += a - prev
+        pos[0, a:a + n] = st + np.repeat(np.arange(t), gh * gw)
+        pos[1, a:a + n] = st + np.tile(np.repeat(np.arange(gh), gw), t)
+        pos[2, a:a + n] = st + np.tile(np.arange(gw), t * gh)
+        st, prev = st + max(t, gh, gw), a + n
+    pos[:, prev:] = np.arange(st, st + L - prev)
+    return torch.from_numpy(pos)[:, None], torch.tensor([[int(pos.max()) + 1 - L]]), torch.from_numpy(vis)
 
 
 def _graph(fn):
@@ -64,20 +88,23 @@ class FastEngine:
         ts = torch.linspace(0.0, 1.0, num_steps + 1, device=self.dev)            # as FlowMatching._euler
         self.t_start = [ts[i].view(1, 1, 1).clone() for i in range(num_steps)]
         self.dt = [(ts[i + 1] - ts[i]).view(1, 1, 1).clone() for i in range(num_steps)]
-        self.vit_cache, self.vit_graphs, self.llm, self.exp = {}, {}, {}, {}
+        self.vit_cache, self.vit_graphs, self.llm, self.exp, self.rope = {}, {}, {}, {}, {}
         self.image_token = model.vlm.config.image_token_id
+        self.side = torch.cuda.Stream(self.dev)
         self.stats = {}
 
     # ---------------------------------------------------------------- ViT
-    def _vit_fn(self, enc, t, h, w):
-        grid = torch.tensor([[t, h, w]], device=self.dev)
-        S = t * h * w
+    def _vit_fn(self, enc, sizes):
+        """one pass over several images of one encoder (bench2's vit_forward): patches concatenated, attention per image."""
+        S = [t * h * w for t, h, w in sizes]
+        grid = torch.tensor(sizes, device=self.dev)
         pos = enc.fast_pos_embed_interpolate(grid)
-        rot = enc.rot_pos_emb(grid).reshape(S, -1)
+        rot = enc.rot_pos_emb(grid).reshape(sum(S), -1)
         emb = torch.cat((rot, rot), -1)
         cos, sin = emb.cos(), emb.sin()
+        spans = np.cumsum([0] + S).tolist()
         ds_idx = list(enc.deepstack_visual_indexes)
-        px = torch.zeros(S, enc.patch_embed.proj.weight[0].numel(), device=self.dev, dtype=enc.patch_embed.proj.weight.dtype)
+        px = torch.zeros(sum(S), enc.patch_embed.proj.weight[0].numel(), device=self.dev, dtype=enc.patch_embed.proj.weight.dtype)
         out = {}
 
         def body():
@@ -85,11 +112,12 @@ class FastEngine:
             deep = []
             for li, blk in enumerate(enc.blocks):
                 a = blk.attn
-                q, k, v = a.qkv(blk.norm1(x)).reshape(S, 3, a.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
+                q, k, v = a.qkv(blk.norm1(x)).reshape(sum(S), 3, a.num_heads, -1).permute(1, 0, 2, 3).unbind(0)
                 q, k = mq.apply_rotary_pos_emb_vision(q, k, cos, sin)
-                o = F.scaled_dot_product_attention(q.transpose(0, 1)[None], k.transpose(0, 1)[None], v.transpose(0, 1)[None],
-                                                   scale=a.scaling)
-                x = x + a.proj(o[0].transpose(0, 1).reshape(S, -1))
+                q, k, v = q.transpose(0, 1)[None], k.transpose(0, 1)[None], v.transpose(0, 1)[None]
+                o = torch.cat([F.scaled_dot_product_attention(q[:, :, a0:a1], k[:, :, a0:a1], v[:, :, a0:a1], scale=a.scaling)
+                               for a0, a1 in zip(spans, spans[1:])], 2)
+                x = x + a.proj(o[0].transpose(0, 1).reshape(sum(S), -1))
                 x = x + blk.mlp(blk.norm2(x))
                 if li in ds_idx:
                     deep.append(enc.deepstack_merger_list[ds_idx.index(li)](x))
@@ -98,20 +126,22 @@ class FastEngine:
 
         def fn():
             out["e"], out["d"] = body()
-        return px, fn, out
+        return px, fn, out, [n // enc.spatial_merge_size ** 2 for n in S]
 
-    def _vit(self, lidar, key, px_i):
+    def _vit(self, lidar, keys, pxs):
+        """ViT outputs (merger, DeepStack list) of new images of one encoder, one graph per size combination."""
         enc = self.vlm.lidar_visual if lidar else self.vlm.visual
-        size = (lidar, *key[:3])
-        if size not in self.vit_graphs:
-            px, fn, out = self._vit_fn(enc, *key[:3])
-            px.copy_(px_i)
+        sizes = tuple(tuple(k[:3]) for k in keys)
+        if (lidar, sizes) not in self.vit_graphs:
+            px, fn, out, ntok = self._vit_fn(enc, sizes)
+            px.copy_(torch.cat(pxs))
             g = _graph(fn) if self.use_graphs else None
-            self.vit_graphs[size] = (px, fn, out, g)
-        px, fn, out, g = self.vit_graphs[size]
-        px.copy_(px_i)
+            self.vit_graphs[(lidar, sizes)] = (px, fn, out, ntok, g)
+        px, fn, out, ntok, g = self.vit_graphs[(lidar, sizes)]
+        px.copy_(torch.cat(pxs))
         g.replay() if g is not None else fn()
-        return out["e"].clone(), [d.clone() for d in out["d"]]
+        es, ds = out["e"].split(ntok), [d.split(ntok) for d in out["d"]]
+        return [(es[i].clone(), [d[i].clone() for d in ds]) for i in range(len(keys))]
 
     # ---------------------------------------------------------------- LLM prefill
     def _llm_buffers(self, Lp, n_vis):
@@ -164,8 +194,9 @@ class FastEngine:
                 q, k = mq.apply_rotary_pos_emb(q, k, b["cos"], b["sin"])
                 llm["K"][i][:, :, Lp:].copy_(k); llm["V"][i][:, :, Lp:].copy_(v)
                 # attention as two bf16 batched GEMMs and an fp32 softmax over [prefix | action] keys, GQA folded into
-                # the query length (query heads j*g..j*g+g-1 read KV head j). SDPA for 64 queries x ~1.8k keys with the
-                # padding mask fell back to fp32 SIMT matmuls (enable_gqa) or a 16-CTA mem-efficient kernel (46 ms)
+                # the query length (query heads j*g..j*g+g-1 read KV head j). Measured alternatives for 64 queries x
+                # ~1.8k keys with the padding: masked SDPA fell back to fp32 SIMT (enable_gqa) or a 16-CTA mem-efficient
+                # kernel (46 ms), cuDNN 2x slower, varlen flash (exact lengths, no mask) 64 vs 44 ms (16 CTAs, no split-KV)
                 qf = q.reshape(1, self.kvh, g * n, self.hd)
                 att = (torch.matmul(qf, llm["K"][i].transpose(-1, -2)).float() * a.scaling + b["mask"]).softmax(-1)
                 o = torch.matmul(att.to(torch.bfloat16), llm["V"][i]).reshape(1, nq, n, self.hd)
@@ -186,28 +217,37 @@ class FastEngine:
     # ---------------------------------------------------------------- one request
     @torch.inference_mode()
     @torch.autocast("cuda", dtype=torch.bfloat16)          # as sample_trajectories (graphs are captured under it too)
-    def run(self, tokenized_data, hx, hr, x0, keys):
-        """tokenized_data on the GPU (as sample_trajectories takes it), keys = fingerprints(CPU pixel_values, grid);
-        x0 (1, 64, 2) fp32 initial noise. Returns the normalised action (1, 64, 2) fp32 and the per-part times (ms)."""
+    def run(self, tokenized_data, hx, hr, x0, keys, lay=None):
+        """tokenized_data as sample_trajectories takes it (pixel_values may stay on the CPU), keys = fingerprints(CPU
+        pixel_values, grid), lay = layout(...) from the prepare thread (else computed here); x0 (1, 64, 2) fp32 initial
+        noise. Returns the normalised action (1, 64, 2) fp32 and the per-part times (ms)."""
         m, ev = self.m, [torch.cuda.Event(enable_timing=True) for _ in range(5)]
         ev[0].record()
-        ids = m.fuse_traj_tokens(tokenized_data["input_ids"], dict(ego_history_xyz=hx, ego_history_rot=hr))
-        assert int(ids[0, -1]) == m.config.traj_token_ids["future_start"]
+        if lay is None:
+            lay = layout(tokenized_data["input_ids"], tokenized_data["image_grid_thw"], self.image_token, self.vlm.visual.spatial_merge_size)
+        ids = m.fuse_traj_tokens(tokenized_data["input_ids"].to(self.dev), dict(ego_history_xyz=hx, ego_history_rot=hr))
         grid, lidar = tokenized_data["image_grid_thw"], tokenized_data["image_is_lidar"].bool().tolist()
-        px = tokenized_data["pixel_values"]
+        px = tokenized_data["pixel_values"]                       # may stay on the CPU: only new images are copied over
         n_patch = (grid[:, 0] * grid[:, 1] * grid[:, 2]).tolist()
-        embeds, deeps, new, seen = [], [], 0, {}
-        for i, (key, px_i) in enumerate(zip(keys, px.split(n_patch))):
-            ck = (lidar[i], key)
-            if ck not in self.vit_cache:
-                self.vit_cache[ck] = self._vit(lidar[i], key, px_i); new += 1
-            seen[ck] = self.vit_cache[ck]
-            embeds.append(seen[ck][0]); deeps.append(seen[ck][1])
-        self.vit_cache = seen                                                # keep what the current window uses
-        ev[1].record()
+        pxs = px.split(n_patch)
+        ck = [(lidar[i], k) for i, k in enumerate(keys)]
+        new, main = 0, torch.cuda.current_stream()
+        self.side.wait_stream(main)
+        for enc_lidar in (False, True):           # new images: one batched pass per encoder; LiDAR on a side stream,
+            idx = [i for i, c in enumerate(ck) if c[0] == enc_lidar and c not in self.vit_cache]   # beside the camera ViT
+            if idx:
+                with torch.cuda.stream(self.side if enc_lidar else main):
+                    new_px = [pxs[i].to(self.dev, torch.bfloat16, non_blocking=True) for i in idx]
+                    for i, r in zip(idx, self._vit(enc_lidar, [keys[i] for i in idx], new_px)):
+                        self.vit_cache[ck[i]] = r
+                new += len(idx)
+        main.wait_stream(self.side)
+        self.vit_cache = {c: self.vit_cache[c] for c in ck}                  # keep what the current window uses
+        embeds, deeps = [self.vit_cache[c][0] for c in ck], [self.vit_cache[c][1] for c in ck]
+        ev[1].record(); c1 = time.perf_counter()
         L = ids.shape[1]
         Lp = max(self.pad_to, -(-L // PAD) * PAD)          # one fixed length: a new length means minutes of compiling
-        vis = torch.nonzero(ids[0] == self.image_token).flatten()
+        pos, deltas, vis = (x.to(self.dev, non_blocking=True) for x in lay)
         if Lp not in self.llm or self.llm[Lp][0]["vis"].numel() != vis.numel():
             self.llm[Lp] = self._llm_buffers(Lp, vis.numel()) + (None,)
             self.exp[Lp] = self._exp_buffers(Lp, self.llm[Lp][0]) + (None,)
@@ -215,7 +255,6 @@ class FastEngine:
         eb, efn, eg = self.exp[Lp]
         E = self.lm.embed_tokens(ids)
         E[0, vis] = torch.cat(embeds).to(E.dtype)
-        pos, deltas = self.vlm.get_rope_index(ids, grid, None, tokenized_data["attention_mask"])
         cos, sin = self.lm.rotary_emb(E, pos)
         lb["E"].zero_(); lb["E"][:, :L].copy_(E)
         lb["cos"][:, :L].copy_(cos); lb["sin"][:, :L].copy_(sin)
@@ -231,13 +270,13 @@ class FastEngine:
         if self.use_graphs and lg is None:
             lg = _graph(lfn); eg = _graph(efn)
             self.llm[Lp], self.exp[Lp] = (lb, lfn, lg), (eb, efn, eg)
-        ev[2].record()
+        ev[2].record(); c2 = time.perf_counter()
         lg.replay() if lg is not None else lfn()
         ev[3].record()
         eg.replay() if eg is not None else efn()
         ev[4].record()
         torch.cuda.synchronize()
         t = [ev[i].elapsed_time(ev[i + 1]) for i in range(4)]
-        self.stats = dict(vit_ms=round(t[0], 1), assemble_ms=round(t[1], 1), llm_ms=round(t[2], 1), expert_ms=round(t[3], 1),
+        self.stats = dict(cpu_assemble_ms=round(1e3 * (c2 - c1), 1), vit_ms=round(t[0], 1), gpu_assemble_ms=round(t[1], 1), llm_ms=round(t[2], 1), expert_ms=round(t[3], 1),
                           llm_expert_ms=round(t[2] + t[3], 1), new_images=new, prefix_tokens=L, padded=Lp)
         return eb["x"].clone(), self.stats

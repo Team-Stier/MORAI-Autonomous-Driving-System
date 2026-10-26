@@ -11,6 +11,7 @@ signals.
   engine  a delivered QAD student (train/scripts/qad_export.py deliver dir) with real NVFP4/FP8 GEMMs on the 5080
         (engine.py, nvfp4.py); the same inference as hf otherwise. A new delivery = a new --ckpt directory.
 """
+import copy
 import time
 
 import numpy as np
@@ -106,20 +107,23 @@ class EngineBackend(HFBackend):
     graphs; camera frames and LiDAR BEVs already seen come from the ViT cache). Compiling and capturing take minutes, so
     __init__ warms up on stored requests (model_server --dump files) before the server listens."""
 
-    def __init__(self, ckpt, vlm="Qwen/Qwen3-VL-4B-Instruct", num_steps=10, seed=None, device="cuda:0", warmup=(), pad_to=1792):
+    def __init__(self, ckpt, vlm="Qwen/Qwen3-VL-4B-Instruct", num_steps=10, seed=None, device="cuda:0", warmup=(), pad_to=1792,
+                 want_xyz=False):
         import engine
-        from fast_engine import FastEngine, fingerprints
+        from fast_engine import FastEngine, fingerprints, layout
         t = time.perf_counter()
         self.model = engine.load(ckpt, vlm=vlm, device=device)
-        self.fast, self.fingerprints = FastEngine(self.model, num_steps=num_steps, pad_to=pad_to), fingerprints
-        self.device, self.num_steps, self.seed, self.n = device, num_steps, seed, 0
+        self.fast, self.fingerprints, self.layout = FastEngine(self.model, num_steps=num_steps, pad_to=pad_to), fingerprints, layout
+        self.device, self.num_steps, self.seed, self.n, self.want_xyz = device, num_steps, seed, 0, want_xyz
+        self.sp_cpu = copy.deepcopy(self.model.action_space).cpu()          # output conversion off the GPU
         self.load_s = time.perf_counter() - t
         if warmup:
             from assemble import build_sample
             from e2e_driver import wire
-            for i, f in enumerate(list(warmup) * 3):           # compile + capture, then two timed passes
-                sample = build_sample(wire.unpack(open(f, "rb").read()), key=f"warmup/{i}")
-                self.fast.vit_cache.clear()
+            for i, f in enumerate(list(warmup) * 3):           # compile + capture, then two timed passes; the first file
+                sample = build_sample(wire.unpack(open(f, "rb").read()), key=f"warmup/{i}")   # of each round has every
+                if i % len(warmup) == 0:                              # image new, the next ones the steady state
+                    self.fast.vit_cache.clear()                      # (newest camera frames + BEVs)
                 out = self.run(sample, self.prepare(sample))
             self.warmup_timing = out["timing"]
         self.n = 0
@@ -127,27 +131,33 @@ class EngineBackend(HFBackend):
     def prepare(self, sample):
         b, timing = super().prepare(sample)
         t = time.perf_counter()
-        keys = self.fingerprints(b["tokenized_data"]["pixel_values"], b["tokenized_data"]["image_grid_thw"])
-        return (b, keys), dict(timing, fingerprint_ms=round(1e3 * (time.perf_counter() - t), 1))
+        td = b["tokenized_data"]
+        keys = self.fingerprints(td["pixel_values"], td["image_grid_thw"])
+        lay = self.layout(td["input_ids"], td["image_grid_thw"], self.fast.image_token, self.fast.vlm.visual.spatial_merge_size)
+        td["pixel_values"] = td["pixel_values"].to(torch.bfloat16).pin_memory()   # the ViT input dtype; async copies of new images
+        return (b, keys, lay), dict(timing, fingerprint_ms=round(1e3 * (time.perf_counter() - t), 1))
 
     def run(self, sample, prepared):
-        m, ((b, keys), timing) = self.model, prepared
+        m, ((b, keys, lay), timing) = self.model, prepared
         t1 = time.perf_counter()
-        dev = lambda x: {k: dev(v) if isinstance(v, dict) else v.to(self.device) if torch.is_tensor(v) else v for k, v in x.items()}
-        b = dev(b)
+        dev = lambda x: {k: dev(v) if isinstance(v, dict) else v if k == "pixel_values" else v.to(self.device)
+                         if torch.is_tensor(v) else v for k, v in x.items()}
+        b = dev(b)                                             # pixel_values stay pinned on the CPU (FastEngine copies new ones)
         if self.seed is not None:
             torch.manual_seed(int(self.seed) + self.n)
         self.n += 1
         hx, hr = b["ego_history_xyz"], b["ego_history_rot"]
         x0 = torch.randn(1, *m.action_space.get_action_space_dims(), device=self.device)   # as FlowMatching._euler
-        act, parts = self.fast.run(b["tokenized_data"], hx, hr, x0, keys)
-        sp = m.action_space
+        act, parts = self.fast.run(b["tokenized_data"], hx, hr, x0, keys, lay)
+        t2 = time.perf_counter()
+        act = act.cpu()                                        # one sync; the rest on the CPU (the CPU-side action space)
+        sp, hxc, hrc = self.sp_cpu, hx.cpu(), hr.cpu()
         accel = act[0, :, 0] * sp.accel_std.float() + sp.accel_mean.float()
         kappa = act[0, :, 1] * sp.curvature_std.float() + sp.curvature_mean.float()
-        v0 = sp.estimate_t0_states(hx[:, 0].float(), hr[:, 0].float())["v"]
-        xyz, _ = sp.action_to_traj(act, hx[:, 0], hr[:, 0])
-        torch.cuda.synchronize()
-        t2 = time.perf_counter()
-        return dict(accel=accel.cpu().numpy().astype(np.float64), kappa=kappa.cpu().numpy().astype(np.float64),
-                    v0=float(v0.reshape(-1)[0]), xyz=xyz[0].float().cpu().numpy(),
-                    timing=dict(timing, model_ms=round(1e3 * (t2 - t1), 1), **parts))
+        v0 = sp.estimate_t0_states(hxc[:, 0].float(), hrc[:, 0].float())["v"]
+        xyz = sp.action_to_traj(act, hxc[:, 0], hrc[:, 0])[0][0].float().numpy() if self.want_xyz else None   # the node
+        t3 = time.perf_counter()                                                                             # drives on (a, kappa)
+        return dict(accel=accel.numpy().astype(np.float64), kappa=kappa.numpy().astype(np.float64),
+                    v0=float(v0.reshape(-1)[0]), xyz=xyz,
+                    timing=dict(timing, model_ms=round(1e3 * (t3 - t1), 1), engine_ms=round(1e3 * (t2 - t1), 1),
+                                post_ms=round(1e3 * (t3 - t2), 1), **parts))

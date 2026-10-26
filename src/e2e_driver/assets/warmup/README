@@ -1,0 +1,3 @@
+Two consecutive model requests (wire format, model_server --dump) of collected episode run1024b-w1-001, rows 600-601
+(test/offline_replay.py --mode deploy, 10/24). model_server --backend engine compiles and captures its CUDA graphs on
+them before it listens, so the first live step is not minutes long.

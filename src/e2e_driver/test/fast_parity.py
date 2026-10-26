@@ -20,7 +20,7 @@ import torch  # noqa: E402
 from omegaconf import OmegaConf  # noqa: E402
 
 import engine  # noqa: E402
-from fast_engine import FastEngine, fingerprints  # noqa: E402
+from fast_engine import FastEngine, fingerprints, layout  # noqa: E402
 from morai_vla.processor import collate_fn  # noqa: E402
 
 
@@ -45,6 +45,10 @@ def main():
             b = collate_fn([ds[i]], model_config=m.config)
             keys = fingerprints(b["tokenized_data"]["pixel_values"], b["tokenized_data"]["image_grid_thw"])
             b = gpu(b)
+            ids = m.fuse_traj_tokens(b["tokenized_data"]["input_ids"], dict(ego_history_xyz=b["ego_history_xyz"], ego_history_rot=b["ego_history_rot"]))
+            pos_ref, d_ref = fe.vlm.get_rope_index(ids, b["tokenized_data"]["image_grid_thw"], None, b["tokenized_data"]["attention_mask"])
+            pos, d, _ = layout(b["tokenized_data"]["input_ids"], b["tokenized_data"]["image_grid_thw"], fe.image_token, fe.vlm.visual.spatial_merge_size)
+            assert torch.equal(pos.cuda(), pos_ref) and torch.equal(d.cuda(), d_ref.reshape(1, 1)), "layout != get_rope_index"
             torch.manual_seed(i); cap.clear()
             xyz, _ = m.sample_trajectories(dict(b["tokenized_data"]), b["ego_history_xyz"], b["ego_history_rot"], num_samples=1, num_steps=10)
             ref = cap["a"].float()
@@ -77,7 +81,7 @@ def main():
     print(json.dumps(dict(parity_traj_m_mean=round(float(np.mean([r["traj_m"] for r in rows])), 5),
                           parity_action_rel_max=round(max(r["action_rel"] for r in rows), 5),
                           step_ms=med(ts), p90=round(float(np.percentile(ts[3:], 90)), 1),
-                          vit_ms=med([p["vit_ms"] for p in parts]), assemble_ms=med([p["assemble_ms"] for p in parts]),
+                          vit_ms=med([p["vit_ms"] for p in parts]), assemble_ms=med([p["gpu_assemble_ms"] for p in parts]),
                           llm_ms=med([p["llm_ms"] for p in parts]), expert_ms=med([p["expert_ms"] for p in parts]),
                           new_images=parts[-1]["new_images"],
                           prefix=parts[-1]["prefix_tokens"], padded=parts[-1]["padded"],

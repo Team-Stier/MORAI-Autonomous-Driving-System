@@ -34,7 +34,7 @@ def make_backend(a):
         return backends.FakeBackend(v_target=a.fake_speed, kappa=a.fake_kappa, preprocess_config=a.preprocess_config, vlm=a.vlm)
     if a.backend == "engine":
         warm = sorted(Path(a.warmup).glob("req_*.bin"))[:2] if a.warmup else []
-        b = backends.EngineBackend(a.ckpt, vlm=a.vlm, num_steps=a.steps, seed=a.seed, warmup=warm)
+        b = backends.EngineBackend(a.ckpt, vlm=a.vlm, num_steps=a.steps, seed=a.seed, warmup=warm, want_xyz=bool(a.dump))
         log.info("engine %s loaded in %.0f s, warm-up %s", b.model.engine_info, b.load_s, getattr(b, "warmup_timing", None))
         return b
     return backends.HFBackend(a.ckpt, vlm=a.vlm, model_class=a.model_class, attn=a.attn, dtype=a.dtype, num_steps=a.steps, seed=a.seed)

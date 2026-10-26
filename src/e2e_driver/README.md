@@ -436,6 +436,36 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
 - **winpc**: 아래 '실행 (winpc WSL)'처럼 ROS는 Noetic chroot에서, 모델 서버는 그 밖에서 띄운다(`tools/winpc/stack.sh`, `server.sh`). `runtime.env`의 `E2E_MODEL_PYTHON`은 비워 둔다.
   - 운영측 PC의 UDP를 LAN에서 WSL로 받으려면 WSL mirrored 네트워킹이나 Windows 쪽 UDP 전달이 필요하다. 아직 정하지 않았다.
 
+## 5080 추론 엔진 (`--backend engine`, MODEL_PLAN 5.1–5.2 그대로)
+
+- **넣는 것**: 학생 파이프라인의 `deliver` 폴더(`final/` + `quant_manifest.json`, `train/scripts/qad_export.py`). `runtime.env`의 `E2E_MODEL_CKPT`만 바꾸면 된다.
+- **스택**: torch 2.14.1+cu130, flashinfer-python 0.7.2.post1, nvidia-cutlass-dsl 4.8.1이다(10/24 벤치마크 `venv-fi`와 같은 목록에 모델 의존성을 더한 `~/morai-eval/venv-engine`).
+  - 같은 이름의 NCCL 파일(cu12·cu13)이 서로 덮어쓰므로 `nvidia-nccl-cu13`을 마지막에 다시 설치한다.
+- **정밀도**: 카메라 ViT FP8, LLM·expert 선형층은 manifest의 형식(NVFP4·FP8)과 QAD amax를 쓴다. LiDAR ViT, merger, 임베딩, in/out_proj, KV 캐시, 어텐션은 BF16이고 Euler는 FP32로 10 step이다.
+  - NVFP4 GEMM: 프리필(M ≈ 1.8k)은 cuBLASLt `_scaled_mm`, expert(M = 64)는 FlashInfer b12x를 쓴다(`server/nvfp4.py`, 벤치마크 `nvfp4.py` 기반, ModelOpt의 블록 스케일 규칙).
+  - 체크포인트는 텐서 하나씩 GPU로 읽으며 양자화한다(`server/engine.py`, 3분할 safetensors 지원). BF16 전체를 RAM이나 GPU에 올리지 않는다.
+- **실행**: `server/fast_engine.py`, 정적 양자화 + `torch.compile` + CUDA graph다.
+  - ViT는 새 이미지(카메라별 최신 4장 + BEV 2장)만 계산한다. 카메라(FP8)와 LiDAR(BF16)는 각각 한 묶음으로, 두 스트림에서 동시에 돈다. 지난 프레임 12장은 같은 픽셀이면 캐시를 쓴다.
+  - LLM 프리필은 매 스텝 1792 토큰으로 오른쪽을 채워 돈다. 프롬프트는 1593–1729 토큰이고, 128행 타일이라 1728과 비용이 같다.
+  - expert 10 step은 graph 하나다. 패딩 마스크 어텐션은 BF16 GEMM 2개 + fp32 softmax로 한다. SDPA·cuDNN·varlen flash는 이 모양에서 더 느렸다.
+  - M-RoPE 위치와 픽셀 BF16 변환은 전처리 스레드(CPU)에서 한다. 서버는 시작할 때 `assets/warmup`의 요청 2개로 compile·capture를 끝낸다.
+- **10 Hz 확인** (10/26, 5080 단독, 실제 크기 구조 + 무작위 가중치, LLM·expert 전부 NVFP4, 연속 실제 요청 42개를 10 Hz로 60 s, `test/server_bench.py`):
+
+  | | ms |
+  |---|---|
+  | ViT (새 이미지 6장) | 12.7 |
+  | 입력 조립 (GPU) | 0.5 |
+  | LLM 프리필 | 37.7 |
+  | expert 10 step | 44.2 |
+  | 서버 한 스텝 (model_ms 중앙값) | 98.7 |
+
+  - 9.78 Hz를 냈다. 전처리(토큰화 등 58 ms)는 이전 스텝과 겹쳐 돈다.
+  - 벤치마크 89 ms(ViT 10.4, LLM 39.2, expert 39.5)와 비교하면 차이는 두 곳이다. LiDAR ViT가 설계대로 BF16이고, expert 어텐션에 패딩 마스크가 있다.
+  - H100 스모크 QAD의 형식 구성(LLM 대부분 FP8)이면 LLM이 FP8이라 더 느리다(cu128 측정으로 한 스텝 151 ms였다). 최종 구성은 실제 QAD 결과를 따른다.
+- **정확도**: 소형 QAD 납품물(dry_best), 검증 16 샘플, 같은 노이즈(`test/engine_parity.py`)로 쟀다.
+  - QAD 가짜 양자화 출력과의 평균 궤적 차이는 서비스 경로 0.017 m, eager 엔진 0.019 m다. 같은 가중치의 BF16은 0.065 m다.
+  - ADE는 QAD 5.505, 엔진 5.504다.
+
 ## 평가 관리자 (`tools/eval.sh`, Mac에서 실행)
 
 운영측 역할을 하는 별도 도구다(`tools/eval_manager.py`). 스택은 운전만 하고, MORAI 제어는 관리자가 맡는다. bc-250에는 MSC를 ssh로, gRPC는 192.168.0.15:7789로 보낸다.
