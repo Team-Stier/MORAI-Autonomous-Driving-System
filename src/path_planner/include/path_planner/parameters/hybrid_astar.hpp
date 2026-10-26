@@ -1,5 +1,6 @@
 #pragma once
 #include <path_planner/cores/hybrid_astar.hpp>
+#include <path_planner/libraries/checkpoints.hpp>
 #include <node_pipeline/extension.hpp>
 #include <cmath>
 #include <initializer_list>
@@ -26,6 +27,13 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
     p.emergency_deceleration_mps2 = params.number("emergency_deceleration_mps2");
   if (params.has("occupancy_history_sec"))
     p.occupancy_history_sec = params.number("occupancy_history_sec");
+  if (params.has("return_length_m")) p.return_length_m = params.number("return_length_m");
+  if (params.has("checkpoint_keep_m")) p.checkpoint_keep_m = params.number("checkpoint_keep_m");
+  if (params.has("checkpoint_blend_m")) p.checkpoint_blend_m = params.number("checkpoint_blend_m");
+  if (params.has("checkpoints_file")) {
+    for (const auto& checkpoint : readCheckpoints(params.asset("checkpoints_file")))
+      p.checkpoints.emplace_back(checkpoint.x_m, checkpoint.y_m);
+  }
   p.transition_lengths_m = params.numbers("transition_lengths_m");
   if (params.has("lateral_offsets_m")) p.lateral_offsets_m = params.numbers("lateral_offsets_m");
   p.steering_candidates_deg = params.numbers("steering_candidates_deg");
@@ -46,6 +54,13 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   for (double value : {p.collision_margin_m, p.road_margin_m, p.occupancy_history_sec})
     if (!std::isfinite(value) || value < 0.0)
       throw std::invalid_argument("hybrid_astar margins must be finite and nonnegative");
+  if (!std::isfinite(p.return_length_m) || p.return_length_m < 0.0 || p.return_length_m > p.path_length_m)
+    throw std::invalid_argument("hybrid_astar return_length_m must be within path_length_m");
+  if (!std::isfinite(p.checkpoint_keep_m) || p.checkpoint_keep_m <= 0.0 || p.checkpoint_keep_m >= 3.0)
+    throw std::invalid_argument("hybrid_astar checkpoint_keep_m must be inside the 3 m checkpoint radius");
+  if (!std::isfinite(p.checkpoint_blend_m) || p.checkpoint_blend_m <= 0.0 ||
+      p.checkpoint_blend_m > p.path_length_m)
+    throw std::invalid_argument("hybrid_astar checkpoint_blend_m must be within path_length_m");
   if (p.path_length_m > 500.0 || p.sample_step_m < 0.05 ||
       p.sample_step_m > p.primitive_length_m || p.primitive_length_m > 5.0 ||
       p.primitive_length_m > p.path_length_m || p.grid_resolution_m < 0.05 ||
