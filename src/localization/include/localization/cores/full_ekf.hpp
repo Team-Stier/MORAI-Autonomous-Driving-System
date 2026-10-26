@@ -15,6 +15,9 @@ struct EkfParameters {
   double velocity_noise = 0.05;      // m/s 표준편차
   double gps_height_m = 1.2;        // base_link 위 GPS 장착 높이
   double yaw_offset_rad = -0.023509; // GT heading→UTM 격자 heading
+  // 0 < dt <= 이 값일 때만 IMU 예측. 역행·0 스탬프(/clock 시작, use_sim_time 전환)나 긴 공백(어떤 Core도 안 돈 구간)은
+  // 적분하지 않고 이번 GPS fix로 다시 초기화한다(dt = 1.79e9 s를 적분하면 1e17 m가 된다).
+  double max_prediction_dt_sec = 0.5;
 };
 
 class FullEkf {
@@ -35,15 +38,16 @@ class FullEkf {
     Eigen::Vector3d position(xy[0], xy[1], gps.altitude);
     position -= rotation * Eigen::Vector3d(0, 0, parameters_.gps_height_m);
     const auto stamp = imu.header.stamp.toNSec();
-    if (!initialized_) {
+    const double dt = (static_cast<double>(stamp) - previous_imu_stamp_) * 1e-9;
+    if (!initialized_ || (stamp != previous_imu_stamp_ && (dt <= 0 || dt > parameters_.max_prediction_dt_sec))) {
       state_.head<3>() = position;
       state_.tail<3>() = rotation * Eigen::Vector3d(status.velocity_x_mps, 0, 0);
+      if (initialized_) covariance_ = Matrix6::Identity();   // 다시 초기화: 처음과 같은 공분산
       previous_imu_stamp_ = stamp;
       initialized_ = true;
     }
     // 같은 IMU를 timer가 다시 선택하면 예측을 중복하지 않는다.
     if (stamp != previous_imu_stamp_) {
-      const double dt = (static_cast<double>(stamp) - previous_imu_stamp_) * 1e-9;
       previous_imu_stamp_ = stamp;
       Eigen::Vector3d acceleration = rotation * Eigen::Vector3d(
         imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z);

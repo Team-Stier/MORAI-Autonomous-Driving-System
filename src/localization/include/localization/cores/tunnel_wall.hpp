@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,13 @@ struct TunnelWallParameters {
   double wall_max_station_m = 60.0;
   double wall_min_height_m = 0.3;
   double wall_max_height_m = 3.5;
+  // Wall consensus only while the state is inside the surveyed tunnel corridor (|lateral| <= wall + margin): the
+  // station window alone also covered a 117 m wide strip outside the tunnel, where the GPS-gap rule (GPS Missing ->
+  // this core) pulled the state 100-250 m onto the tunnel axis.
+  double corridor_margin_m = 3.0;
+  // IMU prediction only for 0 < dt <= this: a reversed or zero stamp (/clock start, use_sim_time) or a long gap (no
+  // core ran, simulator stall on the wall clock) is skipped instead of integrated (dt = 1.79e9 s gave 1.9e17 m).
+  double max_prediction_dt_sec = 0.5;
   Eigen::Matrix<double, 6, 1> initial_state = Eigen::Matrix<double, 6, 1>::Zero();
   Eigen::Matrix<double, 6, 6> initial_covariance = Eigen::Matrix<double, 6, 6>::Identity();
   std::uint64_t initial_previous_imu_stamp = 0;
@@ -48,7 +56,7 @@ class TunnelWall {
   // The surveyed wall planes and heading are in the repository map frame.
   TunnelWall(TunnelWallParameters parameters, EkfState& shared)
       : parameters_(parameters), state_(shared.state), covariance_(shared.covariance),
-        previous_imu_stamp_(shared.previous_imu_stamp),
+        initialized_(shared.initialized), previous_imu_stamp_(shared.previous_imu_stamp),
         previous_status_stamp_(shared.previous_status_stamp),
         previous_lidar_stamp_(shared.previous_lidar_stamp),
         tangent_(std::cos(parameters.axis_yaw_rad), std::sin(parameters.axis_yaw_rad), 0),
@@ -57,6 +65,8 @@ class TunnelWall {
   nav_msgs::Odometry process(const sensor_msgs::Imu& imu,
                             const interfaces::CompetitionVehicleStatus& status,
                             const sensor_msgs::PointCloud2& cloud) {
+    // No absolute position before FullEkf's first fix (zero state, zero stamps): report the attempt as failed.
+    if (!initialized_) throw std::runtime_error("tunnel_wall: shared state has no FullEkf fix yet");
     const Eigen::Quaterniond orientation =
       Eigen::AngleAxisd(status.yaw_rad + parameters_.yaw_offset_rad, Eigen::Vector3d::UnitZ()) *
       Eigen::AngleAxisd(status.pitch_rad, Eigen::Vector3d::UnitY()) *
@@ -66,9 +76,9 @@ class TunnelWall {
       imu.linear_acceleration.x, imu.linear_acceleration.y, imu.linear_acceleration.z);
     acceleration.z() = 0;  // Same vertical constant-velocity model as FullEkf.
     const auto stamp = imu.header.stamp.toNSec();
-    if (stamp != previous_imu_stamp_) {
-      const double dt = (static_cast<double>(stamp) - previous_imu_stamp_) * 1e-9;
-      previous_imu_stamp_ = stamp;
+    const double dt = (static_cast<double>(stamp) - previous_imu_stamp_) * 1e-9;
+    if (stamp != previous_imu_stamp_) previous_imu_stamp_ = stamp;
+    if (dt > 0 && dt <= parameters_.max_prediction_dt_sec) {
       state_.head<3>() += state_.tail<3>() * dt + 0.5 * acceleration * dt * dt;
       state_.tail<3>() += acceleration * dt;
       Matrix6 transition = Matrix6::Identity();
@@ -105,38 +115,7 @@ class TunnelWall {
     }
     if (cloud.header.stamp.toNSec() != previous_lidar_stamp_) {
       previous_lidar_stamp_ = cloud.header.stamp.toNSec();
-      const double orientation_dt = (cloud.header.stamp.toSec() - status.header.stamp.toSec());
-      const Eigen::Vector3d angular_velocity(status.angular_velocity_x_radps,
-        status.angular_velocity_y_radps, status.angular_velocity_z_radps);
-      const double angle = angular_velocity.norm() * orientation_dt;
-      Eigen::Quaterniond scan_orientation = orientation;
-      if (angle != 0) scan_orientation = orientation * Eigen::Quaterniond(
-        Eigen::AngleAxisd(angle, angular_velocity.normalized()));
-      const double age = imu.header.stamp.toSec() - cloud.header.stamp.toSec();
-      const Eigen::Quaterniond body_from_level = (Eigen::Quaterniond(
-        Eigen::AngleAxisd(status.pitch_rad, Eigen::Vector3d::UnitY()) *
-        Eigen::AngleAxisd(status.roll_rad, Eigen::Vector3d::UnitX()))).conjugate();
-      const auto wall = wallInformation(cloud, scan_orientation, angular_velocity,
-        state_.tail<3>() - acceleration * age, acceleration,
-        state_.head<3>() - state_.tail<3>() * age + 0.5 * acceleration * age * age,
-        body_from_level);
-      Vector6 observation = Vector6::Zero();
-      observation.head<3>() = normal_;
-      observation.tail<3>() = -age * normal_;
-      const double innovation_variance = observation.dot(covariance_ * observation);
-      Vector6 projected_covariance = covariance_ * observation;
-      // Walls add no station/height information, including with correlated GPS covariance.
-      projected_covariance.head<3>() = normal_ * normal_.dot(projected_covariance.head<3>());
-      projected_covariance.tail<3>() = normal_ * normal_.dot(projected_covariance.tail<3>());
-      const Vector6 scaled_covariance = projected_covariance /
-        (1 + innovation_variance * wall.precision);
-      const double acceleration_offset = 0.5 * normal_.dot(acceleration) * age * age;
-      state_ += scaled_covariance * (wall.weighted_position -
-        wall.precision * (observation.dot(state_) + acceleration_offset));
-      const Matrix6 residual = Matrix6::Identity() -
-        wall.precision * scaled_covariance * observation.transpose();
-      covariance_ = residual * covariance_ * residual.transpose() +
-        wall.precision * scaled_covariance * scaled_covariance.transpose();
+      if (inCorridor()) correctWithWalls(cloud, orientation, acceleration, imu, status);
     }
     const Eigen::Vector3d velocity = rotation.transpose() * state_.tail<3>();
     nav_msgs::Odometry message;
@@ -160,7 +139,48 @@ class TunnelWall {
  private:
   using Vector6 = Eigen::Matrix<double, 6, 1>;
   using Matrix6 = Eigen::Matrix<double, 6, 6>;
+  void correctWithWalls(const sensor_msgs::PointCloud2& cloud, const Eigen::Quaterniond& orientation,
+                        const Eigen::Vector3d& acceleration, const sensor_msgs::Imu& imu,
+                        const interfaces::CompetitionVehicleStatus& status) {
+    const double orientation_dt = (cloud.header.stamp.toSec() - status.header.stamp.toSec());
+    const Eigen::Vector3d angular_velocity(status.angular_velocity_x_radps,
+      status.angular_velocity_y_radps, status.angular_velocity_z_radps);
+    const double angle = angular_velocity.norm() * orientation_dt;
+    Eigen::Quaterniond scan_orientation = orientation;
+    if (angle != 0) scan_orientation = orientation * Eigen::Quaterniond(
+      Eigen::AngleAxisd(angle, angular_velocity.normalized()));
+    const double age = imu.header.stamp.toSec() - cloud.header.stamp.toSec();
+    const Eigen::Quaterniond body_from_level = (Eigen::Quaterniond(
+      Eigen::AngleAxisd(status.pitch_rad, Eigen::Vector3d::UnitY()) *
+      Eigen::AngleAxisd(status.roll_rad, Eigen::Vector3d::UnitX()))).conjugate();
+    const auto wall = wallInformation(cloud, scan_orientation, angular_velocity,
+      state_.tail<3>() - acceleration * age, acceleration,
+      state_.head<3>() - state_.tail<3>() * age + 0.5 * acceleration * age * age,
+      body_from_level);
+    Vector6 observation = Vector6::Zero();
+    observation.head<3>() = normal_;
+    observation.tail<3>() = -age * normal_;
+    const double innovation_variance = observation.dot(covariance_ * observation);
+    Vector6 projected_covariance = covariance_ * observation;
+    // Walls add no station/height information, including with correlated GPS covariance.
+    projected_covariance.head<3>() = normal_ * normal_.dot(projected_covariance.head<3>());
+    projected_covariance.tail<3>() = normal_ * normal_.dot(projected_covariance.tail<3>());
+    const Vector6 scaled_covariance = projected_covariance /
+      (1 + innovation_variance * wall.precision);
+    const double acceleration_offset = 0.5 * normal_.dot(acceleration) * age * age;
+    state_ += scaled_covariance * (wall.weighted_position -
+      wall.precision * (observation.dot(state_) + acceleration_offset));
+    const Matrix6 residual = Matrix6::Identity() -
+      wall.precision * scaled_covariance * observation.transpose();
+    covariance_ = residual * covariance_ * residual.transpose() +
+      wall.precision * scaled_covariance * scaled_covariance.transpose();
+  }
   struct WallInformation { double precision = 0, weighted_position = 0; };
+  bool inCorridor() const {
+    const double lateral = normal_.dot(state_.head<3>() -
+      Eigen::Vector3d(parameters_.origin_x_m, parameters_.origin_y_m, state_[2]));
+    return std::abs(lateral) <= std::max(parameters_.left_wall_m, -parameters_.right_wall_m) + parameters_.corridor_margin_m;
+  }
   void addConsensus(std::vector<double> values, WallInformation& information) const {
     std::sort(values.begin(), values.end());
     std::size_t first = 0, best_first = 0, best_count = 0;
@@ -238,6 +258,7 @@ class TunnelWall {
   TunnelWallParameters parameters_;
   Vector6& state_;
   Matrix6& covariance_;
+  bool& initialized_;
   std::uint64_t &previous_imu_stamp_, &previous_status_stamp_, &previous_lidar_stamp_;
   Eigen::Vector3d tangent_, normal_;
 };

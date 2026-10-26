@@ -64,6 +64,35 @@ TEST(FullEkf, EstimatesLateralAndVerticalVelocityFromGpsMotion) {
   EXPECT_NEAR(result.pose.pose.position.z, gps.altitude - parameters.gps_height_m, 0.05);
 }
 
+TEST(FullEkf, ReinitialisesInsteadOfIntegratingReversedOrLongStamps) {
+  // An IMU stamped 0 before /clock arrived, then epoch time: dt = 1.79e9 s used to give ~1e17 m.
+  localization::EkfParameters parameters;
+  parameters.yaw_offset_rad = 0;
+  localization::EkfState state;
+  localization::FullEkf core(parameters, state);
+  sensor_msgs::NavSatFix gps;
+  gps.latitude = 37.0;
+  gps.longitude = 127.0;
+  gps.altitude = 10;
+  sensor_msgs::Imu imu;
+  imu.linear_acceleration.x = 0.1;
+  interfaces::CompetitionVehicleStatus status;
+  status.velocity_x_mps = 5;
+  const auto first = core.process(gps, imu, status);                  // all stamps 0
+  for (double t : {1792978561.0, 1792978571.0, 1792978561.0}) {        // epoch jump, 10 s gap, reversal
+    imu.header.stamp.fromSec(t);
+    gps.header.stamp = imu.header.stamp;
+    status.header.stamp = imu.header.stamp;
+    const auto result = core.process(gps, imu, status);
+    EXPECT_NEAR(result.pose.pose.position.x, first.pose.pose.position.x, 0.5);
+    EXPECT_NEAR(result.pose.pose.position.y, first.pose.pose.position.y, 0.5);
+  }
+  imu.header.stamp.fromSec(1792978561.02);                             // a normal step integrates as before
+  const auto before = state.state;
+  core.process(gps, imu, status);
+  EXPECT_GT(state.state[0], before[0]);
+}
+
 int main(int argc, char** argv) {
   ros::Time::init();
   testing::InitGoogleTest(&argc, argv);

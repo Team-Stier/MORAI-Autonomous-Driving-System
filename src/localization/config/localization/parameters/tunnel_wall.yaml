@@ -17,6 +17,8 @@ wall_min_station_m: -58.61842773450474
 wall_max_station_m: 58.61843533549703
 wall_min_height_m: 0.3
 wall_max_height_m: 3.5
+corridor_margin_m: 3.0       # 상태가 터널 통로 안(|lateral| <= 벽 + 여유)일 때만 벽 보정
+max_prediction_dt_sec: 0.5   # 0 < dt <= 이 값만 IMU 예측
 # TunnelWallParameters의 현재 초기 상태 기본값.
 initial_state: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 initial_covariance: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0,

@@ -65,11 +65,77 @@ TEST(TunnelWall, LeveledWallPointsDoNotReceiveTheBodyTiltAgain) {
     std::memcpy(fixture.cloud.data.data() + i * fixture.cloud.point_step, point, sizeof(point));
   }
   localization::EkfState shared;
+  shared.initialized = true;
   shared.previous_imu_stamp = fixture.imu.header.stamp.toNSec();
   shared.previous_status_stamp = fixture.status.header.stamp.toNSec();
   localization::TunnelWall core(tunnelParameters(), shared);
   const auto result = core.process(fixture.imu, fixture.status, fixture.cloud);
   EXPECT_NEAR(0, result.pose.pose.position.y, 1e-6);
+}
+
+namespace {
+// 20 wall points 5 m to the left of the vehicle (tunnelParameters: axis along x, walls at +-5 m from the origin).
+void leftWall(Fixture& fixture) {
+  fixture.status.velocity_x_mps = 0;
+  fixture.cloud.width = 20;
+  fixture.cloud.row_step = fixture.cloud.width * fixture.cloud.point_step;
+  fixture.cloud.data.resize(fixture.cloud.row_step);
+  for (std::size_t i = 0; i < fixture.cloud.width; ++i) {
+    const float point[] = {static_cast<float>(i) * 0.1f, 5.0f, 1.0f, 0.0f};
+    std::memcpy(fixture.cloud.data.data() + i * fixture.cloud.point_step, point, sizeof(point));
+  }
+}
+}  // namespace
+
+TEST(TunnelWall, RefusesToRunBeforeFullEkfInitialisesTheSharedState) {
+  // Started (or restarted) while GPS is missing: zero state and zero stamps would integrate dt = epoch seconds.
+  Fixture fixture;
+  fixture.imu.linear_acceleration.x = 0.1;
+  localization::EkfState shared;
+  localization::TunnelWall core(tunnelParameters(), shared);
+  EXPECT_THROW(core.process(fixture.imu, fixture.status, fixture.cloud), std::runtime_error);
+  EXPECT_TRUE(shared.state.isZero());
+  EXPECT_EQ(shared.previous_imu_stamp, 0u);
+}
+
+TEST(TunnelWall, NoWallPullOutsideTheTunnelCorridor) {
+  // 200 m beside the axis but inside the station window: the walls seen there are not the tunnel's.
+  Fixture fixture;
+  leftWall(fixture);
+  localization::EkfState shared;
+  shared.initialized = true;
+  shared.state[1] = 200;
+  shared.previous_imu_stamp = fixture.imu.header.stamp.toNSec();
+  shared.previous_status_stamp = fixture.status.header.stamp.toNSec();
+  localization::TunnelWall core(tunnelParameters(), shared);
+  const auto outside = core.process(fixture.imu, fixture.status, fixture.cloud);
+  EXPECT_DOUBLE_EQ(outside.pose.pose.position.y, 200);
+  EXPECT_EQ(shared.previous_lidar_stamp, fixture.cloud.header.stamp.toNSec());   // the cloud is consumed
+  // Inside the corridor the same walls still correct the lateral position (1 m off -> pulled back to the axis).
+  localization::EkfState inside_state;
+  inside_state.initialized = true;
+  inside_state.state[1] = 1;
+  inside_state.previous_imu_stamp = shared.previous_imu_stamp;
+  inside_state.previous_status_stamp = shared.previous_status_stamp;
+  localization::TunnelWall inside_core(tunnelParameters(), inside_state);
+  const auto inside = inside_core.process(fixture.imu, fixture.status, fixture.cloud);
+  EXPECT_LT(std::abs(inside.pose.pose.position.y), 0.1);
+}
+
+TEST(TunnelWall, SkipsPredictionAcrossReversedOrLongImuGaps) {
+  Fixture fixture;
+  fixture.status.velocity_x_mps = 6;
+  localization::EkfState shared;
+  shared.initialized = true;
+  shared.state[3] = 6;
+  shared.previous_imu_stamp = fixture.imu.header.stamp.toNSec();
+  localization::TunnelWall core(tunnelParameters(), shared);
+  fixture.imu.header.stamp = ros::Time(1791638405, 0);                 // 5 s gap: no core ran, or a stall
+  EXPECT_DOUBLE_EQ(core.process(fixture.imu, fixture.status, fixture.cloud).pose.pose.position.x, 0);
+  fixture.imu.header.stamp = ros::Time(1791638405, 50000000);          // the next normal step moves on
+  EXPECT_NEAR(core.process(fixture.imu, fixture.status, fixture.cloud).pose.pose.position.x, 0.3, 1e-6);
+  fixture.imu.header.stamp = ros::Time(0, 0);                          // reversed (sim time not started)
+  EXPECT_NEAR(core.process(fixture.imu, fixture.status, fixture.cloud).pose.pose.position.x, 0.3, 1e-6);
 }
 
 TEST(TunnelWall, SharesStateCovarianceAndSampleStampsAcrossCoreSwitches) {

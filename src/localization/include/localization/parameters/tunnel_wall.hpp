@@ -27,6 +27,8 @@ inline TunnelWallParameters loadTunnelWallParameters(const node_pipeline::ParamR
   if (parameters.has("wall_max_station_m")) config.wall_max_station_m = parameters.number("wall_max_station_m");
   if (parameters.has("wall_min_height_m")) config.wall_min_height_m = parameters.number("wall_min_height_m");
   if (parameters.has("wall_max_height_m")) config.wall_max_height_m = parameters.number("wall_max_height_m");
+  if (parameters.has("corridor_margin_m")) config.corridor_margin_m = parameters.number("corridor_margin_m");
+  if (parameters.has("max_prediction_dt_sec")) config.max_prediction_dt_sec = parameters.number("max_prediction_dt_sec");
   if (parameters.has("initial_state")) {
     const auto values = parameters.numbers("initial_state");
     if (values.size() != 6) throw std::invalid_argument("invalid tunnel wall initial_state size");
@@ -45,6 +47,10 @@ inline TunnelWallParameters loadTunnelWallParameters(const node_pipeline::ParamR
     config.initial_previous_status_stamp = parameters.integer("initial_previous_status_stamp");
   if (parameters.has("initial_previous_lidar_stamp"))
     config.initial_previous_lidar_stamp = parameters.integer("initial_previous_lidar_stamp");
+  if (!std::isfinite(config.corridor_margin_m) || config.corridor_margin_m < 0)
+    throw std::invalid_argument("invalid tunnel wall corridor_margin_m");
+  if (!std::isfinite(config.max_prediction_dt_sec) || config.max_prediction_dt_sec <= 0)
+    throw std::invalid_argument("invalid tunnel wall max_prediction_dt_sec");
   if (!std::isfinite(config.origin_x_m)) throw std::invalid_argument("invalid tunnel wall origin_x_m");
   if (!std::isfinite(config.origin_y_m)) throw std::invalid_argument("invalid tunnel wall origin_y_m");
   if (!std::isfinite(config.axis_yaw_rad)) throw std::invalid_argument("invalid tunnel wall axis_yaw_rad");

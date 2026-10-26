@@ -3,7 +3,7 @@
 # roscore with /use_sim_time, the stack's nodes except the bridge, a --clock replay of one collected episode
 # (cameras from the *_10hz topics, GPS, IMU, competition_status; GT pose and the collection EKF for the probes only), its
 # VLP16 packets re-sent over UDP, latency_probe and, with EGO=<_ego npz>, loc_probe.
-# Usage: [EGO=...] bash src/e2e_driver/test/bag_loop.sh START_S DURATION_S OUT_JSON BAG [BAG ...]
+# Usage: [EGO=...] [REC_LOC=out.csv] bash src/e2e_driver/test/bag_loop.sh START_S DURATION_S OUT_JSON BAG [BAG ...]
 set -u
 START=$1 DUR=$2 OUT=$3; shift 3
 source devel/setup.bash
@@ -21,6 +21,7 @@ if [[ -n ${EGO:-} ]]; then
   python3 src/e2e_driver/test/loc_probe.py _out:=${OUT%.json}_loc.json _ego:=$EGO _route:=src/e2e_driver/assets/route.json > /tmp/loc_probe.log 2>&1 &
   probes="$probes $!"
 fi
+[[ -n ${REC_LOC:-} ]] && { rostopic echo -p /localization/ego > "$REC_LOC" 2>/dev/null & probes="$probes $!"; }   # localization before/after
 sleep 1
 python3 src/e2e_driver/test/udp_replay.py "$@" > /tmp/udp_replay.log 2>&1 &
 replay=$!

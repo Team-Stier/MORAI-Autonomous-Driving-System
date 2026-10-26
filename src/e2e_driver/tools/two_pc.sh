@@ -7,7 +7,8 @@
 #        asked to drive, reload SCENE (pause, load-scene, restart localization, play) with the rest of the stack left
 #        running; summary at the end (test/drive_summary.py). EPISODE_S > 0 also reloads every EPISODE_S s.
 #   two_pc.sh reset [SCENE]      one reload as above
-#   WEATHER=SUNNY|FOGGY HOUR=13: set over gRPC at the start and after every reload (collection did it per episode)
+#   weather/time: per checkpoint section at random from ENV_SEED (default 0), as the rules apply them (§2-7-2,
+#   tools/env_follow.py; log env_NAME.log); WEATHER=SUNNY|FOGGY [HOUR=13] fixes them instead
 #   two_pc.sh down
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,10 +23,14 @@ msc() {  # <action> [option] [timeout]
   fi
 }
 wsl() { ssh winpc-wsl "$@"; }
-weather() {  # collection's Environment gRPC client (morai-parallel-collect envctl.py); evaluation: SUNNY and FOGGY
+TOOLS=morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/tools
+envpy() {  # env_follow.py with the collection's grpc venv; the simulator's Environment gRPC service on 7789
   local host; [[ $SIM == bc250 ]] && host=192.168.0.15 || host="\$(ip route | awk '/default/{print \$3}')"
-  wsl "P=\$HOME/.morai-wsl-rebuild-20261007-a1/client-venv/bin/python; E=\$HOME/.claude-morai-wslros-20261018/bin/envctl.py
-       \$P -I \$E $host:7789 weather ${WEATHER:-SUNNY} && \$P -I \$E $host:7789 time ${HOUR:-13}" > /dev/null
+  wsl "\$HOME/.morai-wsl-rebuild-20261007-a1/client-venv/bin/python -I \$HOME/$TOOLS/env_follow.py $host:7789 $*"
+}
+weather() {  # after a (re)load: the fixed WEATHER/HOUR, or the per-section setting env_follow logged last
+  if [[ -n ${WEATHER:-} ]]; then envpy --set "$WEATHER" "${HOUR:-13}"
+  elif [[ -n ${ENV_LOG:-} ]]; then envpy --resend "$ENV_LOG"; fi
 }
 loc_restart() {  # localization does not follow a teleport (or a new run): it respawns from the next GPS fix
   wsl "cd $W && ./chroot.sh ctl 'source devel/setup.bash; rosnode kill /localization_node'" > /dev/null 2>&1; sleep 4
@@ -58,9 +63,15 @@ case ${1:-} in
     NAME=$2; SECS=$3; SCENE=${4:-$SCENE_DEFAULT}
     wsl "cd $W && rm -f ~/morai-eval/data/stop_$NAME
       (setsid nohup ./chroot.sh probes 'bash src/e2e_driver/tools/winpc/probes.sh $NAME' > ~/morai-eval/run/probe_$NAME.log 2>&1 < /dev/null &)
-      (setsid nohup ./chroot.sh rec 'source devel/setup.bash; rostopic echo -p /e2e_driver/debug/data > /data/dbg_$NAME.csv & rostopic echo -p /localization/ego/pose/pose/position > /data/loc_$NAME.csv & rostopic echo -p /section_annotation/state > /data/sec_$NAME.csv & rostopic echo -p /sim_clock/state > /data/clk_$NAME.csv & until [ -e /data/stop_$NAME ]; do sleep 1; done; kill %1 %2 %3 %4' > /dev/null 2>&1 < /dev/null &)
+      (setsid nohup ./chroot.sh rec 'source devel/setup.bash; rostopic echo -p /e2e_driver/debug/data > /data/dbg_$NAME.csv & rostopic echo -p /localization/ego/pose/pose/position > /data/loc_$NAME.csv & PYTHONUNBUFFERED=1 rostopic echo -p /section_annotation/state > /data/sec_$NAME.csv & rostopic echo -p /sim_clock/state > /data/clk_$NAME.csv & until [ -e /data/stop_$NAME ]; do sleep 1; done; kill %1 %2 %3 %4' > /dev/null 2>&1 < /dev/null &)
       (setsid nohup python3 ~/morai-eval/ws/MORAI-Autonomous-Driving-System/src/e2e_driver/test/gtraw.py ~/morai-eval/data/gtraw_$NAME.txt ~/morai-eval/data/stop_$NAME > /dev/null 2>&1 < /dev/null &)"
-    weather; loc_restart; sleep 4; msc play; t0=$(date +%s); te=$t0; still=0; resets=0
+    ENV_LOG=\$HOME/morai-eval/data/env_$NAME.log
+    if [[ -n ${WEATHER:-} ]]; then weather; else                  # per section, seeded (rules §2-7-2; env_follow.py)
+      local_host=$([[ $SIM == bc250 ]] && echo 192.168.0.15 || echo "\$(ip route | awk '/default/{print \$3}')")
+      wsl "(setsid nohup \$HOME/.morai-wsl-rebuild-20261007-a1/client-venv/bin/python -I \$HOME/$TOOLS/env_follow.py $local_host:7789 \
+        \$HOME/morai-eval/data/sec_$NAME.csv $ENV_LOG ${ENV_SEED:-0} \$HOME/morai-eval/data/stop_$NAME > \$HOME/morai-eval/run/env_$NAME.log 2>&1 < /dev/null &)"
+    fi
+    loc_restart; sleep 4; msc play; t0=$(date +%s); te=$t0; still=0; resets=0
     while (( $(date +%s) - t0 < SECS )); do
       sleep 5
       v=$(wsl "tail -1 ~/morai-eval/data/dbg_$NAME.csv" | python3 -c 'import json,sys; print(abs(json.loads(sys.stdin.read().split(",", 1)[1])["v"]))' 2>/dev/null || echo 0)
