@@ -10,9 +10,11 @@ from the newest plan (control.Controller). /e2e_driver/debug (std_msgs/String, J
 latency_ms = command publish time - receipt stamp of the newest front-camera frame used.
 """
 import json
+import math
 import socket
 import threading
 import time
+from collections import deque
 
 import rosnode
 import rospy
@@ -52,6 +54,7 @@ class Node:
         self.sock, self.pending, self.next_id, self.skipped = None, {}, 0, 0
         self.reset_vit = False                      # the next request tells the server to drop its ViT cache
         self.plan, self.plan_id, self.v, self.plan_lock = None, -1, 0.0, threading.Lock()
+        self.applied = deque(maxlen=200)                # (t, accel, brake, steer deg left +) from competition_status (mlp mode)
         self.pub = rospy.Publisher(P("command_topic", "/control_cmd"), CtrlCmd, queue_size=1, tcp_nodelay=True)
         self.debug = rospy.Publisher("~debug", String, queue_size=5)
         for cam in CAMERAS:
@@ -89,6 +92,7 @@ class Node:
         if self.teleport.status(t, m.yaw_rad, m.signed_velocity_mps):
             self.teleported(t, "heading jump")
         self.v = m.signed_velocity_mps
+        self.applied.append((t, m.accel, m.brake, -math.degrees(m.steering_angle_rad)))
         self.odo.add(t, m.signed_velocity_mps)
         self.inputs.add_status(t, m.signed_velocity_mps, m.yaw_rad)
 
@@ -112,11 +116,19 @@ class Node:
     def publish(self, t):
         with self.plan_lock:
             plan = self.plan
-        accel, brake, steering, info = self.ctrl.command(plan, t, self.v)
+        accel, brake, steering, info = self.ctrl.command(plan, t, self.v, self.applied_at(t) if self.ctrl.mlp is not None else None)
         cmd = CtrlCmd()
         cmd.longlCmdType, cmd.accel, cmd.brake, cmd.steering = 1, accel, brake, steering
         self.pub.publish(cmd)
         return info
+
+    def applied_at(self, t):
+        """the applied (accel, brake, steer deg) at t - 0.1 s and t (newest status at or before each), for mode mlp."""
+        h = list(self.applied)
+        if not h:
+            return np.zeros(6)
+        pick = lambda tt: next((r[1:] for r in reversed(h) if r[0] <= tt), h[0][1:])
+        return np.r_[pick(t - 0.1), pick(t)]
 
     def control_loop(self, _event):
         self.publish(rospy.get_time())

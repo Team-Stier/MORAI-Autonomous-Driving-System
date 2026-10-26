@@ -24,6 +24,11 @@ def test_control():
     acc, brk, st, info = c.command(p, 0.8, 0.0); assert brk == 1.0 and info["reason"] == "no fresh plan"
     p = Plan(0.0, np.full(64, 1.0), np.zeros(64), 0.0)
     acc, brk, st, info = c.command(p, 0.05, 0.0); assert not info["hold"] and acc > 0
+    for name, applied in (("control_mlp.npz", np.array([0.0, 0.2, 0.0, 0.0, 0.2, 0.0])), ("control_mlp_nohist.npz", None)):
+        m = Controller(mode="mlp", mlp_weights=name)                                # package weights, numpy forward
+        acc, brk, st, info = m.command(Plan(0.0, np.zeros(64), np.zeros(64), 0.0), 0.05, 0.0, applied)
+        assert info["mode"] == "mlp" and 0 <= acc <= 1 and 0 <= brk <= 1 and -1 <= st <= 1 and brk > acc   # standing: brake
+    assert Controller().mlp is None                                                  # default mode map
 
 
 if __name__ == "__main__":

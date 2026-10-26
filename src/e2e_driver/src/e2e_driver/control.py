@@ -19,7 +19,11 @@ the step under t + lookahead and maps it through the vehicle. Constants were mea
   standstill  measured and planned speed (next hold_horizon s) below stop_speed: brake >= hold_brake, so the car does
               not creep where the plan stays stopped
 Optional speed feedback a += kp (v_plan(t) - v) (kp = 0: the model's own re-planning every 0.1 s closes the loop).
+mode mlp (default map): a 2 x 128 MLP (test/control_mlp.py, fitted on step-0 rows) maps the plan's next 10 steps of
+(a, kappa), the measured speed and, for a model with history, the applied accel, brake and steering (competition_status,
+left + deg) at t - 0.1 s and t to (accel, brake, steering); the stale-plan full brake stays.
 """
+import os
 import math
 
 import numpy as np
@@ -33,7 +37,7 @@ DEFAULTS = dict(dt=0.1, wheelbase_m=3.0, max_steer_deg=40.0, steer_gain=0.77, st
                 brake_map=[[0.0, -0.45], [0.06, -1.1], [0.15, -1.95], [0.25, -2.6], [0.38, -6.1], [0.52, -9.1], [1.0, -18.8]],
                 low_speed_mps=4.5, cruise_speed_mps=7.5,
                 max_accel_cmd=1.0, max_brake_cmd=1.0, speed_kp=0.0, stop_speed=0.3, hold_brake=0.5, hold_horizon_s=1.0,
-                plan_timeout_s=0.5)
+                plan_timeout_s=0.5, mode="map", mlp_weights="control_mlp.npz")
 
 
 class Plan:
@@ -60,6 +64,27 @@ def _inverse(table, a):
 class Controller:
     def __init__(self, **params):
         self.p = dict(DEFAULTS, **params)
+        self.mlp = None
+        if self.p["mode"] == "mlp":
+            path = self.p["mlp_weights"]
+            path = path if os.path.isabs(path) else os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+            self.mlp = {k: v for k, v in np.load(path).items()}
+
+    def _mlp(self, plan, t, v, applied):
+        """-> (accel, brake, steering deg left +); applied = (accel, brake, steer deg) at t - 0.1 s and at t."""
+        m = self.mlp
+        idx = np.minimum(np.arange(plan.step(t), plan.step(t) + 10), len(plan.a) - 1)
+        x = np.r_[plan.a[idx], plan.k[idx], v]
+        if bool(m["hist"]):
+            if applied is None:
+                raise ValueError("control mode mlp with history needs the applied values")
+            x = np.r_[x, applied]
+        h = (x - m["mu"]) / m["sd"]
+        for i in range(3):
+            h = m["w%d" % i] @ h + m["b%d" % i]
+            if i < 2:
+                h = h / (1.0 + np.exp(-h))                                          # SiLU
+        return 1.0 / (1.0 + math.exp(-h[0])), 1.0 / (1.0 + math.exp(-h[1])), 40.0 * math.tanh(h[2])
 
     def accel_table(self, v):
         p = self.p
@@ -77,11 +102,14 @@ class Controller:
         br = np.asarray(self.p["brake_map"], float).copy(); br[0, 1] = max(coast, br[1, 1] + 0.01)   # pedal 0 = this speed's coast
         return 0.0, min(_inverse(br, a), self.p["max_brake_cmd"])
 
-    def command(self, plan, t, v):
+    def command(self, plan, t, v, applied=None):
         """-> (accel, brake, steering, info). plan None or too old -> full brake, wheel straight."""
         p = self.p
         if plan is None or t - plan.t0 > p["plan_timeout_s"]:
             return 0.0, 1.0, 0.0, {"reason": "no fresh plan"}
+        if self.mlp is not None:
+            accel, brake, steer_deg = self._mlp(plan, t, v, applied)
+            return float(accel), float(brake), float(np.clip(steer_deg / p["max_steer_deg"], -1.0, 1.0)), {"mode": "mlp"}
         kappa = plan.k[plan.step(t + p["steer_lookahead_s"])]
         delta = math.atan(p["wheelbase_m"] * kappa / p["steer_gain"])
         steering = float(np.clip(delta / math.radians(p["max_steer_deg"]), -1.0, 1.0))
