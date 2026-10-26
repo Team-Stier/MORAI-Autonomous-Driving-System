@@ -452,6 +452,10 @@ tools/eval.sh <이름> --weather SUNNY:13              # 날씨·시각 고정
 - **체크포인트**: 10/7 공식 표(`checkpoints_20261007.csv`), 반경 3 m.
   - `src/map/checkpoints.csv`는 초기 15개 표라 section_annotator용으로 그대로 둔다.
 - **날씨·시각** (§2-7-2): 체크포인트 구간(지난 체크포인트 수)마다 (Sunny | Foggy 밀도 1) × (11 | 13 | 15시)를 (랩 시드, 구간)으로 뽑는다(`env_follow.combo`).
+  - 설정은 MORAI 공식 시간·날씨 변경 프로그램(`WeatherTimeChanger_Linux`, 9/28 배포, 2차 가이드 p.12)으로 한다. GUI만 있어서 bc-250의 별도 X 화면(Xephyr :7)에 띄우고 `tools/wtc.py`가 XTEST로 Connect, 날씨, 시각 버튼을 누른다. 버튼은 위젯 생성 순서로 찾는다.
+  - 누른 뒤 gRPC GetWeather/GetTime으로 값을 확인한다. 2 s 안에 맞지 않으면 같은 요청을 gRPC로 직접 보내고, 랩 기록에 `grpc`로 남긴다.
+  - 이 프로그램은 Weather.type과 SimulationTime.hour만 보낸다. API에 안개 밀도·거리 필드가 없으므로 Foggy의 밀도·거리는 시뮬레이터의 Foggy 기본값이다.
+  - Connect는 실행 중인 시뮬레이터에 Simulation.Start(실시간 모드)를 보낸다. 시뮬레이터는 'same map'으로 답한다.
   - Time Scale 1, Target FPS 60, Rendering High는 시뮬레이터 프리셋 값을 그대로 쓴다.
 - **체크포인트 복귀** (§3-2: 직전 체크포인트, +15 s): 운영요원은 세 경우를 주행 불능으로 판단한다. 관리자의 기준은 다음과 같다.
 
@@ -461,7 +465,11 @@ tools/eval.sh <이름> --weather SUNNY:13              # 날씨·시각 고정
   | 충돌로 진행 불가 | 충돌 뒤 15 s 동안 경로 진행 1 m 미만. 충돌이 없어도 60 s 동안 진행이 없으면 복귀 |
   | 체크포인트 순서 끊김 | 다음 체크포인트를 3 m 안에서 지나지 않고 경로상 10 m 넘게 지나감 |
 
-  - 복귀는 SetVelocity 0 → SetTransform(마지막으로 지난 체크포인트, CP1 전이면 START, z는 노면 + 0.4 m) → SetVelocity 0 순서다. 스택에는 알리지 않는다.
+  - 복귀는 MORAI 공식 체크포인트 Spawn 프로그램(`MORAI_Spawn_Linux`, 10/13 배포, 연습용)으로 한다. 번호(0 = START, 1–14)를 표준입력으로 넣는다. 스택에는 알리지 않는다.
+  - 프로그램 내용(PyInstaller, Python 3.8 바이트코드 확인)은 다음과 같다. 127.0.0.1:7789로 SetTransform 한 번만 보낸다. 좌표·z·yaw는 10/7 표 그대로이고 roll·pitch는 0이다. 속도는 건드리지 않는다.
+  - 실패하면 gRPC로 대신한다: SetVelocity 0 → SetTransform(z는 노면 + 0.4 m) → SetVelocity 0.
+- **공식 프로그램 받기**: `tools/fetch_official_tools.sh`. morai-docs 저장소 원본을 gh로 받아 저장소에 기록된 SHA-256(`assets/catalog.json`)과 대조한 뒤 bc-250 `~/morai-eval-official`에 둔다.
+  - 관리자는 시작할 때 bc-250의 해시를 다시 확인한다. `--direct`를 주면 두 프로그램 대신 gRPC를 쓴다.
   - 출발 직후와 복귀 뒤 10 s는 판정하지 않는다.
   - 60 s는 신호 대기나 양보 대기보다 길게 잡은 값이다. 신호 주기가 비공개라 실측으로 다시 정해야 한다.
 - **기록** (`~/morai-eval/runs/<이름>/`):

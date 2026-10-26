@@ -58,7 +58,7 @@ class FakeSim:
 def test_lap():
     scorer = os.environ.get("SCORER", os.path.join(HERE, *[".."] * 4, "Alpamayo-Cosmos", "tools", "scorer"))
     out = tempfile.mkdtemp()
-    a = argparse.Namespace(name="t", laps=1, seed=0, weather=None, scorer=scorer, out=out, port=0, no_view=True)
+    a = argparse.Namespace(name="t", laps=1, seed=0, weather=None, scorer=scorer, out=out, port=0, no_view=True, direct=True)
     wall, sent = Wall(), []
     em.time, em.msc = wall, lambda *args, **kw: "ok"
     em.make_scene = lambda seed: ("ev_test", em.shade_test(BOX), {})

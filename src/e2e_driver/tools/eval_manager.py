@@ -3,7 +3,8 @@
 
 The stack (run.sh, or two_pc.sh up) only drives. It is told nothing about laps or returns and notices them itself
 (e2e_driver route.TeleportDetector). This tool runs on the Mac next to two_pc.sh and controls MORAI on bc-250: MSC over
-ssh (scene loads, play, pause) and gRPC on 192.168.0.15:7789 (Ego state, checkpoint returns, weather and time).
+ssh (scene loads, play, pause), MORAI's official programs on bc-250 (checkpoint returns, weather and time) and gRPC on
+192.168.0.15:7789 (Ego state).
 
     tools/eval.sh NAME [--laps N] [--seed S] [--weather SUNNY:13]      after two_pc.sh up and two_pc.sh prep
 
@@ -13,15 +14,20 @@ paused, the weather is set and play starts. A lap ends at the finish (the 14 che
 waypoint), at the 15 min limit, or when the route's 5 % point is not passed within 1 min of the start (rules §3-2);
 the next lap's scene is loaded right away. Checkpoints: the official 10/7 table (checkpoints_20261007.csv, 3 m radius).
 Weather and time (rules §2-7-2): per checkpoint section (number of checkpoints passed), (Sunny | Foggy density 1) x
-(11 | 13 | 15 h) drawn from (lap seed, section) with env_follow.combo. Time Scale 1, Target FPS 60 and Rendering High
-stay as the simulator presets set them.
+(11 | 13 | 15 h) drawn from (lap seed, section) with env_follow.combo, set with MORAI's Time / Weather Changer
+(WeatherTimeChanger_Linux, 9/28; its buttons pressed by wtc.py) and read back over gRPC. The program sends Weather.type
+and SimulationTime.hour only: Foggy density and distance are the simulator's own Foggy values. Time Scale 1, Target
+FPS 60 and Rendering High stay as the simulator presets set them.
 Returns (rules §3-2: to the previous checkpoint, +15 s, when the operators judge the drive inoperable: all four wheels
 off the drivable area outside the shadow zone, stuck after a collision, or the checkpoint order broken). Here:
   - off road: all four wheels off the lanelets and the 2 m route corridor (tools/scorer's drive_inoperable test)
     outside the shadow zone for OFF_ROAD_S;
   - stuck: no metre of route progress for CRASH_STUCK_S after a collision, or for STUCK_S at all;
   - order broken: route progress SKIP_M past the next checkpoint without having come within 3 m of it.
-The Ego is stopped (SetVelocity 0) and placed (SetTransform) on the last checkpoint passed (START before CP1).
+The Ego goes to the last checkpoint passed (START before CP1) with MORAI's checkpoint Spawn program (MORAI_Spawn_Linux,
+10/13: point number on stdin; SetTransform to the 10/7 table pose, z and yaw as listed, speed left as it is).
+Official programs: tools/fetch_official_tools.sh (morai-docs originals, SHA-256 checked). --direct, or a failed
+official call, uses the same gRPC requests from here instead (recorded per lap as "grpc").
 Records (OUT/NAME/): laps.jsonl, one line per lap; lapK.rows.json.gz, the 20 Hz Ego states the lap was scored from by
 Alpamayo-Cosmos tools/scorer (collision, signal, speed and lane penalties; checkpoint, start and finish judgments).
 Clock: bc-250 runs below real time and gRPC gives only the host clock (GetTimestamp = host microseconds), so rows and
@@ -47,7 +53,7 @@ import grpc
 import numpy as np
 from google.protobuf import descriptor_pool, json_format, message_factory
 
-from env_follow import combo, send as send_weather
+from env_follow import combo, get as get_env, send as send_weather
 
 HERE = Path(__file__).resolve().parent
 MAP = HERE.parent.parent / "map"
@@ -65,6 +71,9 @@ OFF_ROAD_S = 2.0
 SKIP_M = 10.0
 GRACE_S = 10.0          # no failure checks right after a start or a return: the stack starts over from standstill
 HZ = 20.0
+OFFICIAL = "~/morai-eval-official"      # on bc-250 (fetch_official_tools.sh)
+SPAWN_SHA = "5ecc827f5fcbd1cbe00aabb5b01aa01e6d1f87293345d61c20ba5d139210a2f6"    # morai-docs assets/catalog.json
+WTC_SHA = "8c47f48a8d54b79b657920a661f582bd587c9f9065b6b55c9e911d42a0369609"
 
 
 class Sim:
@@ -206,8 +215,30 @@ class Manager:
         w, h = self.a.weather.split(":") if self.a.weather else combo(seed, section, 0)
         if self.a.weather and lap["weather"]:
             return
-        send_weather(f"{HOST}:7789", w, int(h))
-        lap["weather"].append([section, w, int(h), round(t, 2)])
+        how = "official"
+        if self.a.direct or not self.official_weather(w, int(h)):
+            send_weather(f"{HOST}:7789", w, int(h))
+            how = "grpc"
+        lap["weather"].append([section, w, int(h), round(t, 2), how])
+
+    def official_weather(self, w, h):
+        ssh(f"python3 ~/morai-eval-wtc.py set {w} {h}", 30)
+        for _ in range(20):                               # the program sets them from a worker thread
+            if get_env(f"{HOST}:7789") == (w, h):
+                return True
+            time.sleep(0.1)
+        print(f"official weather/time program did not set {w} {h}: gRPC instead", flush=True)
+        return False
+
+    def spawn(self, j):
+        if not self.a.direct:
+            out = ssh(f"printf '{j}\\nq\\n' | {OFFICIAL}/MORAI_Spawn_Linux", 60)
+            if f"SetVehiclePosition [{j}]" in out and "Error" not in out:
+                return "official"
+            print(f"official spawn {j} failed: gRPC instead: {out.strip()[-200:]}", flush=True)
+        c = self.cps[j]
+        self.sim.put(c[0], c[1], c[2] + 0.4, c[3])        # transform z = road + ~0.4 m (CP13 spawn: 28.68 vs 28.29)
+        return "grpc"
 
     def ego(self):
         for k in range(60):                               # a simulator hiccup: retry for 30 s, then give up
@@ -279,9 +310,8 @@ class Manager:
             elif passed < 14 and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + SKIP_M:
                 why = f"missed_cp{passed + 1}"
             if end is None and why and t_move is not None and tau >= grace:
-                c = self.cps[passed]
-                self.sim.put(c[0], c[1], c[2] + 0.4, c[3])    # transform z = road + ~0.4 m (CP13 spawn: 28.68 vs 28.29)
-                lap["returns"].append(dict(t=round(lt, 2), to=passed, reason=why, s=round(s, 1)))
+                how = self.spawn(passed)
+                lap["returns"].append(dict(t=round(lt, 2), to=passed, reason=why, s=round(s, 1), how=how))
                 tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
                 grace, clock.last = tau + GRACE_S, None
             self.status = (f"lap {k} {name}  t {lt:6.1f} s (wall {t - w_play:6.1f})  rho {clock.rho:.2f}\n"
@@ -333,12 +363,21 @@ def serve(mgr, port):
     threading.Thread(target=ThreadingHTTPServer(("127.0.0.1", port), Page).serve_forever, daemon=True).start()
 
 
-def deploy(view):
+def deploy(a):
+    if not a.direct:
+        ok = ssh(f"cd {OFFICIAL} && sha256sum -c --quiet - <<'E' && echo verified\n{SPAWN_SHA}  MORAI_Spawn_Linux\n"
+                 f"{WTC_SHA}  WeatherTimeChanger_Linux\nE\n")
+        if "verified" not in ok:
+            sys.exit(f"official programs missing or changed on {BC}:{OFFICIAL}: run tools/fetch_official_tools.sh (or --direct)")
     for src, dst in ((HERE / "scenario_variants.py", "morai-eval-scenario-variants.py"),
                      (MAP / "2026_molit_comp_global_path.txt", "morai-eval-global-path.txt"),
                      (HERE / "viewer.py", "morai-eval-viewer.py")):
         subprocess.run(["scp", "-q", str(src), f"{BC}:{dst}"], check=True)
-    if view:                                              # the Xwayland auth file is named anew each session
+    subprocess.run(["scp", "-q", str(HERE / "wtc.py"), f"{BC}:morai-eval-wtc.py"], check=True)
+    if not a.direct:                                      # a fresh program connected to the running simulator
+        ssh("python3 ~/morai-eval-wtc.py down")
+        print(ssh(f"python3 ~/morai-eval-wtc.py up {OFFICIAL}/WeatherTimeChanger_Linux", 60).strip(), flush=True)
+    if not a.no_view:                                              # the Xwayland auth file is named anew each session
         ssh("kill -0 $(cat ~/morai-eval-viewer.pid 2>/dev/null) 2>/dev/null || { DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/"
             f".mutter-Xwaylandauth.* | head -1) setsid nohup python3 ~/morai-eval-viewer.py {HOST} 8090 5 > ~/morai-eval-viewer.log"
             " 2>&1 < /dev/null & echo $! > ~/morai-eval-viewer.pid; }")
@@ -354,9 +393,10 @@ def main():
     ap.add_argument("--out", default="~/morai-eval/runs")
     ap.add_argument("--port", type=int, default=8091)
     ap.add_argument("--no-view", action="store_true")
+    ap.add_argument("--direct", action="store_true", help="returns and weather over gRPC instead of the official programs")
     a = ap.parse_args()
     mgr = Manager(a)
-    deploy(not a.no_view)
+    deploy(a)
     serve(mgr, a.port)
     print(f"viewer: http://localhost:{a.port}  records: {mgr.out}", flush=True)
     k = 0
@@ -366,6 +406,8 @@ def main():
             k += 1
     finally:
         msc("pause")
+        if not a.direct:
+            ssh("python3 ~/morai-eval-wtc.py down")
         if not a.no_view:
             ssh("kill $(cat ~/morai-eval-viewer.pid) 2>/dev/null; true")
 

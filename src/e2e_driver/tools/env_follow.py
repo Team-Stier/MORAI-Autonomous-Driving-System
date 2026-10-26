@@ -38,6 +38,23 @@ def send(host, weather, hour):
     call("SetWeather", b"\x08" + varint(WEATHER[weather])); call("SetTime", b"\x08" + varint(int(hour)))
 
 
+def get(host):
+    """-> (weather name, hour) from Environment GetWeather / GetTime (Weather.type and SimulationTime.hour, field 1)."""
+    ch = grpc.insecure_channel(host)
+    call = lambda m: ch.unary_unary("/morai_sim_api.environment.Environment/" + m, request_serializer=lambda x: x,
+                                    response_deserializer=lambda x: x)(b"", timeout=10)
+
+    def field1(b):                                          # proto3 omits a 0 value
+        n = shift = 0
+        if b[:1] == b"\x08":
+            for c in b[1:]:
+                n |= (c & 0x7F) << shift; shift += 7
+                if c < 0x80:
+                    break
+        return n
+    return {v: k for k, v in WEATHER.items()}.get(field1(call("GetWeather")), "?"), field1(call("GetTime"))
+
+
 def combo(seed, section, visit):
     return random.Random("%s-%d-%d" % (seed, section, visit)).choice(COMBOS)
 
