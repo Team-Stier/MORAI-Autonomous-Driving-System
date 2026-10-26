@@ -2,6 +2,7 @@
 starts it (config/e2e_runtime.env), or by hand:
 
   <venv>/bin/python model_server.py --backend hf --ckpt <student dir>
+  <venv>/bin/python model_server.py --backend engine --ckpt <QAD deliver dir>       (RTX 5080 NVFP4/FP8)
   ... --backend fake [--preprocess-config <any checkpoint/release dir with config.json>]
 
 The training code it needs is the pinned copy in server/vendor (tools/vendor_sync.sh, test/test_vendor.py);
@@ -31,7 +32,7 @@ def make_backend(a):
     import backends
     if a.backend == "fake":
         return backends.FakeBackend(v_target=a.fake_speed, kappa=a.fake_kappa, preprocess_config=a.preprocess_config, vlm=a.vlm)
-    return backends.HFBackend(a.ckpt, vlm=a.vlm, model_class=a.model_class, attn=a.attn, dtype=a.dtype, num_steps=a.steps, seed=a.seed)
+    return backends.HFBackend(a.ckpt, vlm=a.vlm, model_class="engine" if a.backend == "engine" else a.model_class, attn=a.attn, dtype=a.dtype, num_steps=a.steps, seed=a.seed)
 
 
 def serve(a, backend):
@@ -98,8 +99,8 @@ def serve(a, backend):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--backend", choices=["hf", "fake"], default="hf")
-    ap.add_argument("--ckpt", help="hf: student (or teacher) checkpoint dir")
+    ap.add_argument("--backend", choices=["hf", "engine", "fake"], default="hf")
+    ap.add_argument("--ckpt", help="hf: student (or teacher) checkpoint dir; engine: QAD deliver dir (final/ + quant_manifest.json)")
     ap.add_argument("--model-class", choices=["student", "teacher"], default="student")
     ap.add_argument("--vlm", default="Qwen/Qwen3-VL-4B-Instruct", help="VLM id the checkpoint was built on (8B for the teacher)")
     ap.add_argument("--attn", default="sdpa"); ap.add_argument("--dtype", default="bfloat16")
@@ -111,7 +112,7 @@ def main():
     ap.add_argument("--dump")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    if a.backend == "hf" and not a.ckpt: ap.error("--backend hf needs --ckpt")
+    if a.backend in ("hf", "engine") and not a.ckpt: ap.error("--backend %s needs --ckpt" % a.backend)
     backend = make_backend(a)
     serve(a, backend)
 

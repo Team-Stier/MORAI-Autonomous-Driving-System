@@ -8,7 +8,8 @@ signals.
         matching, no CoC). The (a, kappa) it integrates are read off model.diffusion.sample's return value.
   fake  no model: a speed-hold law on the measured history (wiring and latency tests); preprocess=True still builds the
         full model batch with the processor, so its CPU time is in the measurement.
-A later engine backend (NVFP4) only has to implement the same prepare() / run().
+  engine  a delivered QAD student (train/scripts/qad_export.py deliver dir) with real NVFP4/FP8 GEMMs on the 5080
+        (engine.py, nvfp4.py); the same inference as hf otherwise. A new delivery = a new --ckpt directory.
 """
 import time
 
@@ -51,7 +52,10 @@ class HFBackend:
         from morai_vla.model import TeacherVLA
         from morai_vla.student import StudentVLA
         t = time.perf_counter()
-        if model_class == "student":
+        if model_class == "engine":
+            import engine
+            self.model = engine.load(ckpt, vlm=vlm, device=device, attn=attn)
+        elif model_class == "student":
             self.model = StudentVLA.build(init=ckpt, vlm_name_or_path=vlm, attn_implementation=attn, dtype=dtype, device_map={"": device})
         else:
             self.model = TeacherVLA.build(ckpt, vlm_name_or_path=vlm, attn_implementation=attn, dtype=dtype, device_map={"": device})
