@@ -160,18 +160,22 @@ def make(d, clock, out, fps=30.0, telemetry=None, offset=0.0):
     ticks = np.arange(tau[0], tau[-1], 1.0 / fps)
     pick = np.searchsorted(tau, ticks, side="right") - 1          # newest frame at or before each tick
     tel = load_telemetry(telemetry, c, offset) if telemetry else {}
-    enc = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-                            "-r", "%g" % fps, "-i", "-", "-c:v", "libx264", "-crf", "23", "-preset", "veryfast",
+    import os
+    size = f"{W}x{H}" if tel else f"{SIDE}x{SIDE}"
+    enc = subprocess.Popen(["ffmpeg", "-y", "-loglevel", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", size,
+                            "-r", "%g" % fps, "-i", "-", "-c:v", "libx264", "-crf", os.environ.get("LAP_CRF", "23"), "-preset", "veryfast",
                             "-pix_fmt", "yuv420p", str(out)], stdin=subprocess.PIPE)
     view, last_name = None, None
     for tick, n in zip(ticks, names[pick]):
         if n != last_name:
             im = Image.open(d / n).convert("RGB")
             view, last_name = im.resize((round(im.width * SIDE / im.height), SIDE)), n
-        canvas = Image.new("RGB", (W, H), (18, 18, 22))
-        canvas.paste(view.crop((0, 0, min(view.width, SIDE), SIDE)), (0, 0))
         if tel:
+            canvas = Image.new("RGB", (W, H), (18, 18, 22))
+            canvas.paste(view.crop((0, 0, min(view.width, SIDE), SIDE)), (0, 0))
             dashboard(canvas, tel, float(tick), float(ticks[0]))
+        else:                                                  # no telemetry: the simulator view alone, SIDE x SIDE
+            canvas = view.crop((0, 0, SIDE, SIDE))
         enc.stdin.write(canvas.tobytes())
     enc.stdin.close()
     if enc.wait():
