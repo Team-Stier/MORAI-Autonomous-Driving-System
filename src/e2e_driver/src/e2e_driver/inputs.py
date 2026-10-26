@@ -5,6 +5,10 @@ Per request time t0 (the clock of the stamps: ROS time live, the restored sim cl
            the buffered frames, each re-encoded as step 0 did (cv2 decode -> INTER_AREA resize -> JPEG q92); time text
            offsets = frame time - t0. Live, every frame is at or before t0; training rows also used frames up to 0.05 s
            after t0 (nearest to the target), so the newest offset here is always <= 0.
+           Live (reuse=True), the history slots t0 - 0.1k take the frame an earlier step used as its current (t0) frame,
+           the one closest to the target within REUSE_TOL, so its pixels (and the server's ViT output for them) repeat
+           and each step brings one new frame per camera; a slot with no such frame (start, teleport, skipped steps)
+           takes the nearest buffered frame as above.
   LiDAR    the same targets over the buffered scans (vlp16_bev per-scan BEV, stamped with the last packet): 4 scans,
            paired (k1 <- k0), (k3 <- k2) by the server's lidar_bev.pack_bev; times of k1 and k3.
   ego      competition_status signed speed and yaw (unwrapped) linearly interpolated at t0 - 1.5 ... t0 (16 points);
@@ -23,6 +27,10 @@ import numpy as np
 
 from e2e_driver.train_copy import DT, MAX_FRAME_GAP, MAX_SCAN_GAP, N_FRAMES, N_HIST, frame_targets, select_distinct
 
+# s: an earlier current frame this close to a history target is reused. The targets are 0.1 s apart, so a reused frame is
+# as far from its slot's target as it was from its own t0, where MAX_FRAME_GAP already applies (30 Hz cameras 40 ms late
+# give 67 ms every step: a 50 ms window would re-pick, and re-encode, a newer frame for every slot)
+REUSE_TOL = MAX_FRAME_GAP
 CAMERAS = ("front", "left", "right", "camera_7")      # model order: Front, Front left, Front right, Front upward camera
 SIZES = {"front": (448, 256), "left": (352, 256), "right": (352, 256), "camera_7": (256, 192)}
 
@@ -37,10 +45,12 @@ def reencode(data, size):
 
 
 class Inputs:
-    def __init__(self, horizon=2.5, prefetch=False):
+    def __init__(self, horizon=2.5, prefetch=False, reuse=True):
         """prefetch: re-encode every arriving camera frame in a worker thread per camera (cv2 releases the GIL), so a
-        request only reads finished step-0 JPEGs; a frame the worker has not reached yet is encoded on the spot."""
-        self.horizon = horizon
+        request only reads finished step-0 JPEGs; a frame the worker has not reached yet is encoded on the spot.
+        reuse: history slots from the earlier steps' current frames (live); False: every slot as the training sample."""
+        self.horizon, self.reuse = horizon, reuse
+        self.used = {c: deque() for c in CAMERAS}       # (t, step-0 JPEG) of the frame each request used as current
         self.cams = {c: deque() for c in CAMERAS}        # (t, raw JPEG)
         self.cache = {}                                    # (camera, t) -> step-0 JPEG
         self.scans = deque()                               # (t, height, density, pose (3,), odom epoch)
@@ -68,7 +78,7 @@ class Inputs:
     def reset(self):
         """drop everything buffered (a teleport): requests wait until the horizon has filled again."""
         with self.lock:
-            for q in self.cams.values():
+            for q in list(self.cams.values()) + list(self.used.values()):
                 q.clear()
             self.scans.clear(); self.ego.clear(); self._yaw = None
         with self.cache_lock:
@@ -121,22 +131,43 @@ class Inputs:
         lo = min(q[0][0] for q in cams.values() if q) if any(cams.values()) else t0
         with self.cache_lock:
             self.cache = {k: v for k, v in self.cache.items() if k[1] >= lo}
-        jpegs, times, newest = [], [], []
+        jpegs, times, newest, reused = [], [], [], 0
         for c in CAMERAS:
             if len(cams[c]) < N_FRAMES:
                 return None, ["camera %s: %d frames" % (c, len(cams[c]))]
             tau = np.array([t for t, _ in cams[c]])
             k = np.maximum(select_distinct(tau, tgt), 0)
-            if np.abs(tau[k] - tgt).max() > MAX_FRAME_GAP:
-                problems.append("camera %s: pick %.3f s from its target" % (c, float(np.abs(tau[k] - tgt).max())))
-            out = []
-            for j in k:
-                jpeg = self._encode(c, float(tau[j]), cams[c][j][1])
-                if jpeg is None:
-                    return None, ["camera %s: undecodable JPEG" % c]
-                out.append(jpeg)
-            jpegs.append(out); times.append(tau[k] - t0); newest.append(float(tau[k[-1]]))
-        req = dict(t0=float(t0), camera_jpegs=jpegs, camera_times=np.stack(times), camera_newest=newest, nav_text=nav_text)
+            tp, out = [float(tau[j]) for j in k], [None] * N_FRAMES
+            if self.reuse:
+                with self.lock:
+                    used = list(self.used[c])
+                newer = tp[-1]
+                for i in range(N_FRAMES - 2, -1, -1):           # newest history slot first, each older than the next
+                    cand = [(abs(t - tgt[i]), t, jpg) for t, jpg in used if t < newer and abs(t - tgt[i]) <= REUSE_TOL]
+                    if cand:
+                        _, tp[i], out[i] = min(cand, key=lambda x: x[:2]); reused += 1
+                    elif tp[i] >= newer:                           # the raw pick is not older than a reused newer slot
+                        older = np.nonzero(tau < newer)[0]
+                        if not len(older):
+                            return None, ["camera %s: no frame before %.3f" % (c, newer)]
+                        k[i] = older[np.argmin(np.abs(tau[older] - tgt[i]))]; tp[i] = float(tau[k[i]])
+                    newer = tp[i]
+            tp = np.array(tp)
+            if np.abs(tp - tgt).max() > MAX_FRAME_GAP:
+                problems.append("camera %s: pick %.3f s from its target" % (c, float(np.abs(tp - tgt).max())))
+            for i, j in enumerate(k):
+                if out[i] is None:
+                    out[i] = self._encode(c, float(tau[j]), cams[c][j][1])
+                    if out[i] is None:
+                        return None, ["camera %s: undecodable JPEG" % c]
+            if self.reuse:
+                with self.lock:
+                    u = self.used[c]
+                    if not u or u[-1][0] < tp[-1]:
+                        u.append((float(tp[-1]), out[-1])); self._trim(u, t0)
+            jpegs.append(out); times.append(tp - t0); newest.append(float(tp[-1]))
+        req = dict(t0=float(t0), camera_jpegs=jpegs, camera_times=np.stack(times), camera_newest=newest, nav_text=nav_text,
+                   pick=dict(reused=reused, err_ms=np.round(1e3 * (np.stack(times) - (tgt - t0)), 1).tolist()))
         if lidar:
             if len(scans) < N_FRAMES:
                 return None, ["lidar: %d scans" % len(scans)]

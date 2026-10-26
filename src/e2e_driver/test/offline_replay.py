@@ -66,7 +66,7 @@ def main():
     clk, z = Clock(a.ego), dict(np.load(a.ego))           # dict: NpzFile re-reads an array on every z[key]
     rows = sorted(int(x) for x in a.rows.split(","))
     route = Route(a.route); tracker, odo = RouteTracker(route), Odometer()
-    inp, bev = Inputs(horizon=3.0), BevBuilder()
+    inp, bev = Inputs(horizon=3.0, reuse=False), BevBuilder()     # every slot as the training sample picks it
     imu_r = a.r_source == "imu"
     trend = float(a.r_source[5:]) if a.r_source.startswith("trend") else 0.0
     v_trk, r_trk = SignalTrack(), (SignalTrack() if imu_r else GridYawRate(trend_window=trend))

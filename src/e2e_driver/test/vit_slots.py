@@ -4,7 +4,8 @@ appears after the warm-up (one slot pattern per encoder), that the action equals
 noise (ViT outputs and (a, kappa) max |diff|), and prints the step time by the number of new images.
 
   winpc (cwd src/e2e_driver/server): HF_HUB_OFFLINE=1 MORAI_VLA_PYLIB=~/morai-student/pylib \
-      ~/morai-eval/venv-engine/bin/python ../test/vit_slots.py <deliver dir> <dir of model_server --dump req_*.bin> [n]
+      ~/morai-eval/venv-engine/bin/python ../test/vit_slots.py <deliver dir> <dir of model_server --dump req_*.bin> [n] [live]
+  live: no evictions, the requests in order as the server got them (the cache as it ran live)
 """
 import glob
 import os
@@ -26,13 +27,14 @@ from e2e_driver import wire  # noqa: E402
 def main():
     deliver, reqdir = sys.argv[1:3]
     n = int(sys.argv[3]) if len(sys.argv) > 3 else 40
+    live = "live" in sys.argv[4:]
     be = EngineBackend(deliver, seed=0, warmup=sorted(glob.glob(str(HERE.parent / "assets/warmup/req_*.bin")))[:2])
     print("warm-up", be.warmup_timing, flush=True)
     fe, rng, rows = be.fast, random.Random(0), []
     graphs = set(fe.vit_graphs)
     for i, f in enumerate(sorted(glob.glob(f"{reqdir}/req_*.bin"))[:n]):
         sample = build_sample(wire.unpack(open(f, "rb").read()), key=f"slots/{i}")
-        for c in rng.sample(sorted(fe.vit_cache, key=str), rng.randint(0, len(fe.vit_cache))):
+        for c in [] if live else rng.sample(sorted(fe.vit_cache, key=str), rng.randint(0, len(fe.vit_cache))):
             del fe.vit_cache[c]
         out = be.run(sample, be.prepare(sample))
         be.n -= 1                                                     # same noise again
@@ -41,6 +43,8 @@ def main():
         ref = be.run(sample, be.prepare(sample))
         vit_err = max(max((e - fe.vit_cache[c][0]).abs().max().item(), *[(d - d2).abs().max().item() for d, d2 in zip(ds, fe.vit_cache[c][1])])
                       for c, (e, ds) in cached.items())
+        if live:                                                      # back to the live cache for the next request
+            fe.vit_cache = cached
         err = max(np.abs(out["accel"] - ref["accel"]).max(), np.abs(out["kappa"] - ref["kappa"]).max() * 100)
         t = out["timing"]
         rows.append((t["new_images"], t["vit_ms"], t["model_ms"], err, vit_err))

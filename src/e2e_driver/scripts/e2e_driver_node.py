@@ -154,7 +154,7 @@ class Node:
             latency_ms=round(1e3 * (t_pub - meta["camera_newest"][0]), 1),
             camera_age_ms=[round(1e3 * (meta["t0"] - x), 1) for x in meta["camera_newest"]],
             assemble_ms=round(1e3 * (meta["w_req"] - meta["w0"]), 1), server_ms=round(1e3 * (time.perf_counter() - meta["w_req"]), 1),
-            server=resp.get("timing", {}), inflight=meta["inflight"], skipped=self.skipped, loc_rejected=self.guard.rejected, v=round(self.v, 3),
+            server=resp.get("timing", {}), pick=meta["pick"], inflight=meta["inflight"], skipped=self.skipped, loc_rejected=self.guard.rejected, v=round(self.v, 3),
             v0=round(float(resp["v0"]), 3), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info))))
 
     def infer_loop(self):
@@ -185,9 +185,10 @@ class Node:
                     self.connect()
                 rid, self.next_id = self.next_id, self.next_id + 1
                 req["id"] = rid
+                pick = req.pop("pick", None)                    # frame selection stats: debug only, not sent
                 if self.reset_vit:
                     req["reset"], self.reset_vit = True, False
-                self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"],
+                self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"], pick=pick,
                                          w0=w0, w_req=time.perf_counter(), inflight=len(self.pending))
                 wire.send(self.sock, req)
             except Exception as e:
