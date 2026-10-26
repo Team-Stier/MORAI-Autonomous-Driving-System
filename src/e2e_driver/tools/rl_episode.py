@@ -198,7 +198,6 @@ def main():
     em.BC, em.GRPC, em.HOST = a.host, a.grpc, a.grpc.rsplit(":", 1)[0]
     em.LAUNCHER, em.SCEN = a.launcher, a.launcher + "/SaveFile/Scenario/R_KR_PR_K-city_2025"
     a.direct = a.direct or not a.grpc.endswith(":7789")   # the official programs only talk to 7789
-    a.no_view = True
     mgr = Episodes(a)
     deploy(a)
     em.serve(mgr, a.port)

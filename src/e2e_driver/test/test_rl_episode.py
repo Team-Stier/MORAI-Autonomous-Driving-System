@@ -52,7 +52,7 @@ def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S):
     scorer = os.environ.get("SCORER", os.path.join(HERE, *[".."] * 4, "Alpamayo-Cosmos", "tools", "scorer"))
     out = tempfile.mkdtemp()
     a = argparse.Namespace(name="t", start_cp=9, end_cp=12, past_m=100.0, seed=0, limit_s=limit_s, v_ref=80 / 3.6,
-                           fail_s=100.0, weather=None, scorer=scorer, out=out, direct=True, loc_restart="true", no_view=True)
+                           fail_s=100.0, weather=None, scorer=scorer, out=out, direct=True, loc_restart="true")
     wall, order = Wall(), []
 
     def msc(action, *args, **kw):
