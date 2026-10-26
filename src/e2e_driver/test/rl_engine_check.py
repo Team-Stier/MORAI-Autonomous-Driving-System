@@ -219,7 +219,9 @@ def main():
         a1, a0_after = run(1), run(0)
         lora, scale, version = engine.read_lora(watch.parent / "v00001.safetensors")
         fresh_equal = []
-        for n in names[::max(1, len(names) // 6)]:            # merged = load() of a merged delivery (F4Linear/F8Linear init)
+        kind = lambda n: type(fe.parts[1].get_submodule(n)).__name__
+        pick = [n for t in ("F4Linear", "F8Linear", "Linear") for n in [x for x in names if kind(x) == t][::40][:4]]
+        for n in pick:                                        # merged = load() of a merged delivery (F4Linear/F8Linear init)
             A, B = lora[n]
             w = (be.base[n].cuda().float() + scale * (B.cuda().float() @ A.cuda().float())).to(torch.bfloat16)
             mod, q = fe.parts[1].get_submodule(n), man.get(n)
