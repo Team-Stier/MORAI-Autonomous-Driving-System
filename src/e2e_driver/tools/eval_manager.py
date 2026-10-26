@@ -22,7 +22,7 @@ Returns (rules §3-2: to the previous checkpoint, +15 s, when the operators judg
 off the drivable area outside the shadow zone, stuck after a collision, or the checkpoint order broken). Here:
   - off road: all four wheels off the lanelets and the 2 m route corridor (tools/scorer's drive_inoperable test)
     outside the shadow zone for OFF_ROAD_S;
-  - stuck: no metre of route progress for CRASH_STUCK_S after a collision, or for STUCK_S at all;
+  - stuck: less than PROGRESS_M of route progress for CRASH_STUCK_S after a collision, or for STUCK_S at all;
   - order broken: route progress SKIP_M past the next checkpoint without having come within 3 m of it.
 The Ego goes to the last checkpoint passed (START before CP1) with MORAI's checkpoint Spawn program (MORAI_Spawn_Linux,
 10/13: point number on stdin; SetTransform to the 10/7 table pose, z and yaw as listed, speed left as it is).
@@ -42,6 +42,7 @@ import gzip
 import json
 import math
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -67,6 +68,7 @@ CP_R, LIMIT_S, START_S, START_FRAC, RETURN_S = 3.0, 900.0, 60.0, 0.05, 15.0    #
 FINISH_M = 1.0          # route progress within this of the last waypoint = finished (tools/scorer time.finish_m)
 STUCK_S = 60.0          # shortcut: longer than any red light or give-way wait seen; signal cycles are unpublished
 CRASH_STUCK_S = 15.0    # "cannot go on after a collision"
+PROGRESS_M = 5.0        # route progress that resets the stuck timers: a car pushing a small box creeps ~0.1 m/s (10/26)
 OFF_ROAD_S = 2.0
 SKIP_M = 10.0
 GRACE_S = 10.0          # no failure checks right after a start or a return: the stack starts over from standstill
@@ -260,66 +262,74 @@ class Manager:
         lap = dict(lap=k, scene=name, seed=seed, weather=[], checkpoints=[], returns=[], scene_meta=meta)
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         self.weather(lap, seed, 0, 0.0)
-        msc("play")
+        played = threading.Event()                      # MSC confirms play 1-15 s late (10/26): record from the paused START on
+        threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
         tr, clock = self.track, self.clock
         tr.i, clock.last, passed = 0, None, 0
-        t_play, w_play, t_move, x0 = clock.tau, time.time(), None, None
+        t_play, w_play, t_move, x0 = None, time.time(), None, None
         best_s = prog_s = 0.0
-        prog_t, crash_t, off_t, grace = t_play, -math.inf, None, t_play + GRACE_S
+        prog_t, crash_t, off_t, grace = math.inf, -math.inf, None, math.inf
         end = t_end = None
-        while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
-            t = time.time()
-            e = self.ego()
-            tau = clock.step(t, e["x"], e["y"], e["v"])
-            s, lat = tr.update(e["x"], e["y"])
-            shade = shaded(e["x"], e["y"])
-            ns = int(tau * 1e9)
-            rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
-            rows["collision"].append((ns, [(h, e["x"], e["y"]) for h in e["hit"]]))
-            rows["gps"].append((ns, shade))                  # the scorer's lane-exempt zone = the GPS shadow
-            if e["tl"]:
-                rows["signal"].append((ns, (e["tl"], e["color"])))
-            x0 = x0 or (e["x"], e["y"])
-            if t_move is None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
-                t_move = tau
-            lt = tau - (t_move if t_move is not None else tau)
-            best_s = max(best_s, s) if lat < 15.0 else best_s
-            if passed < 14 and math.hypot(e["x"] - self.cps[passed + 1, 0], e["y"] - self.cps[passed + 1, 1]) <= CP_R:
-                passed += 1
-                lap["checkpoints"].append([passed, round(lt, 2)])
-                self.weather(lap, seed, passed, lt)
-            if end is None:
-                if passed == 14 and s >= tr.s[-1] - FINISH_M:
-                    end = "finish"
-                elif lt > LIMIT_S:
-                    end = "time_limit"
-                elif tau - t_play > START_S and best_s < START_FRAC * tr.s[-1]:
-                    end = "start_fail"
-                t_end, lap_s = tau, lt
-            # drive failures -> return to the last checkpoint passed
-            if e["hit"]:
-                crash_t = tau
-            if s > prog_s + 1.0:
-                prog_s, prog_t = s, tau
-            off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
-            off_t = (off_t if off_t is not None else tau) if off else None
-            why = None
-            if off_t is not None and tau - off_t >= OFF_ROAD_S:
-                why = "off_road"
-            elif tau - prog_t >= STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= CRASH_STUCK_S):
-                why = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
-            elif passed < 14 and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + SKIP_M:
-                why = f"missed_cp{passed + 1}"
-            if end is None and why and t_move is not None and tau >= grace:
-                how = self.spawn(passed)
-                lap["returns"].append(dict(t=round(lt, 2), to=passed, reason=why, s=round(s, 1), how=how))
-                tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
-                grace, clock.last = tau + GRACE_S, None
-            self.status = (f"lap {k} {name}  t {lt:6.1f} s (wall {t - w_play:6.1f})  rho {clock.rho:.2f}\n"
-                           f"CP {passed}/14  s {s:7.1f} m  lat {lat:4.1f} m  v {e['v'] * 3.6:5.1f} km/h  {'shadow ' if shade else ''}"
-                           f"{'/'.join(map(str, lap['weather'][-1][1:3])) if lap['weather'] else ''}\n"
-                           f"returns {len(lap['returns'])}" + (f"  last: {lap['returns'][-1]}" if lap["returns"] else ""))
-            time.sleep(max(0.0, 1.0 / HZ - (time.time() - t)))
+        lt = lap_s = 0.0
+        interrupted = False
+        try:
+            while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
+                t = time.time()
+                e = self.ego()
+                tau = clock.step(t, e["x"], e["y"], e["v"])
+                s, lat = tr.update(e["x"], e["y"])
+                shade = shaded(e["x"], e["y"])
+                ns = int(tau * 1e9)
+                rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
+                rows["collision"].append((ns, [(h, e["x"], e["y"]) for h in e["hit"]]))
+                rows["gps"].append((ns, shade))                  # the scorer's lane-exempt zone = the GPS shadow
+                if e["tl"]:
+                    rows["signal"].append((ns, (e["tl"], e["color"])))
+                x0 = x0 or (e["x"], e["y"])
+                if t_move is None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
+                    t_move = tau
+                if t_play is None and (played.is_set() or t_move is not None):
+                    t_play, prog_t, grace = tau, tau, tau + GRACE_S
+                lt = tau - (t_move if t_move is not None else tau)
+                best_s = max(best_s, s) if lat < 15.0 else best_s
+                if passed < 14 and math.hypot(e["x"] - self.cps[passed + 1, 0], e["y"] - self.cps[passed + 1, 1]) <= CP_R:
+                    passed += 1
+                    lap["checkpoints"].append([passed, round(lt, 2)])
+                    self.weather(lap, seed, passed, lt)
+                if end is None:
+                    if passed == 14 and s >= tr.s[-1] - FINISH_M:
+                        end = "finish"
+                    elif lt > LIMIT_S:
+                        end = "time_limit"
+                    elif t_play is not None and tau - t_play > START_S and best_s < START_FRAC * tr.s[-1]:
+                        end = "start_fail"
+                    t_end, lap_s = tau, lt
+                # drive failures -> return to the last checkpoint passed
+                if e["hit"]:
+                    crash_t = tau
+                if s > prog_s + PROGRESS_M:
+                    prog_s, prog_t = s, tau
+                off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
+                off_t = (off_t if off_t is not None else tau) if off else None
+                why = None
+                if off_t is not None and tau - off_t >= OFF_ROAD_S:
+                    why = "off_road"
+                elif tau - prog_t >= STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= CRASH_STUCK_S):
+                    why = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
+                elif passed < 14 and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + SKIP_M:
+                    why = f"missed_cp{passed + 1}"
+                if end is None and why and t_move is not None and tau >= grace:
+                    how = self.spawn(passed)
+                    lap["returns"].append(dict(t=round(lt, 2), to=passed, reason=why, s=round(s, 1), how=how))
+                    tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
+                    grace, clock.last = tau + GRACE_S, None
+                self.status = (f"lap {k} {name}  t {lt:6.1f} s (wall {t - w_play:6.1f})  rho {clock.rho:.2f}\n"
+                               f"CP {passed}/14  s {s:7.1f} m  lat {lat:4.1f} m  v {e['v'] * 3.6:5.1f} km/h  {'shadow ' if shade else ''}"
+                               f"{'/'.join(map(str, lap['weather'][-1][1:3])) if lap['weather'] else ''}\n"
+                               f"returns {len(lap['returns'])}" + (f"  last: {lap['returns'][-1]}" if lap["returns"] else ""))
+                time.sleep(max(0.0, 1.0 / HZ - (time.time() - t)))
+        except KeyboardInterrupt:                         # Ctrl-C: keep the lap so far, then stop
+            interrupted, lap_s, end = True, (lap_s if end else lt), end or "interrupted"
         msc("pause")
         lap.update(end=end, lap_s=round(lap_s, 2), wall_s=round(time.time() - w_play, 1), rho_end=round(clock.rho, 3))
         lap["scorer"] = self.judge(rows)
@@ -333,6 +343,8 @@ class Manager:
         self.history.append(f"lap {k} {name}: {end} {lap['lap_s']:.1f} s + penalties {sc.get('penalty_s', 0):.0f} "
                             f"+ returns {lap['return_penalty_s']:.0f} = {lap['total_s']:.1f} s  {sc.get('counts', {})}")
         print(self.history[-1], flush=True)
+        if interrupted:
+            raise KeyboardInterrupt
 
     def judge(self, rows):
         try:
@@ -406,6 +418,7 @@ def main():
             mgr.run_lap(k)
             k += 1
     finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)     # a second Ctrl-C must not cut the clean-up short
         msc("pause")
         if not a.direct:
             ssh("python3 ~/morai-eval-wtc.py down")
