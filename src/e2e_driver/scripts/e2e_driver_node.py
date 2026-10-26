@@ -168,7 +168,8 @@ class Node:
             camera_age_ms=[round(1e3 * (meta["t0"] - x), 1) for x in meta["camera_newest"]],
             assemble_ms=round(1e3 * (meta["w_req"] - meta["w0"]), 1), server_ms=round(1e3 * (time.perf_counter() - meta["w_req"]), 1),
             server=resp.get("timing", {}), pick=meta["pick"], inflight=meta["inflight"], skipped=self.skipped, loc_rejected=self.guard.rejected, v=round(self.v, 3),
-            v0=round(float(resp["v0"]), 3), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info))))
+            v0=round(float(resp["v0"]), 3), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info,
+            plan_a=[round(float(x), 3) for x in plan.a[:30]], plan_k=[round(float(x), 5) for x in plan.k[:30]]))))   # 3 s, for path checks
 
     def infer_loop(self):
         period = 1.0 / self.rate

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Random variants of the collection scene for data balance (Alpamayo-Cosmos DATA_PLAN.md §6).
 Copy of the collection skill's scripts/wsl/scenario-variants.py (sha256 50c7e3e1, 2026-10-26); eval_manager.py makes
-one lap scene per lap with it (no checkpoints csv: the Ego keeps the base scene's START spawn).
+one lap scene per lap with it (no checkpoints csv: the Ego keeps the base scene's START spawn). Eval changes (10/27): a
+pedestrian's standardPos follows its new position (it stayed at the sample's, and the 10/27 lap's pedestrian never walked;
+in the sample standardPos == initPos), and spawn points keep the base scene's vehicle type.
 
 Usage: scenario-variants.py <scenario dir> <base> <count> <seed> <global path txt> [prefix] [checkpoints csv] [starts]
 With a checkpoints csv the Ego starts at a checkpoint just before a mission (section episodes, E1), 30% of them
@@ -121,7 +123,8 @@ def make(base, route, rng, uid0, cps=None):
         # waiting Ego (64 collisions in 35 episodes, none with the sample scene).
         sp.update(MinDesiredVelocity_Custom=v, MaxDesiredVelocity_Custom=v, minSpawnPeriod=period, maxSpawnPeriod=period,
                   MinLatBias=-bias, MaxLatBias=bias, SafetyDist=rng.uniform(5, 10), TTC=rng.uniform(1.0, 2.0),
-                  spawnVehicleTypeID=rng.choice(VEHICLES) if roundabout or rng.random() < 0.5 else -1, isLaneChange=False)
+                  isLaneChange=False)   # vehicle type kept from the base scene: the 10/27 eval lap on bc-250 had no
+                                        # roundabout NPC with the randomized 30200003 (the sample's 30100004 is kept)
         sps.append(dict(uid=sp["UNIQUEID"], roundabout=roundabout, kph=round(v, 1), period=round(period, 1),
                         vehicle=sp["spawnVehicleTypeID"], bias=round(bias, 2)))
     meta["spawn"] = sps
@@ -148,7 +151,7 @@ def make(base, route, rng, uid0, cps=None):
         # keeps the sample's side and heading: the curb on the other side is not at -lat (the route is a lane)
         p = copy.deepcopy(template)
         x, y, z, h = route.at(s, lat)
-        p.update(DataID=rng.choice(PEDESTRIANS), UNIQUEID=uid[0], pos=vec(x, y, z), initPos=vec(-x, z, -y),
+        p.update(DataID=rng.choice(PEDESTRIANS), UNIQUEID=uid[0], pos=vec(x, y, z), initPos=vec(-x, z, -y), standardPos=vec(-x, z, -y),
                  activeDistance=rng.uniform(8, 25), speed=rng.uniform(4, 12), movingDistance=rng.uniform(4, 10))
         uid[0] += 1
         return p, dict(zone=tag, id=p["DataID"], s=round(s, 1), active=round(p["activeDistance"], 1),
