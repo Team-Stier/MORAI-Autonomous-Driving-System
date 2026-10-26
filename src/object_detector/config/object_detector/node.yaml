@@ -6,21 +6,21 @@ inputs:
     type: sensor_msgs/PointCloud2
     topic: /velodyne_points/leveled
     frame: base_link_level
-    stale_after_sec: 0.3
-    receive_timeout_sec: 0.3
+    stale_after_sec: 0.6
+    receive_timeout_sec: 0.6
   competition:
     type: interfaces/CompetitionVehicleStatus
     topic: /vehicle/competition_status
     frame: base_link
     numbers: [roll_rad, pitch_rad, yaw_rad, velocity_x_mps]
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.3
+    receive_timeout_sec: 0.3
   tf:
     type: tf2_msgs/TFMessage
     topic: /tf
     frame: map
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.3
+    receive_timeout_sec: 0.3
 stages:
   - name: roi
     outputs:

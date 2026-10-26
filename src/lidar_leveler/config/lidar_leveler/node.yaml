@@ -5,14 +5,14 @@ inputs:
     type: sensor_msgs/PointCloud2
     topic: /velodyne_points
     frame: velodyne
-    stale_after_sec: 0.3
-    receive_timeout_sec: 0.3
+    stale_after_sec: 0.6
+    receive_timeout_sec: 0.6
   competition:
     type: interfaces/CompetitionVehicleStatus
     topic: /vehicle/competition_status
     frame: base_link
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.3
+    receive_timeout_sec: 0.3
   tf_static:
     type: tf2_msgs/TFMessage
     topic: /tf_static

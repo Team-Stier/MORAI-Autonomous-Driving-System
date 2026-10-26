@@ -4,8 +4,8 @@ inputs:
     type: nav_msgs/Odometry
     topic: /localization/ego
     frame: map
-    stale_after_sec: 0.06
-    receive_timeout_sec: 0.06
+    stale_after_sec: 0.3
+    receive_timeout_sec: 0.3
 stages:
   - name: transform
     outputs:
