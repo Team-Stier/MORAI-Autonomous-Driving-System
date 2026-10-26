@@ -12,6 +12,8 @@ ModelOpt rounds |x| / scale to E2M1 with the same boundaries (<= 0.25, < 0.75, <
 its division is Triton's approximate one, so a rare exact tie can round the other way (the study: 0.16 % vs torchao).
 FP8 (per tensor, e4m3): scales weight amax / 448 and input amax / 448, the ModelOpt FP8 quantizer's.
 """
+import os
+
 import torch
 import torch.nn.functional as F
 import triton
@@ -74,9 +76,23 @@ def quant_nvfp4_torch(x, g):
     return q, sw.permute(0, 3, 2, 1, 4).reshape(-1)
 
 
+GEMM = os.environ.get("NVFP4_GEMM", "cublas")   # cublas: torch._scaled_mm; b12x: FlashInfer's sm_120 CuTe-DSL kernels
+_tuned = set()                                     # (the study: b12x 1.8-2.2x faster at M=64; needs the cu130 / flashinfer stack)
+
+
 @torch.library.custom_op("nvfp4::gemm", mutates_args=())
 def nvfp4_gemm(xq: torch.Tensor, xs: torch.Tensor, wq: torch.Tensor, ws: torch.Tensor) -> torch.Tensor:
-    return torch._scaled_mm(xq.view(F4), wq.t(), xs.view(E4), ws, out_dtype=torch.bfloat16)
+    if GEMM == "cublas":
+        return torch._scaled_mm(xq.view(F4), wq.t(), xs.view(E4), ws, out_dtype=torch.bfloat16)
+    import flashinfer
+    M, N, K = xq.shape[0], wq.shape[0], xq.shape[1] * 2
+    args = (xq.view(torch.uint8), wq.view(torch.uint8).t(), xs.view(torch.uint8).view(rup(M, 128), K // 16),
+            ws.view(torch.uint8).view(rup(N, 128), K // 16).t())
+    if (M, N, K) not in _tuned and not torch.cuda.is_current_stream_capturing():   # pick the schedule once per shape
+        _tuned.add((M, N, K))
+        with flashinfer.autotune(True):
+            flashinfer.mm_fp4(*args, None, torch.bfloat16, None, backend=GEMM)
+    return flashinfer.mm_fp4(*args, None, torch.bfloat16, None, backend=GEMM)
 
 
 @nvfp4_gemm.register_fake

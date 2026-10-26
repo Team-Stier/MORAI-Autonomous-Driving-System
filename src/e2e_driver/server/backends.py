@@ -99,3 +99,55 @@ class HFBackend:
 
     def predict(self, sample):
         return self.run(sample, self.prepare(sample))
+
+
+class EngineBackend(HFBackend):
+    """the delivered QAD student on the 5080: engine.load (real NVFP4/FP8 GEMMs) + fast_engine.FastEngine (compiled CUDA
+    graphs; camera frames and LiDAR BEVs already seen come from the ViT cache). Compiling and capturing take minutes, so
+    __init__ warms up on stored requests (model_server --dump files) before the server listens."""
+
+    def __init__(self, ckpt, vlm="Qwen/Qwen3-VL-4B-Instruct", num_steps=10, seed=None, device="cuda:0", warmup=(), pad_to=1792):
+        import engine
+        from fast_engine import FastEngine, fingerprints
+        t = time.perf_counter()
+        self.model = engine.load(ckpt, vlm=vlm, device=device)
+        self.fast, self.fingerprints = FastEngine(self.model, num_steps=num_steps, pad_to=pad_to), fingerprints
+        self.device, self.num_steps, self.seed, self.n = device, num_steps, seed, 0
+        self.load_s = time.perf_counter() - t
+        if warmup:
+            from assemble import build_sample
+            from e2e_driver import wire
+            for i, f in enumerate(list(warmup) * 3):           # compile + capture, then two timed passes
+                sample = build_sample(wire.unpack(open(f, "rb").read()), key=f"warmup/{i}")
+                self.fast.vit_cache.clear()
+                out = self.run(sample, self.prepare(sample))
+            self.warmup_timing = out["timing"]
+        self.n = 0
+
+    def prepare(self, sample):
+        b, timing = super().prepare(sample)
+        t = time.perf_counter()
+        keys = self.fingerprints(b["tokenized_data"]["pixel_values"], b["tokenized_data"]["image_grid_thw"])
+        return (b, keys), dict(timing, fingerprint_ms=round(1e3 * (time.perf_counter() - t), 1))
+
+    def run(self, sample, prepared):
+        m, ((b, keys), timing) = self.model, prepared
+        t1 = time.perf_counter()
+        dev = lambda x: {k: dev(v) if isinstance(v, dict) else v.to(self.device) if torch.is_tensor(v) else v for k, v in x.items()}
+        b = dev(b)
+        if self.seed is not None:
+            torch.manual_seed(int(self.seed) + self.n)
+        self.n += 1
+        hx, hr = b["ego_history_xyz"], b["ego_history_rot"]
+        x0 = torch.randn(1, *m.action_space.get_action_space_dims(), device=self.device)   # as FlowMatching._euler
+        act, parts = self.fast.run(b["tokenized_data"], hx, hr, x0, keys)
+        sp = m.action_space
+        accel = act[0, :, 0] * sp.accel_std.float() + sp.accel_mean.float()
+        kappa = act[0, :, 1] * sp.curvature_std.float() + sp.curvature_mean.float()
+        v0 = sp.estimate_t0_states(hx[:, 0].float(), hr[:, 0].float())["v"]
+        xyz, _ = sp.action_to_traj(act, hx[:, 0], hr[:, 0])
+        torch.cuda.synchronize()
+        t2 = time.perf_counter()
+        return dict(accel=accel.cpu().numpy().astype(np.float64), kappa=kappa.cpu().numpy().astype(np.float64),
+                    v0=float(v0.reshape(-1)[0]), xyz=xyz[0].float().cpu().numpy(),
+                    timing=dict(timing, model_ms=round(1e3 * (t2 - t1), 1), **parts))

@@ -32,7 +32,12 @@ def make_backend(a):
     import backends
     if a.backend == "fake":
         return backends.FakeBackend(v_target=a.fake_speed, kappa=a.fake_kappa, preprocess_config=a.preprocess_config, vlm=a.vlm)
-    return backends.HFBackend(a.ckpt, vlm=a.vlm, model_class="engine" if a.backend == "engine" else a.model_class, attn=a.attn, dtype=a.dtype, num_steps=a.steps, seed=a.seed)
+    if a.backend == "engine":
+        warm = sorted(Path(a.warmup).glob("req_*.bin"))[:2] if a.warmup else []
+        b = backends.EngineBackend(a.ckpt, vlm=a.vlm, num_steps=a.steps, seed=a.seed, warmup=warm)
+        log.info("engine %s loaded in %.0f s, warm-up %s", b.model.engine_info, b.load_s, getattr(b, "warmup_timing", None))
+        return b
+    return backends.HFBackend(a.ckpt, vlm=a.vlm, model_class=a.model_class, attn=a.attn, dtype=a.dtype, num_steps=a.steps, seed=a.seed)
 
 
 def serve(a, backend):
@@ -110,6 +115,8 @@ def main():
     ap.add_argument("--fake-speed", type=float, default=4.0); ap.add_argument("--fake-kappa", type=float, default=0.0)
     ap.add_argument("--host", default="127.0.0.1"); ap.add_argument("--port", type=int, default=47011)
     ap.add_argument("--dump")
+    ap.add_argument("--warmup", default=str(HERE.parent / "assets" / "warmup"),
+                    help="engine: dumped requests (req_*.bin) to compile and capture the graphs on before listening")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if a.backend in ("hf", "engine") and not a.ckpt: ap.error("--backend %s needs --ckpt" % a.backend)

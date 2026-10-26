@@ -34,6 +34,10 @@ def main():
     bf16 = engine.load(deliver, vlm, quantize=False)
     eng = engine.load(deliver, vlm)
     print(json.dumps(eng.engine_info))
+    ref, got = qad.state_dict(), bf16.state_dict()                                   # the streamed load = the HF load
+    diff = [k for k in got if k in ref and not torch.equal(got[k].cpu(), ref[k].cpu())]
+    assert not diff and len(set(got) - set(ref)) == 0, (diff[:10], sorted(set(got) - set(ref))[:10])
+    print("streamed BF16 load == StudentVLA.build:", len(got), "tensors")
     cfg.data.root = root
     dcfg = OmegaConf.to_container(cfg.data.val_dataset, resolve=True)
     dcfg.update(augment=False, max_samples=n, vla_preprocess_args={"_target_": "morai_vla.processor.get_preprocess_fn", "generation_mode": True})
