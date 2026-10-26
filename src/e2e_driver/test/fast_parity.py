@@ -29,7 +29,7 @@ def main():
     n = int(sys.argv[4]) if len(sys.argv) > 4 else 4
     iters = int(sys.argv[5]) if len(sys.argv) > 5 else 30
     m = engine.load(deliver)
-    fe = FastEngine(m)
+    fe = FastEngine(m, compile=os.environ.get("FAST_COMPILE", "1") == "1", use_graphs=os.environ.get("FAST_GRAPHS", "1") == "1")   # 0: debug
     cfg = OmegaConf.load(cfg_path)
     cfg.data.root = root
     dcfg = OmegaConf.to_container(cfg.data.val_dataset, resolve=True)

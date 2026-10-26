@@ -128,6 +128,9 @@ class EngineBackend(HFBackend):
             self.warmup_timing = out["timing"]
         self.n = 0
 
+    def reset(self):
+        self.fast.vit_cache.clear()
+
     def prepare(self, sample):
         b, timing = super().prepare(sample)
         t = time.perf_counter()

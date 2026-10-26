@@ -439,28 +439,41 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
 ## 5080 추론 엔진 (`--backend engine`, MODEL_PLAN 5.1–5.2 그대로)
 
 - **넣는 것**: 학생 파이프라인의 `deliver` 폴더(`final/` + `quant_manifest.json`, `train/scripts/qad_export.py`). `runtime.env`의 `E2E_MODEL_CKPT`만 바꾸면 된다.
+- **납품물 교체 절차** (가중치 경로만 바꾼다):
+  1. 새 `deliver` 폴더를 서버 PC에 복사한다(winpc: `~/morai-eval/engine/<이름>`). 안에 `final/config.json`, `final/model*.safetensors`(분할 가능), `quant_manifest.json`이 있어야 한다.
+  2. `src/e2e_driver/config/runtime.env`에서 `E2E_MODEL_CKPT=<deliver 폴더>`로 바꾼다. `E2E_MODEL_BACKEND=engine`은 그대로 둔다.
+  3. 대회 PC: `./run.sh`. winpc: `tools/winpc/server.sh down; tools/winpc/server.sh up`(인자 없이 runtime.env를 읽는다), 그다음 `tools/winpc/stack.sh up`(`run.sh`).
+  4. 서버 로그 첫 줄에서 `layers`(nvfp4/fp8 개수)와 warm-up `model_ms`를 확인한다. 구조가 같으면 compile 캐시가 맞아 1분 안에 뜬다. 처음 보는 구조는 compile과 autotune에 수 분이 걸린다.
 - **스택**: torch 2.14.1+cu130, flashinfer-python 0.7.2.post1, nvidia-cutlass-dsl 4.8.1이다(10/24 벤치마크 `venv-fi`와 같은 목록에 모델 의존성을 더한 `~/morai-eval/venv-engine`).
   - 같은 이름의 NCCL 파일(cu12·cu13)이 서로 덮어쓰므로 `nvidia-nccl-cu13`을 마지막에 다시 설치한다.
 - **정밀도**: 카메라 ViT FP8, LLM·expert 선형층은 manifest의 형식(NVFP4·FP8)과 QAD amax를 쓴다. LiDAR ViT, merger, 임베딩, in/out_proj, KV 캐시, 어텐션은 BF16이고 Euler는 FP32로 10 step이다.
   - NVFP4 GEMM: 프리필(M ≈ 1.8k)은 cuBLASLt `_scaled_mm`, expert(M = 64)는 FlashInfer b12x를 쓴다(`server/nvfp4.py`, 벤치마크 `nvfp4.py` 기반, ModelOpt의 블록 스케일 규칙).
   - 체크포인트는 텐서 하나씩 GPU로 읽으며 양자화한다(`server/engine.py`, 3분할 safetensors 지원). BF16 전체를 RAM이나 GPU에 올리지 않는다.
 - **실행**: `server/fast_engine.py`, 정적 양자화 + `torch.compile` + CUDA graph다.
-  - ViT는 새 이미지(카메라별 최신 4장 + BEV 2장)만 계산한다. 카메라(FP8)와 LiDAR(BF16)는 각각 한 묶음으로, 두 스트림에서 동시에 돈다. 지난 프레임 12장은 같은 픽셀이면 캐시를 쓴다.
+  - ViT는 새 이미지(카메라별 최신 4장 + BEV 2장)만 계산한다. 지난 프레임 12장은 같은 픽셀이면 캐시를 쓴다(항상 켜짐). 프레임 선택은 노드가 학습과 같은 τ 목표(t0−0.3 … t0, 0.1 s 간격)에서 가장 가까운 프레임으로 한다. 캐시는 픽셀 지문으로 찾으므로 선택 간격과 무관하다.
+  - 카메라(FP8)와 LiDAR(BF16)는 인코더마다 고정 슬롯 묶음(카메라별 최신 프레임 크기 1장씩, BEV 2장) 그래프 하나로 돈다. 새 이미지가 적으면 빈 슬롯을 두고, 많으면(카메라 흐름이 불규칙하거나 첫 요청) 같은 그래프를 여러 번 돈다. 실행 중 재컴파일은 없다.
+  - 텔레포트를 감지하면 노드가 다음 요청에 `reset`을 실어 보내고, 서버가 ViT 캐시를 비운다.
+  - 그래프는 각자 다른 스트림에서 캡처한다. `torch.cuda.graph`의 기본 캡처 스트림은 하나를 같이 쓴다. 그러면 cuBLAS 작업공간도 하나라서, 카메라와 LiDAR 그래프가 동시에 돌 때 GPU가 멈췄다(다중 패스 10번 안에 몇 번). 고친 뒤 1000번 동안 멈추지 않았다.
   - LLM 프리필은 매 스텝 1792 토큰으로 오른쪽을 채워 돈다. 프롬프트는 1593–1729 토큰이고, 128행 타일이라 1728과 비용이 같다.
-  - expert 10 step은 graph 하나다. 패딩 마스크 어텐션은 BF16 GEMM 2개 + fp32 softmax로 한다. SDPA·cuDNN·varlen flash는 이 모양에서 더 느렸다.
+  - expert 10 step은 graph 하나다. 패딩 마스크 어텐션은 BF16 GEMM 2개 + fp32 softmax로 한다. SDPA·cuDNN·varlen flash·FlexAttention은 이 모양에서 더 느렸다.
+    - Euler step은 `max-autotune`으로 compile한다. cuBLAS가 고른 32x32 WMMA 커널 대신 Triton 템플릿을 실측해 골라 expert가 44.2 → 39.7 ms가 됐다(벤치마크 39.5).
   - M-RoPE 위치와 픽셀 BF16 변환은 전처리 스레드(CPU)에서 한다. 서버는 시작할 때 `assets/warmup`의 요청 2개로 compile·capture를 끝낸다.
-- **10 Hz 확인** (10/26, 5080 단독, 실제 크기 구조 + 무작위 가중치, LLM·expert 전부 NVFP4, 연속 실제 요청 42개를 10 Hz로 60 s, `test/server_bench.py`):
+- **엔진 시간** (10/26 23시, 5080, 실제 크기 구조 + 무작위 가중치(`synthetic_nvfp4`: LLM·expert NVFP4 504층, 카메라 ViT FP8 96층), 실제 요청 41개, `test/vit_slots.py`):
 
   | | ms |
   |---|---|
-  | ViT (새 이미지 6장) | 12.7 |
-  | 입력 조립 (GPU) | 0.5 |
-  | LLM 프리필 | 37.7 |
-  | expert 10 step | 44.2 |
-  | 서버 한 스텝 (model_ms 중앙값) | 98.7 |
+  | ViT (새 이미지 6장) | 13.1 |
+  | LLM 프리필 | 37.6 |
+  | expert 10 step | 39.7 |
+  | 서버 한 스텝 (model_ms, 새 이미지 6장) | 88–91 |
+  | 새 이미지 7–9장 / 11–12장 / 13–18장 | 97–99 / 107 / 113–117 |
 
-  - 9.78 Hz를 냈다. 전처리(토큰화 등 58 ms)는 이전 스텝과 겹쳐 돈다.
-  - 벤치마크 89 ms(ViT 10.4, LLM 39.2, expert 39.5)와 비교하면 차이는 두 곳이다. LiDAR ViT가 설계대로 BF16이고, expert 어텐션에 패딩 마스크가 있다.
+  - 벤치마크 89 ms(ViT 10.4, LLM 39.2, expert 39.5)와의 차이는 ViT 쪽이다. LiDAR ViT가 설계대로 BF16이고 별도 스트림에서 돈다.
+  - 캐시 정합성: 캐시를 무작위로 비워 새 이미지 5–18장을 만든 41개 요청에서, 캐시 경로와 전체 재계산의 ViT 출력과 (a, κ)의 최대 절대 차이가 모두 0이었다(같은 노이즈, 비트 단위 동일).
+- **폐루프 10 Hz** (10/26 23:20, drop-in): `runtime.env`의 `E2E_MODEL_CKPT`만 `synthetic_nvfp4`로 바꾸고 `server.sh up` + `stack.sh up`(`run.sh`)을 실행했다. Mac의 `tools/fake_host.py`가 수집 bag(run1020a-w2-001)을 대회 MORAI 형식 UDP로 120 s 쐈다(ssh -R → WSL `lan_tunnel.py stack`).
+  - 루프는 sim 시간 9.72 Hz였다. 스텝 간격은 p50 100 ms, p95 105 ms이고, 서버가 밀려 거른 틱은 2.8 %다. `/control_cmd`는 59.7 Hz, 가짜 호스트가 받은 9093 제어는 48.3 Hz(최대 공백 67 ms)다.
+  - model_ms는 p50 95.3, p95 103.2 ms다. 새 이미지 6장 이하인 스텝만 보면 p50 91.5 ms다. 카메라→명령 지연은 p50 224 ms다(전처리 63 ms가 앞 스텝과 겹친다).
+  - 10 Hz에 못 미친 이유: bag에는 카메라의 10 Hz 사본만 있다. 이것이 τ에서 약 11.5 Hz로 불규칙하게 와서 이력 프레임 선택이 자주 바뀌었고, 스텝의 46 %가 새 이미지 7장 이상이었다. 실제 W1 주행 요청은 매 스텝 6장이었다.
   - H100 스모크 QAD의 형식 구성(LLM 대부분 FP8)이면 LLM이 FP8이라 더 느리다(cu128 측정으로 한 스텝 151 ms였다). 최종 구성은 실제 QAD 결과를 따른다.
 - **정확도**: 소형 QAD 납품물(dry_best), 검증 16 샘플, 같은 노이즈(`test/engine_parity.py`)로 쟀다.
   - QAD 가짜 양자화 출력과의 평균 궤적 차이는 서비스 경로 0.017 m, eager 엔진 0.019 m다. 같은 가중치의 BF16은 0.065 m다.

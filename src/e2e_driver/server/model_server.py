@@ -84,6 +84,8 @@ def serve(a, backend):
                     break
                 req, sample, prepared, t_in, t, t1, t2 = job
                 t3 = time.perf_counter()
+                if req.get("reset") and hasattr(backend, "reset"):   # a teleport: nothing cached belongs to the new place
+                    backend.reset()
                 if "route_kappa" in req:                  # load-test steering for the fake backend; after prepare, so
                     sample["route_kappa"] = req["route_kappa"]   # the tokenized batch never sees it
                 out = backend.run(sample, prepared)

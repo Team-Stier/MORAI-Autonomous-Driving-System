@@ -2,9 +2,11 @@
 TeacherVLA.sample_trajectories (no CoC, prefix prefill, Euler flow matching), laid out like the 5080 latency study
 (winpc ~/claude-bench/bench2.py) but on the real modules and the real request:
 
-  ViT     the new images only (normally the newest frame of each camera + the 2 LiDAR BEVs; MODEL_PLAN 5.2), one batched
-          pass per encoder (camera FP8, LiDAR BF16), one CUDA graph per size combination; an image already seen (same
-          pixels: a camera frame still in the history window) reuses its cached merger and DeepStack outputs;
+  ViT     the new images only (normally the newest frame of each camera + the 2 LiDAR BEVs; MODEL_PLAN 5.2), batched per
+          encoder (camera FP8, LiDAR BF16) into one fixed slot pattern, one slot per camera (its newest frame's size) or
+          per BEV, so one CUDA graph per encoder: fewer new images leave slots unused, more (a jittery camera stream, a
+          teleport, the first request) take more passes, never a recompile; an image already seen (same pixels: a camera
+          frame still in the history window) reuses its cached merger and DeepStack outputs;
   LLM     prefill of the prefix right-padded to pad_to tokens (1792; the prompts are ~1.73k; causal: real tokens never
           see the padding), K/V written into static buffers, DeepStack added at the image tokens after the first layers;
           a longer prefix gets its own length (a multiple of 64), compiled on first use;
@@ -18,6 +20,7 @@ import time
 import numpy as np
 import torch
 import torch.nn.functional as F
+from morai_vla.data import N_FRAMES
 from transformers.models.qwen3_vl import modeling_qwen3_vl as mq
 
 PAD = 64
@@ -66,7 +69,10 @@ def _graph(fn):
             fn()
     torch.cuda.current_stream().wait_stream(st)
     g = torch.cuda.CUDAGraph()
-    with torch.cuda.graph(g):
+    # captured on its own stream: cuBLAS/cuBLASLt workspaces are per (handle, capture stream), and torch.cuda.graph's
+    # shared default capture stream gave the camera and LiDAR ViT graphs one workspace; replayed at once on two streams
+    # they raced on it and hung the GPU (a few in 10 multi-pass steps; 0 in 400 after this)
+    with torch.cuda.graph(g, stream=st):
         fn()
     return g
 
@@ -76,7 +82,7 @@ class FastEngine:
         self.m, self.steps, self.use_graphs, self.pad_to = model, num_steps, use_graphs, pad_to
         # Inductor fuses norms, rotary, activation quantizers and residuals (the study: one compiled function, then the
         # graph); expert: one compiled Euler step reused 10 times inside the graph
-        self.compile = (lambda f: torch.compile(f, dynamic=False)) if compile else (lambda f: f)
+        self.compile = (lambda f, **k: torch.compile(f, dynamic=False, **k)) if compile else (lambda f, **k: f)
         vlm = model.vlm.model
         self.vlm, self.lm, self.expert = vlm, vlm.language_model, model.expert
         tc, ec = self.lm.config, self.expert.config
@@ -126,22 +132,23 @@ class FastEngine:
 
         def fn():
             out["e"], out["d"] = body()
-        return px, fn, out, [n // enc.spatial_merge_size ** 2 for n in S]
+        return px, fn, out, [n // enc.spatial_merge_size ** 2 for n in S], list(zip(spans, spans[1:]))
 
-    def _vit(self, lidar, keys, pxs):
-        """ViT outputs (merger, DeepStack list) of new images of one encoder, one graph per size combination."""
+    def _vit(self, lidar, sizes, pxs):
+        """ViT outputs (merger, DeepStack list) of one pass over the slot pattern `sizes` of one encoder; pxs per slot,
+        None for an unused slot (its stale pixels run along, attention is per image, the output is dropped)."""
         enc = self.vlm.lidar_visual if lidar else self.vlm.visual
-        sizes = tuple(tuple(k[:3]) for k in keys)
         if (lidar, sizes) not in self.vit_graphs:
-            px, fn, out, ntok = self._vit_fn(enc, sizes)
-            px.copy_(torch.cat(pxs))
+            px, fn, out, ntok, spans = self._vit_fn(enc, sizes)
             g = _graph(fn) if self.use_graphs else None
-            self.vit_graphs[(lidar, sizes)] = (px, fn, out, ntok, g)
-        px, fn, out, ntok, g = self.vit_graphs[(lidar, sizes)]
-        px.copy_(torch.cat(pxs))
+            self.vit_graphs[(lidar, sizes)] = (px, fn, out, ntok, spans, g)
+        px, fn, out, ntok, spans, g = self.vit_graphs[(lidar, sizes)]
+        for (a0, a1), p in zip(spans, pxs):
+            if p is not None:
+                px[a0:a1].copy_(p)
         g.replay() if g is not None else fn()
         es, ds = out["e"].split(ntok), [d.split(ntok) for d in out["d"]]
-        return [(es[i].clone(), [d[i].clone() for d in ds]) for i in range(len(keys))]
+        return [(es[i].clone(), [d[i].clone() for d in ds]) if p is not None else None for i, p in enumerate(pxs)]
 
     # ---------------------------------------------------------------- LLM prefill
     def _llm_buffers(self, Lp, n_vis):
@@ -182,7 +189,6 @@ class FastEngine:
         nq = ec.num_attention_heads
         g = nq // self.kvh
         m = self.m
-
         def step(x, t, dt):
             h = m.action_in_proj(x, t)
             for i, layer in enumerate(self.expert.layers):
@@ -196,7 +202,8 @@ class FastEngine:
                 # attention as two bf16 batched GEMMs and an fp32 softmax over [prefix | action] keys, GQA folded into
                 # the query length (query heads j*g..j*g+g-1 read KV head j). Measured alternatives for 64 queries x
                 # ~1.8k keys with the padding: masked SDPA fell back to fp32 SIMT (enable_gqa) or a 16-CTA mem-efficient
-                # kernel (46 ms), cuDNN 2x slower, varlen flash (exact lengths, no mask) 64 vs 44 ms (16 CTAs, no split-KV)
+                # kernel (46 ms), cuDNN 2x slower, varlen flash (exact lengths, no mask) 64 vs 44 ms (16 CTAs, no split-KV),
+                # FlexAttention (every key block partial for a variable L) 330 us a call vs ~35 us
                 qf = q.reshape(1, self.kvh, g * n, self.hd)
                 att = (torch.matmul(qf, llm["K"][i].transpose(-1, -2)).float() * a.scaling + b["mask"]).softmax(-1)
                 o = torch.matmul(att.to(torch.bfloat16), llm["V"][i]).reshape(1, nq, n, self.hd)
@@ -204,7 +211,9 @@ class FastEngine:
                 h = h + layer.mlp(layer.post_attention_layernorm(h))
             vel = m.action_out_proj(self.expert.norm(h)).view(1, n, 2)
             return x + dt * vel
-        step = self.compile(step)
+        # max-autotune times Triton templates against cuBLAS for the bf16 attention GEMMs (cuBLAS picks 32x32 WMMA kernels
+        # for 64 queries x ~1.8k keys): expert 44.2 -> 39.8 ms (the 10/24 benchmark: 39.5); minutes once, then cached
+        step = self.compile(step, mode="max-autotune-no-cudagraphs")
 
         def fn():
             x = b["x0"]
@@ -233,14 +242,24 @@ class FastEngine:
         ck = [(lidar[i], k) for i, k in enumerate(keys)]
         new, main = 0, torch.cuda.current_stream()
         self.side.wait_stream(main)
-        for enc_lidar in (False, True):           # new images: one batched pass per encoder; LiDAR on a side stream,
-            idx = [i for i, c in enumerate(ck) if c[0] == enc_lidar and c not in self.vit_cache]   # beside the camera ViT
-            if idx:
-                with torch.cuda.stream(self.side if enc_lidar else main):
-                    new_px = [pxs[i].to(self.dev, torch.bfloat16, non_blocking=True) for i in idx]
-                    for i, r in zip(idx, self._vit(enc_lidar, [keys[i] for i in idx], new_px)):
-                        self.vit_cache[ck[i]] = r
-                new += len(idx)
+        for enc_lidar in (False, True):           # new images: slot-pattern passes per encoder; LiDAR on a side stream,
+            enc_idx = [i for i, c in enumerate(ck) if c[0] == enc_lidar]                    # beside the camera ViT
+            # cameras come as N_FRAMES per camera, oldest first (assemble.py): a slot per camera's newest frame
+            pattern = tuple(tuple(keys[i][:3]) for i in (enc_idx if enc_lidar else enc_idx[N_FRAMES - 1::N_FRAMES]))
+            todo = [i for i in enc_idx if ck[i] not in self.vit_cache]
+            new += len(todo)
+            with torch.cuda.stream(self.side if enc_lidar else main):
+                while todo:
+                    slots = [None] * len(pattern)
+                    for i in list(todo):
+                        s = next((j for j, z in enumerate(pattern) if slots[j] is None and z == tuple(keys[i][:3])), None)
+                        if s is not None:
+                            slots[s] = i; todo.remove(i)
+                    assert any(j is not None for j in slots), f"image size outside the slot pattern {pattern}"
+                    res = self._vit(enc_lidar, pattern, [None if i is None else pxs[i].to(self.dev, torch.bfloat16, non_blocking=True) for i in slots])
+                    for i, r in zip(slots, res):
+                        if i is not None:
+                            self.vit_cache[ck[i]] = r
         main.wait_stream(self.side)
         self.vit_cache = {c: self.vit_cache[c] for c in ck}                  # keep what the current window uses
         embeds, deeps = [self.vit_cache[c][0] for c in ck], [self.vit_cache[c][1] for c in ck]

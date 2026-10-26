@@ -7,4 +7,5 @@ EVAL=${EVAL:-$HOME/morai-eval}
 WS=${WS:-$EVAL/ws/MORAI-Autonomous-Driving-System}                                 # synced copy of this branch
 TRAIN=${MORAI_VLA_TRAIN:-$HOME/morai-student/train}                                 # training code (morai_vla)
 VENV=${VENV:-$HOME/claude-bench/venv-teacher}                                       # training venv (torch, transformers)
+ENGINE_VENV=${ENGINE_VENV:-$EVAL/venv-engine}            # engine backend: torch 2.14.1+cu130, flashinfer 0.7.2.post1
 SHARE=/mnt/d/share                                                                  # bags and step-0 data

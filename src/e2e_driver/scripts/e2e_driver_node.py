@@ -50,6 +50,7 @@ class Node:
         self.teleport, self.restart_loc = TeleportDetector(), bool(P("restart_localization_on_teleport", True))
         self.teleport_pub = rospy.Publisher("~teleport", Header, queue_size=2)       # vlp16_bev, sim_clock reset on it
         self.sock, self.pending, self.next_id, self.skipped = None, {}, 0, 0
+        self.reset_vit = False                      # the next request tells the server to drop its ViT cache
         self.plan, self.plan_id, self.v, self.plan_lock = None, -1, 0.0, threading.Lock()
         self.pub = rospy.Publisher(P("command_topic", "/control_cmd"), CtrlCmd, queue_size=1, tcp_nodelay=True)
         self.debug = rospy.Publisher("~debug", String, queue_size=5)
@@ -75,6 +76,7 @@ class Node:
         restarted (respawn) from the next GPS fix; vlp16_bev and sim_clock reset on ~teleport."""
         rospy.logwarn("e2e_driver: teleport (%s): inputs, route progress and plan reset", why)
         self.inputs.reset()
+        self.reset_vit = True
         self.tracker, self.odo, self.guard = RouteTracker(self.route), Odometer(), PoseGuard()
         with self.plan_lock:
             self.plan, self.plan_id = None, self.next_id                       # replies to earlier requests are dropped
@@ -183,6 +185,8 @@ class Node:
                     self.connect()
                 rid, self.next_id = self.next_id, self.next_id + 1
                 req["id"] = rid
+                if self.reset_vit:
+                    req["reset"], self.reset_vit = True, False
                 self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"],
                                          w0=w0, w_req=time.perf_counter(), inflight=len(self.pending))
                 wire.send(self.sock, req)
