@@ -1,24 +1,24 @@
 recognize:
   section_core_map:
-    "0": camera7_frame_cpu.hpp
-    "1": camera7_frame_cpu.hpp
-    "2": camera7_frame_cpu.hpp
-    "3": camera7_frame_cpu.hpp
-    "4": camera7_frame_cpu.hpp
-    "5": camera7_frame_cpu.hpp
-    "6": camera7_frame_cpu.hpp
-    "7": camera7_frame_cpu.hpp
-    "8": camera7_frame_cpu.hpp
-    "9": camera7_frame_cpu.hpp
-    "10": camera7_frame_cpu.hpp
-    "11": camera7_frame_cpu.hpp
-    "12": camera7_frame_cpu.hpp
-    "18": camera7_frame_cpu.hpp
-    "13": camera7_frame_cpu.hpp
-    "14": camera7_frame_cpu.hpp
-    "20": camera7_frame_cpu.hpp
-    "15": camera7_frame_cpu.hpp
-    "19": camera7_frame_cpu.hpp
-    "16": camera7_frame_cpu.hpp
-    "17": camera7_frame_cpu.hpp
+    "0": yolo_traffic_light.hpp
+    "1": yolo_traffic_light.hpp
+    "2": yolo_traffic_light.hpp
+    "3": yolo_traffic_light.hpp
+    "4": yolo_traffic_light.hpp
+    "5": yolo_traffic_light.hpp
+    "6": yolo_traffic_light.hpp
+    "7": yolo_traffic_light.hpp
+    "8": yolo_traffic_light.hpp
+    "9": yolo_traffic_light.hpp
+    "10": yolo_traffic_light.hpp
+    "11": yolo_traffic_light.hpp
+    "12": yolo_traffic_light.hpp
+    "18": yolo_traffic_light.hpp
+    "13": yolo_traffic_light.hpp
+    "14": yolo_traffic_light.hpp
+    "20": yolo_traffic_light.hpp
+    "15": yolo_traffic_light.hpp
+    "19": yolo_traffic_light.hpp
+    "16": yolo_traffic_light.hpp
+    "17": yolo_traffic_light.hpp
   health_core_map: []
