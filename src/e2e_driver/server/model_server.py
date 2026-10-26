@@ -122,7 +122,13 @@ def main():
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if a.backend in ("hf", "engine") and not a.ckpt: ap.error("--backend %s needs --ckpt" % a.backend)
-    backend = make_backend(a)
+    try:
+        backend = make_backend(a)
+    except Exception as e:
+        if type(e).__name__ != "DeliveryError":
+            raise
+        log.error("delivery %s is not usable: %s", a.ckpt, e)            # run.sh: model_server exited unexpectedly (exit 2)
+        sys.exit(2)
     serve(a, backend)
 
 

@@ -443,7 +443,9 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
   1. 새 `deliver` 폴더를 서버 PC에 복사한다(winpc: `~/morai-eval/engine/<이름>`). 안에 `final/config.json`, `final/model*.safetensors`(분할 가능), `quant_manifest.json`이 있어야 한다.
   2. `src/e2e_driver/config/runtime.env`에서 `E2E_MODEL_CKPT=<deliver 폴더>`로 바꾼다. `E2E_MODEL_BACKEND=engine`은 그대로 둔다.
   3. 대회 PC: `./run.sh`. winpc: `tools/winpc/server.sh down; tools/winpc/server.sh up`(인자 없이 runtime.env를 읽는다), 그다음 `tools/winpc/stack.sh up`(`run.sh`).
-  4. 서버 로그 첫 줄에서 `layers`(nvfp4/fp8 개수)와 warm-up `model_ms`를 확인한다. 구조가 같으면 compile 캐시가 맞아 1분 안에 뜬다. 처음 보는 구조는 compile과 autotune에 수 분이 걸린다.
+  4. 서버 로그 첫 줄에서 `layers`(nvfp4/fp8 개수), `llm_expert`(LLM+expert의 형식별 층 수와 유효 비트)와 warm-up `model_ms`를 확인한다. 구조가 같으면 compile 캐시가 맞아 1분 안에 뜬다. 처음 보는 구조는 compile과 autotune에 수 분이 걸린다.
+  - 층마다 NVFP4(프리필 cuBLASLt FP4, expert b12x)인지 FP8인지는 납품물의 `quant_manifest.json`(QAD가 고른 형식과 amax)대로 정한다. 엔진에 층 배치를 적어 두지 않았다.
+  - 형식이 다르면 서버가 원인 한 줄을 남기고 종료 코드 2로 끝난다. `run.sh`는 `model_server exited unexpectedly (exit 2)`를 낸다. 검사하는 것: `final/config.json`·가중치·`quant_manifest.json` 존재, 형식(nvfp4 | fp8), NVFP4 블록 16, 두 amax, 층 이름과 shape, 가중치 누락·초과(`test/test_delivery_check.py`).
 - **스택**: torch 2.14.1+cu130, flashinfer-python 0.7.2.post1, nvidia-cutlass-dsl 4.8.1이다(10/24 벤치마크 `venv-fi`와 같은 목록에 모델 의존성을 더한 `~/morai-eval/venv-engine`).
   - 같은 이름의 NCCL 파일(cu12·cu13)이 서로 덮어쓰므로 `nvidia-nccl-cu13`을 마지막에 다시 설치한다.
 - **정밀도**: 카메라 ViT FP8, LLM·expert 선형층은 manifest의 형식(NVFP4·FP8)과 QAD amax를 쓴다. LiDAR ViT, merger, 임베딩, in/out_proj, KV 캐시, 어텐션은 BF16이고 Euler는 FP32로 10 step이다.
@@ -474,10 +476,27 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
   - 루프는 sim 시간 9.72 Hz였다. 스텝 간격은 p50 100 ms, p95 105 ms이고, 서버가 밀려 거른 틱은 2.8 %다. `/control_cmd`는 59.7 Hz, 가짜 호스트가 받은 9093 제어는 48.3 Hz(최대 공백 67 ms)다.
   - model_ms는 p50 95.3, p95 103.2 ms다. 새 이미지 6장 이하인 스텝만 보면 p50 91.5 ms다. 카메라→명령 지연은 p50 224 ms다(전처리 63 ms가 앞 스텝과 겹친다).
   - 10 Hz에 못 미친 이유: bag에는 카메라의 10 Hz 사본만 있다. 이것이 τ에서 약 11.5 Hz로 불규칙하게 와서 이력 프레임 선택이 자주 바뀌었고, 스텝의 46 %가 새 이미지 7장 이상이었다. 실제 W1 주행 요청은 매 스텝 6장이었다.
+- **4.75비트 시험 납품물** (10/26 23:40): 최종 납품물과 같은 형식이다. 실제 크기, 무작위 가중치이고 QAD 예산 4.75 유효 비트에 맞췄다(`test/budget_manifest.py`). LLM과 expert의 앞뒤 5블록(35/504층)이 FP8, 나머지 469층이 NVFP4, 유효 4.754비트다.
+  - `runtime.env` 경로만 바꿔 `server.sh up`을 실행했다. 처음 보는 형식이라 compile과 autotune에 6분 걸렸다. 로그에는 `llm_expert: nvfp4 469, fp8 35, bf16 0, effective_bits 4.754`가 찍혔다. 워밍업 한 스텝은 92.3 ms(LLM 38.8, expert 39.9)였다.
+  - 같은 bag으로 Mac 가짜 호스트(유선 LAN) 120 s를 돌렸다. 루프는 sim 시간 8.97 Hz, `/control_cmd`는 60.4 Hz였다.
+  - model_ms는 p50 97.8, p95 109.6 ms다. 새 이미지 6장 이하 스텝만 보면 p50 92.7, p95 98.6 ms다. 이번에는 스텝의 55 %가 새 이미지 7장 이상(ViT 2회)이라 10 Hz에 못 미쳤다.
+  - 남은 확인: 실제 MORAI 카메라 흐름(대회 ≤30 Hz)에서 스텝당 새 이미지 수. 카메라 지연이 프레임 간격의 절반을 넘으면, 직전 스텝의 최신 프레임이 다음 스텝에서 더 가까운 프레임으로 다시 선택된다. 그러면 스텝당 최대 8장이 된다. bc-250 두 대 구성 실주행으로 확인해야 한다.
+- **정확도 기준**: QAD 가짜 양자화 대비 정확도는 실제 QAD 형식의 소형 납품물(dry_best)로만 잴 수 있다. 시험 납품물은 무작위 가중치라 QAD 기준값이 없다.
   - H100 스모크 QAD의 형식 구성(LLM 대부분 FP8)이면 LLM이 FP8이라 더 느리다(cu128 측정으로 한 스텝 151 ms였다). 최종 구성은 실제 QAD 결과를 따른다.
 - **정확도**: 소형 QAD 납품물(dry_best), 검증 16 샘플, 같은 노이즈(`test/engine_parity.py`)로 쟀다.
   - QAD 가짜 양자화 출력과의 평균 궤적 차이는 서비스 경로 0.017 m, eager 엔진 0.019 m다. 같은 가중치의 BF16은 0.065 m다.
   - ADE는 QAD 5.505, 엔진 5.504다.
+
+## 가짜 대회 호스트 (Mac, `tools/fake_host_mac.sh`)
+
+시뮬레이터 없이 스택과 모델을 대회 운영 PC처럼 1배속으로 시험한다. bc-250은 실제 MORAI 호스트로만 쓴다.
+- `tools/fake_host.py`가 수집 bag을 MORAI UDP 형식(카메라 4대, VLP-16, GPS, IMU, Competition Vehicle Status)으로 바꿔, sim 시간 1배속으로 보낸다. 제어 9093은 받아서 센다(열린 루프라 bag은 반응하지 않는다).
+- winpc WSL은 LAN에서 들어오는 연결을 받지 못한다. 그래서 `ssh -R`로 WSL의 127.0.0.1:30011을 Mac으로 잇고, WSL의 `lan_tunnel.py stack`이 거기에 붙는다. 실제 시뮬레이터와 같은 경로다.
+- 경로: 유선 LAN(192.168.0.1)이 응답하면 그쪽, 아니면 Tailscale이다. 10/26 측정에서 RTT는 LAN 1.3 ms, Tailscale 2.3 ms였다(Tailscale도 케이블로 직접 연결). 필요한 대역은 3.0 MB/s이고, 두 경로 모두 1배속을 유지했다.
+  ```bash
+  # winpc: 서버와 스택이 먼저 떠 있어야 한다 (tools/winpc/server.sh up; FAKE_FOLLOW_ROUTE_M=0 tools/winpc/stack.sh up)
+  src/e2e_driver/tools/fake_host_mac.sh <collection bag> --start 20 --secs 120
+  ```
 
 ## 평가 관리자 (`tools/eval.sh`, Mac에서 실행)
 
