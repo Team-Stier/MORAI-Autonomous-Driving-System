@@ -1,6 +1,8 @@
 """Summary of one tools/two_pc.sh drive (files in ~/morai-eval/data): model step rate and latency (dbg_NAME.csv,
 /e2e_driver/debug), simulator stalls, scene reloads and RTF (gtraw_NAME.txt, raw Ego status), localization error and
 re-sync time after each reload (loc_NAME.csv against the raw Ego status), plus the probes' live_NAME.json rates.
+With the simulator clock (clk_NAME.csv, /sim_clock/state) the stack's stamps are tau: they are mapped back to the wall
+clock of the raw Ego status, and the live rho is compared with the RTF measured from the raw Ego status per minute.
 Usage: python3 drive_summary.py NAME"""
 import json, os, sys
 
@@ -15,13 +17,22 @@ def q(v):
 
 
 def main(name):
-    out = {}
+    out, clk = {}, None
+    if os.path.exists(f"{D}/clk_{name}.csv"):                                  # [wall, tau, rho, updates] at 10 Hz
+        lines = open(f"{D}/clk_{name}.csv").read().splitlines(); h = lines[0].split(",")
+        cols = [h.index("field.data%d" % i) for i in range(4)]
+        clk = np.array([[float(a.split(",")[c]) for c in cols] for a in lines[1:] if a.count(",") >= max(cols)])
+    wall = (lambda tau: np.interp(tau, clk[:, 1], clk[:, 0])) if clk is not None and len(clk) > 1 else (lambda tau: np.asarray(tau, float))
     d = [json.loads(l.split(",", 1)[1]) for l in open(f"{D}/dbg_{name}.csv").read().splitlines()[1:] if "," in l]
-    t = np.array([x["t0"] for x in d]); dt = np.diff(t); gap = dt > 0.3
-    out["steps"] = dict(n=len(t), mean_hz=round((len(t) - 1) / (t[-1] - t[0]), 2), share_0p1s=round(float(np.mean(dt <= 0.105)), 3),
-                        gaps_over_0p3s=int(gap.sum()), gap_s=round(float(dt[gap].sum()), 1),
-                        hz_without_gaps=round(float((~gap).sum() / dt[~gap].sum()), 2))
-    out["latency_ms"] = q([x["latency_ms"] for x in d]); out["server_ms"] = q([x["server_ms"] for x in d])
+    t = np.array([x["t0"] for x in d]); tw = wall(t); dt, dtw = np.diff(t), np.diff(tw); gap = dtw > 0.3
+    out["steps"] = dict(n=len(t), hz_sim=round((len(t) - 1) / (t[-1] - t[0]), 2), mean_hz_wall=round((len(t) - 1) / (tw[-1] - tw[0]), 2),
+                        share_0p1s_sim=round(float(np.mean(dt <= 0.105)), 3), gaps_over_0p3s_wall=int(gap.sum()),
+                        gap_s=round(float(dtw[gap].sum()), 1), hz_wall_without_gaps=round(float((~gap).sum() / dtw[~gap].sum()), 2))
+    tc = t - np.array([x["camera_age_ms"][0] for x in d]) * 1e-3              # front camera receipt, tau
+    lat = np.array([x["latency_ms"] for x in d]) * 1e-3
+    out["latency_ms_sim"] = q(1e3 * lat); out["latency_ms_wall"] = q(1e3 * (wall(tc + lat) - wall(tc)))
+    out["server_ms"] = q([x["server_ms"] for x in d])
+    if "loc_rejected" in d[-1]: out["loc_rejected"] = d[-1]["loc_rejected"]
     out["preprocess_ms"] = q([x["server"].get("preprocess_ms", 0) for x in d])
     m = [x["server"]["model_ms"] for x in d if "model_ms" in x["server"]]
     if m: out["model_ms"] = q(m)
@@ -48,10 +59,16 @@ def main(name):
         if np.sum(g[1:, 1][w] * gt[w]) > 30.0:
             per_min.append(round(float(step[w].sum() / np.sum(g[1:, 1][w] * gt[w])), 3))
     out["rtf_per_min"] = per_min
+    if clk is not None and len(clk) > 1:                                         # live rho vs measured RTF, per minute
+        out["rho_vs_rtf_per_min"] = []
+        for a in np.arange(g[0, 0], g[-1, 0] - 30.0, 60.0):
+            w = mv & (g[1:, 0] >= a) & (g[1:, 0] < a + 60.0); c = (clk[:, 0] >= a) & (clk[:, 0] < a + 60.0)
+            if np.sum(g[1:, 1][w] * gt[w]) > 30.0 and c.any():
+                out["rho_vs_rtf_per_min"].append((round(float(np.median(clk[c, 2])), 3), round(float(step[w].sum() / np.sum(g[1:, 1][w] * gt[w])), 3)))
 
     if os.path.exists(f"{D}/loc_{name}.csv"):
         lc = [l.split(",") for l in open(f"{D}/loc_{name}.csv").read().splitlines()[1:]]
-        lt = np.array([int(a[0]) * 1e-9 for a in lc]); lxy = np.array([[float(a[1]), float(a[2])] for a in lc])
+        lt = wall(np.array([int(a[0]) * 1e-9 for a in lc])); lxy = np.array([[float(a[1]), float(a[2])] for a in lc])
         err = np.hypot(lxy[:, 0] - np.interp(lt, g[:, 0], g[:, 2]), lxy[:, 1] - np.interp(lt, g[:, 0], g[:, 3]))
         k = np.clip(np.searchsorted(g[:, 0], lt), 1, len(g) - 1)
         fresh = np.minimum(np.abs(g[k, 0] - lt), np.abs(g[k - 1, 0] - lt)) < 0.2     # GT within 0.2 s, not across a gap
@@ -65,7 +82,7 @@ def main(name):
             after = (lt >= r) & (err < 3.0)
             sync.append(round(float(lt[after][0] - r), 1) if after.any() else None)
         out["resync_s_after_reload"] = sync
-    out["route_s_spawn_vs_3s_after_reload"] = [round(d[0]["s"], 1)] + [round(float(np.interp(r + 3.0, t, [x["s"] for x in d])), 1) for r in resets]
+    out["route_s_spawn_vs_3s_after_reload"] = [round(d[0]["s"], 1)] + [round(float(np.interp(r + 3.0, tw, [x["s"] for x in d])), 1) for r in resets]
     if os.path.exists(f"{D}/sec_{name}.csv"):                                  # section flips: localization pose jumps
         sec = np.array([int(l.split(",")[1]) for l in open(f"{D}/sec_{name}.csv").read().splitlines()[1:] if "," in l])
         out["section_changes"] = int(np.count_nonzero(np.diff(sec))) if len(sec) else 0

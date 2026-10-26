@@ -167,6 +167,13 @@ for attempt in {1..100}; do
 done
 rosnode list >/dev/null 2>&1 || fail "ROS master did not start; package launch attempts will continue"
 
+# E2E_SIM_CLOCK=1: the whole stack runs on the estimated simulator time (e2e_driver sim_clock_node publishes /clock),
+# because MORAI runs below real time and sends no simulation time (src/e2e_driver/README.md). Set before any node starts.
+if [[ "${E2E_SIM_CLOCK:-0}" == 1 ]]; then
+    rosparam set /use_sim_time true
+    start_process sim_clock bash -c "source '$WORKSPACE/devel/setup.bash' && exec rosrun e2e_driver sim_clock_node.py"
+fi
+
 # Serial chain: MORAI -> bridge (cameras, GPS, IMU, status) -> e2e_driver (model node) -> /control_cmd -> speed_filter
 # -> bridge -> MORAI. LiDAR as in collection: velodyne_driver takes UDP 2368 -> /velodyne_packets, which vlp16_bev (the
 # model's BEV) and velodyne_pointcloud -> lidar_leveler -> localization tunnel_wall both read. localization and

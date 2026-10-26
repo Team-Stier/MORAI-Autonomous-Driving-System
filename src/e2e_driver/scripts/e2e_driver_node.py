@@ -25,7 +25,7 @@ import numpy as np
 
 from e2e_driver.control import DEFAULTS, Controller, Plan
 from e2e_driver.inputs import CAMERAS, Inputs
-from e2e_driver.route import Odometer, Route, RouteTracker
+from e2e_driver.route import Odometer, PoseGuard, Route, RouteTracker
 from e2e_driver import wire
 
 
@@ -45,6 +45,7 @@ class Node:
         self.server = (P("server_host", "127.0.0.1"), int(P("server_port", 47011)))
         self.max_inflight = int(P("max_inflight", 2))
         self.follow_m, self.pose = float(P("fake_follow_route_m", 0.0)), None    # > 0: route_kappa for the fake backend
+        self.guard = PoseGuard()                                                     # localization guard (on_ego)
         self.sock, self.pending, self.next_id, self.skipped = None, {}, 0, 0
         self.plan, self.plan_id, self.v, self.plan_lock = None, -1, 0.0, threading.Lock()
         self.pub = rospy.Publisher(P("command_topic", "/control_cmd"), CtrlCmd, queue_size=1, tcp_nodelay=True)
@@ -78,7 +79,10 @@ class Node:
         # While GPS is blacked out the EKF / tunnel_wall pose drifts along the road (23-30 m in run1023h-w1-007): route
         # progress then runs on the competition_status odometer from the last GPS-backed fix instead.
         p = m.pose.pose
-        self.pose = (p.position.x, p.position.y, yaw_of(p.orientation))
+        t, x, y, yaw = m.header.stamp.to_sec(), p.position.x, p.position.y, yaw_of(p.orientation)
+        if not self.guard.ok(t, x, y, yaw, self.v):
+            return
+        self.pose = (x, y, yaw)
         if not self.gps_ok:
             return
         self.tracker.update(m.header.stamp.to_sec(), p.position.x, p.position.y, yaw_of(p.orientation), self.odo.d)
@@ -127,8 +131,8 @@ class Node:
             n=resp["id"], t0=meta["t0"], s=round(meta["s"], 2), nav=meta["nav"], problems=meta["problems"],
             latency_ms=round(1e3 * (t_pub - meta["camera_newest"][0]), 1),
             camera_age_ms=[round(1e3 * (meta["t0"] - x), 1) for x in meta["camera_newest"]],
-            assemble_ms=round(1e3 * (meta["t_req"] - meta["t0"]), 1), server_ms=round(1e3 * (t_resp - meta["t_req"]), 1),
-            server=resp.get("timing", {}), inflight=meta["inflight"], skipped=self.skipped, v=round(self.v, 3),
+            assemble_ms=round(1e3 * (meta["w_req"] - meta["w0"]), 1), server_ms=round(1e3 * (time.perf_counter() - meta["w_req"]), 1),
+            server=resp.get("timing", {}), inflight=meta["inflight"], skipped=self.skipped, loc_rejected=self.guard.rejected, v=round(self.v, 3),
             v0=round(float(resp["v0"]), 3), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info))))
 
     def infer_loop(self):
@@ -137,9 +141,9 @@ class Node:
         while not rospy.is_shutdown():
             rest = next_t - rospy.get_time()
             if rest > 0:
-                time.sleep(rest)
+                rospy.sleep(rest)                               # on tau when /use_sim_time: 10 Hz of simulation time
             next_t = max(next_t + period, rospy.get_time() - period)        # do not burst after a stall
-            t0 = rospy.get_time()
+            t0, w0 = rospy.get_time(), time.perf_counter()               # t0 on tau (sim clock), w0 wall for timings
             s = self.tracker.s_at(self.odo.at(t0))
             if s is None:
                 rospy.logwarn_throttle(5.0, "e2e_driver: no route progress yet (waiting for /localization/ego)")
@@ -160,7 +164,7 @@ class Node:
                 rid, self.next_id = self.next_id, self.next_id + 1
                 req["id"] = rid
                 self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"],
-                                         t_req=rospy.get_time(), inflight=len(self.pending))
+                                         w0=w0, w_req=time.perf_counter(), inflight=len(self.pending))
                 wire.send(self.sock, req)
             except Exception as e:
                 rospy.logerr_throttle(2.0, "e2e_driver: model server: %s", e)

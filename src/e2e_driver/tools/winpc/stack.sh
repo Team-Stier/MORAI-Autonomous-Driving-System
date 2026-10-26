@@ -8,7 +8,7 @@ case ${1:-} in
   up)
     [[ -e $EVAL/run/stack.pid ]] && kill -0 "$(cat "$EVAL/run/stack.pid")" 2>/dev/null && { echo "stack already up"; exit 2; }
     ss -ltn | grep -q ':11311 ' && { echo "port 11311 busy: another ROS master runs on the WSL host network" >&2; exit 3; }
-    setsid ./chroot.sh stack "E2E_FAKE_FOLLOW_ROUTE_M=${FAKE_FOLLOW_ROUTE_M:-0} exec bash run.sh" > "$EVAL/run/stack.log" 2>&1 < /dev/null &
+    setsid ./chroot.sh stack "E2E_SIM_CLOCK=${E2E_SIM_CLOCK:-1} E2E_FAKE_FOLLOW_ROUTE_M=${FAKE_FOLLOW_ROUTE_M:-0} exec bash run.sh" > "$EVAL/run/stack.log" 2>&1 < /dev/null &
     echo $! > "$EVAL/run/stack.pid"; echo "stack pid $(cat "$EVAL/run/stack.pid"), log $EVAL/run/stack.log" ;;
   down)
     [[ -e $EVAL/run/stack.pid ]] || exit 0

@@ -64,6 +64,29 @@ class RouteTracker:
         return float(self.r.s[self.i]) + (odo - self.fix_odo)
 
 
+class PoseGuard:
+    """localization guard: drop non-finite poses and jumps the vehicle cannot make (the filter sometimes swings tens to
+    hundreds of metres between messages, once to 1.9e17 m); route progress then runs on the odometer. A new track that
+    stays self-consistent for 1 s (a scene reload, a filter restart) is taken over."""
+
+    def __init__(self, hold=1.0):
+        self.hold, self.fix, self.cand, self.rejected = hold, None, None, 0
+
+    def ok(self, t, x, y, yaw, v):
+        if not np.isfinite([x, y, yaw]).all() or max(abs(x), abs(y)) > 1e6:
+            self.rejected += 1; return False
+        lim = lambda t1: abs(v) * max(t - t1, 0.0) * 1.5 + 2.0
+        if self.fix is None or np.hypot(x - self.fix[1], y - self.fix[2]) <= lim(self.fix[0]):
+            self.fix, self.cand = (t, x, y), None; return True
+        if self.cand is not None and np.hypot(x - self.cand[2], y - self.cand[3]) <= lim(self.cand[1]):
+            self.cand = (self.cand[0], t, x, y)
+            if t - self.cand[0] >= self.hold:
+                self.fix, self.cand = (t, x, y), None; return True
+        else:
+            self.cand = (t, t, x, y)
+        self.rejected += 1; return False
+
+
 class Odometer:
     """distance driven (m): trapezoid over competition_status signed speed samples."""
 
