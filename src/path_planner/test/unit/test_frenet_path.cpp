@@ -157,6 +157,19 @@ void expectPathGeometry(const interfaces::Path& path, const nav_msgs::Odometry& 
   }
 }
 
+void expectStopPath(const interfaces::Path& path) {
+  ASSERT_GE(path.points.size(), 2u);
+  for (const auto& point : path.points) {
+    EXPECT_DOUBLE_EQ(point.velocity, 0.0);
+    EXPECT_DOUBLE_EQ(point.acceleration, 0.0);
+    const auto& q = point.pose.pose.orientation;
+    EXPECT_NEAR(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w, 1.0, 1e-8);
+  }
+  const auto& a = path.points.front().pose.pose.position;
+  const auto& b = path.points.back().pose.pose.position;
+  EXPECT_GT(std::hypot(b.x - a.x, b.y - a.y), 1e-6);
+}
+
 double globalMse(const interfaces::Path& path, const pp::Route& global) {
   double squared_error = 0;
   for (const auto& point : path.points) {
@@ -238,6 +251,40 @@ TEST(FrenetPath, ProducesPathAtCapturedKcityTurnPose) {
   ASSERT_EQ(path.points.size(), 41u);
   expectPathGeometry(path, ego);
   EXPECT_LT(globalMse(path, global), 1.0);
+}
+
+TEST(FrenetPath, KeepsStopOutputAtM1C5RecordedGuardrailPose) {
+  std::ifstream map_file(std::string(NP_PACKAGE_DIR) + "/../map/kcity_lanelet2.osm");
+  ASSERT_TRUE(map_file.good());
+  pp::SharedMap shared({pp::readLaneletMap(
+      std::string(std::istreambuf_iterator<char>(map_file), std::istreambuf_iterator<char>()))});
+  std::ifstream checkpoint_file(std::string(NP_PACKAGE_DIR) + "/../map/checkpoints.csv");
+  ASSERT_TRUE(checkpoint_file.good());
+  const auto checkpoints = pp::readCheckpoints(
+      std::string(std::istreambuf_iterator<char>(checkpoint_file), std::istreambuf_iterator<char>()));
+  ASSERT_GT(checkpoints.size(), 8u);
+  auto ego = egoAt(-95.24016393827156, 224.7700334929457);
+  ego.pose.pose.position.z = 28.688052260840887;
+  auto& q = ego.pose.pose.orientation;
+  q.x = 0.0017512411029535137; q.y = -0.003276573444244861;
+  q.z = -0.8827448799771827; q.w = -0.4698379232194153;
+  auto objects = obstacleAt(-100.28080972822048, 242.57061776089108,
+      36.895093704856734, 2.3160286322755046);
+  auto& object = objects.objects.front();
+  object.bbox_pose.position.z = object.position.z = 29.386320114135742;
+  object.bbox_pose.orientation.z = -0.6612380653211919;
+  object.bbox_pose.orientation.w = 0.7501761266331308;
+  object.bbox_size.z = 0.9989433288574219;
+  pp::GlobalPath global_core(shared);
+  const auto global = std::get<5>(global_core.process(ego, interfaces::CompetitionVehicleStatus{},
+      objects, tf2_msgs::TFMessage{}, sensor_msgs::Imu{},
+      pp::Checkpoints(checkpoints.begin() + 8, checkpoints.end())));
+  ASSERT_TRUE(static_cast<bool>(global));
+  pp::FrenetPath core({}, shared);
+  expectStopPath(core.process(ego, objects, global));
+  const auto cleared = core.process(ego, interfaces::Objects{}, global);
+  ASSERT_GE(cleared.points.size(), 2u);
+  expectPathGeometry(cleared, ego);
 }
 
 TEST(FrenetPath, GeneratesPathStartingOutsideRoadWithoutObjects) {
@@ -345,11 +392,19 @@ TEST(FrenetPath, SolidBoundaryDoesNotCreateNeighborReference) {
   EXPECT_NEAR(path.points.back().pose.pose.position.y, 0, 1e-8);
 }
 
-TEST(FrenetPath, ReturnsEmptyWhenEveryCandidateIsBlocked) {
+TEST(FrenetPath, HoldsStopWhileBlockedAndResumesWhenClear) {
   auto shared = straightMap();
   pp::FrenetPath core({}, shared);
-  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(12, 0, 4, 40),
-      route(shared, {300, 301, 302})).points.empty());
+  const auto global = route(shared, {300, 301, 302});
+  for (int i = 0; i < 3; ++i) {
+    const auto stopped = core.process(egoAt(2), obstacleAt(12, 0, 4, 40), global);
+    expectStopPath(stopped);
+    ASSERT_FALSE(stopped.points.empty());
+    EXPECT_NEAR(stopped.points.front().pose.pose.position.x, 2.0, 1e-8);
+  }
+  const auto resumed = core.process(egoAt(2), interfaces::Objects{}, global);
+  ASSERT_GE(resumed.points.size(), 2u);
+  expectPathGeometry(resumed, egoAt(2));
 }
 
 TEST(FrenetPath, UsesMapObjectsWithTranslatedAndRotatedEgo) {
@@ -364,8 +419,8 @@ TEST(FrenetPath, UsesMapObjectsWithTranslatedAndRotatedEgo) {
   ego.pose.pose.orientation.z = ego.pose.pose.orientation.w = std::sqrt(0.5);
   const auto global = route(shared, {300});
   ASSERT_FALSE(core.process(ego, interfaces::Objects{}, global).points.empty());
-  EXPECT_TRUE(core.process(ego, obstacleAt(100, 210, 4, 40, std::acos(-1.0) / 2),
-      global).points.empty());
+  expectStopPath(core.process(ego, obstacleAt(100, 210, 4, 40, std::acos(-1.0) / 2),
+      global));
 }
 
 TEST(FrenetPath, FindsUnblockedFollowingBranch) {
@@ -402,7 +457,7 @@ TEST(FrenetPath, DetectsThinObstacleBetweenOutputSamples) {
   pp::FrenetPath core(parameters, shared);
   const auto global = route(shared, {300, 301, 302});
   EXPECT_FALSE(core.process(egoAt(2), interfaces::Objects{}, global).points.empty());
-  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(8, 0, 0.01, 40), global).points.empty());
+  expectStopPath(core.process(egoAt(2), obstacleAt(8, 0, 0.01, 40), global));
 }
 
 TEST(FrenetPath, UsesObservedBoundingBoxRotation) {
@@ -412,8 +467,8 @@ TEST(FrenetPath, UsesObservedBoundingBoxRotation) {
   pp::FrenetPath core(parameters, shared);
   const auto global = route(shared, {300, 301, 302});
   EXPECT_FALSE(core.process(egoAt(2), obstacleAt(12, 3, 8, 0.2), global).points.empty());
-  EXPECT_TRUE(core.process(egoAt(2), obstacleAt(12, 3, 8, 0.2, std::acos(-1.0) / 4),
-      global).points.empty());
+  expectStopPath(core.process(egoAt(2), obstacleAt(12, 3, 8, 0.2, std::acos(-1.0) / 4),
+      global));
 }
 
 TEST(FrenetPath, KeepsHorizontalObjectsIndependentOfEgoRollAndPitch) {
