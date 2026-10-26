@@ -19,7 +19,7 @@ checkpoint_keep_m: 1.5
 checkpoint_blend_m: 12.0
 checkpoints_file: ../map/checkpoints.csv
 # Set [6254] to keep the original lane through that stop line.
-protected_stop_line_ids: []
+protected_stop_line_ids: [6254]
 protected_stop_lines_file: ../map/kcity_lanelet2.osm
 transition_lengths_m: [8.0, 12.0, 16.0]
 lateral_offsets_m: [0.0, -1.5, 1.5, -2.5, 2.5, -3.5, 3.5, -4.5, 4.5]
