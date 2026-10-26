@@ -596,6 +596,55 @@ TEST(HybridAstar, BlockedWideRoadDoesNotTurnBackTowardPredecessor) {
   }
 }
 
+TEST(HybridAstar, PassesCheckpointWithinKeepAfterBypassAndLimitsOffset) {
+  auto map = straightMap(6);
+  pp::HybridAstarParameters parameters;
+  parameters.path_length_m = 40;
+  parameters.collision_margin_m = 0.4;
+  parameters.return_length_m = 8;
+  parameters.checkpoint_keep_m = 1.5;
+  parameters.checkpoint_blend_m = 12;
+  parameters.lateral_offsets_m = {0, -1.5, 1.5, -2.5, 2.5, -3.5, 3.5, -4.5, 4.5};
+  parameters.checkpoints = {{34, 0}};
+  pp::HybridAstar core(parameters, map);
+  const auto ego = egoAt(2);
+  const auto objects = obstacleAt(18, 0, 3, 2);
+  const auto path = core.process(ego, objects, route(map, {302, 303, 304}), pp::PredictedObjects{});
+  expectGeometry(path, ego, parameters);
+  ASSERT_FALSE(path.points.empty());
+  expectClear(path, objects, parameters, 6);
+  double nearest = 1e9, excursion = 0;
+  for (const auto& point : path.points) {
+    const auto& p = point.pose.pose.position;
+    nearest = std::min(nearest, std::hypot(p.x - 34, p.y));
+    excursion = std::max(excursion, std::abs(p.y));
+  }
+  EXPECT_LE(nearest, 2.0);
+  EXPECT_GT(excursion, 2);
+  EXPECT_LT(excursion, 5.0);
+}
+
+TEST(HybridAstar, PullsLaneCenterIntoOffCenterCheckpoint) {
+  auto map = straightMap(6);
+  pp::HybridAstarParameters parameters;
+  parameters.checkpoint_keep_m = 1.5;
+  parameters.checkpoint_blend_m = 12;
+  parameters.checkpoints = {{30, 3.2}};
+  pp::HybridAstar core(parameters, map);
+  const auto ego = egoAt(2);
+  const auto path = core.process(ego, interfaces::Objects{}, route(map, {302, 303, 304}),
+                                 pp::PredictedObjects{});
+  expectGeometry(path, ego, parameters);
+  ASSERT_FALSE(path.points.empty());
+  double nearest = 1e9;
+  for (const auto& point : path.points) {
+    const auto& p = point.pose.pose.position;
+    nearest = std::min(nearest, std::hypot(p.x - 30, p.y - 3.2));
+  }
+  EXPECT_LE(nearest, 2.0);
+  EXPECT_GT(pathLength(path), 40);
+}
+
 TEST(HybridAstar, DISABLED_MeasurePrimitiveBudget) {
   auto map = straightMap(6);
   const auto ego = egoAt(2, 0.8, 0.08);
