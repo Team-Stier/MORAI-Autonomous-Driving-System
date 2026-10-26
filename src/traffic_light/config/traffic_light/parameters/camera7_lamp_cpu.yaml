@@ -1,0 +1,10 @@
+search_bottom_ratio: 0.58
+min_area: 4
+max_area: 280
+max_span: 36
+max_aspect: 2.6
+link_distance_px: 28
+center_sigma_px: 90
+ambiguity_ratio: 0.85
+color_margin: 18
+minimum_repeat: 2
