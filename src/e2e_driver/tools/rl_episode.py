@@ -24,8 +24,8 @@ Records = the learner's spool (Alpamayo-Cosmos train/rl/episodes.py): OUT is the
   OUT/NAME/inflight.json   {version, episode}, written at every episode start (version: --lora-latest's "version")
   OUT/NAME/episodes.jsonl  one line per episode: end, time, return and its parts, scorer counts and events, weather
   OUT/NAME/epK/steps.jsonl one line per decision: the rl_reward record + critic_obs (rl_critic.FIELDS order) + req, out:
-                           this world's engine dumps (--dump-dir: model_server --dump DIR, requests carrying t_wall and
-                           world), moved into epK/ as K.req.bin / K.out.bin. Without --dump-dir the decisions are a
+                           this world's engine dumps (--dump-dir: model_server --dump DIR, DIR/world{n}/, requests
+                           carrying t_wall and world), moved into epK/ as K.req.bin / K.out.bin. Without --dump-dir the decisions are a
                            10 Hz grid of simulator time from play (baseline drives for the critic warm start).
   OUT/NAME/epK/done.json   {terminated, truncated, end}, written last
   OUT/NAME/epK/rows.json.gz, timeline.json   the 20 Hz Ego states the scorer read and the reward timeline (rl_reward.py
@@ -195,7 +195,7 @@ class Episodes(em.Manager):
         other."""
         time.sleep(1.0)                                   # the last responses land ~0.1 s after the pause
         inside, outside = [], []
-        for p in Path(self.a.dump_dir).expanduser().glob("*/req_*.bin"):
+        for p in Path(self.a.dump_dir).expanduser().glob(f"world{self.a.world}/req_*.bin" if self.a.world else "*/req_*.bin"):
             h = head(p)
             if self.a.world and h.get("world") != self.a.world:
                 continue

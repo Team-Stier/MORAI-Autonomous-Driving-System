@@ -62,7 +62,7 @@ class FakeSim:
         if self.t_dec is None or RTF * (t - self.t_dec) >= 0.1 - 1e-9:
             self.t_dec, self.n = t, self.n + 1
             for world in (1, 2):
-                d = os.path.join(self.dump, f"sim{world - 1}")
+                d = os.path.join(self.dump, f"world{world}")         # the actor engine's --dump layout
                 os.makedirs(d, exist_ok=True)
                 rid = 100000 * world + self.n
                 open(os.path.join(d, f"req_{rid:06d}.bin"), "wb").write(wire.pack(dict(id=rid, t_wall=t, world=world, camera_jpegs=[[b"jpeg"]])))
@@ -117,10 +117,10 @@ def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S):
         assert len(r["critic_obs"]) == len(rl_critic.FIELDS) and all(math.isfinite(x) for x in r["critic_obs"]), r
         req = wire.unpack(open(os.path.join(d, r["req"]), "rb").read())
         assert req["world"] == 1 and abs(req["t_wall"] - r["t_wall"]) < 0.06, (req, r["t_wall"])
-    left = os.listdir(os.path.join(dump, "sim0"))
+    left = os.listdir(os.path.join(dump, "world1"))
     assert not left and all(f"{n:05d}.out.bin" in os.listdir(d) for n in range(len(recs))), left   # ours all moved:
     assert os.listdir(os.path.join(d, "outside")), "decisions past the end"                       # 1 s past the end
-    assert len(os.listdir(os.path.join(dump, "sim1"))) >= 2 * len(recs), "another world's dumps were touched"
+    assert len(os.listdir(os.path.join(dump, "world2"))) >= 2 * len(recs), "another world's dumps were touched"
     return mgr, ep, recs, tl, order
 
 
