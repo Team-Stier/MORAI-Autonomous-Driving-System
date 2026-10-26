@@ -531,6 +531,30 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
   - QAD 가짜 양자화 출력과의 평균 궤적 차이는 서비스 경로 0.017 m, eager 엔진 0.019 m다. 같은 가중치의 BF16은 0.065 m다.
   - ADE는 QAD 5.505, 엔진 5.504다.
 
+## RL actor 엔진 (`--sims`, `--expert2`, `--lora-watch`; RL_PLAN 3.1·5)
+
+배포 경로(`--sims` 없음)는 그대로다. 아래는 강화학습 actor와 구간 전환 배포에 더한 기능이다.
+
+```bash
+model_server.py --backend engine --ckpt <deliver> --sims 3 --rl-sigma 0.1 --expert2 --lora-watch <LoRA 파일> [--dump DIR]
+```
+- **묶음 추론** (`--sims N`): 노드 N개가 같은 포트에 붙는다. 연결 순서가 시뮬레이터 슬롯이고, 슬롯마다 ViT 캐시가 따로 있다.
+  - GPU 스레드는 준비된 요청을 시뮬레이터마다 하나씩 모아 한 묶음으로 돈다. 다른 시뮬레이터를 기다리지 않는다.
+  - 요청마다 ViT와 LLM 프리필은 배포 경로의 그래프로 돌고, K/V를 묶음 K/V의 자기 행으로 복사한다. 그다음 expert 10 step을 그래프 하나로 모든 행에 돈다(GEMM M = 64 × 행 수).
+  - 그래프는 (프리픽스 길이, 행 수, expert 벌)마다 하나다. 워밍업에서 모두 compile한다.
+- **노이즈 샘플러**: 매 Euler 스텝 뒤에 σ_k·ε_k를 더하고(DPPO·ReinFlow), 사슬 x_0..x_10을 남긴다. 사양은 learner의 `train/rl/policy.py` `Policy.sample`이다.
+  - σ는 `--rl-sigma`(값 하나 또는 스텝별 10개)이고, 요청의 `sigma`가 우선한다(평가 주행 0).
+  - 응답에 `chain` (11, 64, 2), `sigma`, `logp` (10,), `logp_sum`이 붙는다. logp_k = log N(x_{k+1}; x_k + dt·v, σ_k² I)이고, σ_k = 0이면 0이다.
+  - `--dump DIR`는 `DIR/simK/req_ID.bin`(관측)과 `out_ID.bin`(응답)을 남긴다.
+- **expert 두 벌** (`--expert2 [LORA]`, RL_PLAN 5 A): 두 번째 expert 벌을 VRAM에 올린다. 요청의 `expert: 1`이 그 벌을 고른다. 그래프가 벌마다 따로 있어서 전환 비용이 없다.
+  - 노드는 `expert2_zone: [s0, s1]`(경로 s, 고주로 `[1118.7, 1741.7]`) 안에서 `expert: 1`을 보낸다. 기본값 `[]`는 끔이다.
+  - 배포 경로에서도 쓸 수 있다(`--expert2 <LoRA>`, `--sims` 없이).
+- **LoRA 교체** (`--lora-watch FILE`): learner의 `LoRA.export` 파일(키 `<모듈>.lora_A/B`, metadata `scale`·`version`)을 받는다. learner가 FILE을 원자적으로 바꾸면 묶음 사이에(1초마다 확인) 마지막 expert 벌에 병합한다.
+  - 병합은 W' = bf16(W + scale·B·A)이다. 납품 BF16 가중치는 호스트 메모리에 둔다(약 4.6 GB).
+  - 양자화는 납품물 amax 그대로다(QAD의 격자, learner `merge()`와 같은 규칙). 그래서 병합한 납품물을 `engine.load`한 것과 같다.
+  - 제자리 복사라 CUDA 그래프를 다시 잡지 않는다. 이름이나 shape가 안 맞는 LoRA는 아무것도 바꾸기 전에 거부한다.
+- **시험**: `test/test_rl_server.py`(Mac, 가짜 백엔드: 동시 접속·슬롯·logp 식), `test/rl_engine_check.py`(5080), `test/server_bench.py --clients 3`.
+
 ## 두 대 구성 리허설: bc-250 MORAI + 5080 엔진 (10/27 00:56–01:19, 4.75비트 시험 납품물)
 
 - 순서: `SIM=bc250 tools/two_pc.sh up`(인자 없이 runtime.env의 납품물을 띄운다) → `two_pc.sh prep` → `VIEW_FPS=15 VIEW_WIDTH=1280 tools/eval.sh NAME --laps 1`.
