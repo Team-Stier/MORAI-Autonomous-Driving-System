@@ -80,7 +80,7 @@ local:
     "2": frenet_path.hpp
     "3": frenet_path.hpp
     "4": hybrid_astar.hpp
-    "5": hybrid_astar.hpp
+    "5": yielding_hybrid_astar.hpp
     "6": hybrid_astar.hpp
     "7": frenet_path.hpp
     "8": frenet_path.hpp
