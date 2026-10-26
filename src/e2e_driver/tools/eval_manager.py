@@ -102,13 +102,14 @@ class Sim:
                                          preserving_proto_field_name=True, use_integers_for_enums=True)
 
     def ego(self):
-        """transform = base_link (rear axle, 1.5 m behind the bounding box centre), map frame; rotation z = heading deg."""
+        """transform = base_link (rear axle, 1.5 m behind the bounding box centre), map frame; rotation z = heading deg.
+        global_velocity is in km/h (25.3 while competition_status said 7.03 m/s, 10/26)."""
         m = self.call("GetActorState", EGO)
         tf = m.get("transform", {})
         loc, rot, vs = tf.get("location", {}), tf.get("rotation", {}), m.get("vehicle_state", {})
         yaw, gv = math.radians(rot.get("z", 0.0)), m.get("global_velocity", {})
         return dict(x=loc.get("x", 0.0), y=loc.get("y", 0.0), yaw=yaw,
-                    v=gv.get("x", 0.0) * math.cos(yaw) + gv.get("y", 0.0) * math.sin(yaw),
+                    v=(gv.get("x", 0.0) * math.cos(yaw) + gv.get("y", 0.0) * math.sin(yaw)) / 3.6,   # km/h
                     hit=list(vs.get("collision_objects", [])), tl=vs.get("tl_id", {}).get("value"),
                     color=vs.get("tl_color", -1))      # TrafficLightColor = MORAI trafficLightStatus bits
 

@@ -477,7 +477,7 @@ tools/eval.sh <이름> --weather SUNNY:13              # 날씨·시각 고정
   - 총시간 = 랩 시간 + scorer 패널티(충돌, 신호, 속도, 차로) + 15 s × 복귀 횟수.
   - `lapNNN.rows.json.gz`: 판정에 쓴 20 Hz Ego 상태다. scorer 기준이 바뀌면 다시 판정할 수 있다.
   - scorer는 Alpamayo-Cosmos `tools/scorer`를 그대로 쓴다(`SCORER`, 기본값은 옆 체크아웃).
-  - Ego 상태 출처는 gRPC GetActorState다. transform은 뒷차축(base_link)이고, 속도는 global_velocity를 방향에 투영한 값이다. 충돌은 collision_objects, 신호는 tl_id/tl_color(MORAI 신호 비트와 같은 값)에서 얻는다.
+  - Ego 상태 출처는 gRPC GetActorState다. transform은 뒷차축(base_link)이고, 속도는 global_velocity(km/h, 실측 25.3 = competition_status 7.03 m/s)를 방향에 투영해 m/s로 바꾼 값이다. 충돌은 collision_objects, 신호는 tl_id/tl_color(MORAI 신호 비트와 같은 값)에서 얻는다.
   - 차로 면제 구역은 장면의 GPS 음영 상자다.
 - **시계**: bc-250은 실시간보다 느리고 gRPC GetTimestamp는 호스트 시계(μs)다. 그래서 랩 시간과 판정은 Ego 상태로 추정한 시뮬 시계로 낸다.
   - ρ = Σ|Δpos| / Σ|v|Δt를 최근 5 s 주행 구간에서 구한다. 정지 중이거나 점프가 있으면 직전 값을 유지한다.
