@@ -1,7 +1,11 @@
-"""Model server for e2e_driver_node: runs outside the Noetic chroot in the training venv (GPU), one client at a time.
+"""Model server for e2e_driver_node (GPU, Python 3.12 venv from server/requirements.lock), one client at a time; run.sh
+starts it (config/e2e_runtime.env), or by hand:
 
-  MORAI_VLA_TRAIN=~/morai-student/train ~/claude-bench/venv-teacher/bin/python model_server.py --backend hf --ckpt <student dir>
+  <venv>/bin/python model_server.py --backend hf --ckpt <student dir>
   ... --backend fake [--preprocess-config <any checkpoint/release dir with config.json>]
+
+The training code it needs is the pinned copy in server/vendor (tools/vendor_sync.sh, test/test_vendor.py);
+MORAI_VLA_TRAIN=<train dir> overrides it for development only.
 
 Each request (e2e_driver.wire frame, with an "id") -> assemble.build_sample + backend.prepare (CPU thread) ->
 backend.run (GPU, this thread) -> {id, accel, kappa, v0, xyz, timing}. The node keeps up to two requests in flight, so
@@ -12,9 +16,9 @@ import argparse, logging, os, queue, socket, sys, threading, time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path[:0] = [str(HERE), str(HERE.parent / "src"), os.path.expanduser(os.environ.get("MORAI_VLA_TRAIN", "~/morai-student/train"))]
-PYLIB = os.path.expanduser(os.environ.get("MORAI_VLA_PYLIB", "~/morai-student/pylib"))   # nvidia-modelopt for QAD
-if os.path.isdir(PYLIB): sys.path.append(PYLIB)                                          # checkpoints (modelopt_state.pth)
+sys.path[:0] = [str(HERE), str(HERE.parent / "src"), os.path.expanduser(os.environ.get("MORAI_VLA_TRAIN", str(HERE / "vendor")))]
+PYLIB = os.environ.get("MORAI_VLA_PYLIB")                     # dev only: nvidia-modelopt outside the venv (QAD checkpoints)
+if PYLIB and os.path.isdir(os.path.expanduser(PYLIB)): sys.path.append(os.path.expanduser(PYLIB))
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 
 from assemble import build_sample                     # noqa: E402

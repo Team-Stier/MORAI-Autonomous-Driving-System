@@ -399,6 +399,36 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
   - 원래 설정(30 s)에서는 정지 30.02 s 뒤 accel 0.2가 1 s 나갔다.
   - `1.0e9`로 바꾼 뒤에는 accel을 민 출력이 0개였다.
 
+## 대회 투입: 레포 클론 → `./run.sh`
+
+- **본선 구성** (규정): 운영측 PC(Windows 11, RTX 4060 Ti)가 시뮬레이터, 판정, 녹화를 돌린다. 팀 알고리즘 PC는 LAN으로 직접 연결한다.
+  - 제출 뒤에는 코드, 파라미터, 실행 인자를 고칠 수 없고 IP·Port만 고칠 수 있다. 실행 후에는 PC를 조작하지 않는다.
+- **알고리즘 PC 요구사항**:
+  - Ubuntu 20.04와 ROS Noetic. `run.sh`가 rosdep과 apt로 ROS 의존성을 설치하므로 sudo가 필요하다.
+  - Git LFS.
+  - NVIDIA GPU와 드라이버 570 이상(CUDA 12.8 torch 휠). 학생 BF16은 13.4 GiB라 16 GB급 GPU가 필요하다.
+  - Python 3.12. 모델 서버 venv는 uv 또는 python3.12로 만든다.
+- **준비** (한 번):
+  ```bash
+  git clone <this repo> && cd MORAI-Autonomous-Driving-System && git lfs pull
+  src/e2e_driver/tools/setup_server_env.sh            # .venv-model: server/requirements.lock (torch 2.8 cu128, transformers 4.57.1, alpamayo 고정 커밋)
+  # 기반 VLM(Qwen3-VL-4B-Instruct)을 HF 캐시에 미리 받아 둔다(대회장은 오프라인).
+  ```
+- **설정**: `src/e2e_driver/config/runtime.env`
+  - 모델 서버: `E2E_MODEL_PYTHON`(위 venv의 python), `E2E_MODEL_CKPT`(학생 체크포인트), `E2E_MODEL_VLM`, `HF_HOME`
+  - 시뮬레이터 시계: `E2E_SIM_CLOCK=1`
+  - 브릿지 설정 파일: `MORAI_BRIDGE_CONFIG`
+  - 대회 현장에서 바꿀 수 있는 IP·Port는 브릿지 설정 파일에만 있다. 시뮬레이터의 네트워크 프리셋 목적지는 이 PC의 LAN IP로 둔다.
+- **실행**: `./run.sh` 한 번이면 된다.
+  - 빌드한 뒤 모델 서버를 띄우고(모델이 로드되는 동안 ROS 노드가 함께 뜬다), 시뮬레이터 시계, 브릿지, LiDAR, localization, e2e_driver, speed_filter를 띄운다.
+  - 평가 관리자(아래)는 `run.sh`에 들어 있지 않고, 없어도 그대로 돈다.
+- **학습 코드 고정 사본**: 모델 서버가 쓰는 `morai_vla`(전처리, 모델 정의, lidar_bev)는 `server/vendor`에 고정 사본으로 둔다(`MANIFEST.sha256`).
+  - 납품 체크포인트의 학습 코드가 바뀌면 `tools/vendor_sync.sh <train dir>`로 갱신한다.
+  - `test/test_vendor.py [train dir]`가 목록과 바이트 단위 일치, vlp16_bev의 `lidar_bev.py` 사본을 확인한다.
+  - alpamayo 계열 패키지는 `requirements.lock`의 공개 GitHub 고정 커밋이다.
+- **winpc**: 아래 '실행 (winpc WSL)'처럼 ROS는 Noetic chroot에서, 모델 서버는 그 밖에서 띄운다(`tools/winpc/stack.sh`, `server.sh`). `runtime.env`의 `E2E_MODEL_PYTHON`은 비워 둔다.
+  - 운영측 PC의 UDP를 LAN에서 WSL로 받으려면 WSL mirrored 네트워킹이나 Windows 쪽 UDP 전달이 필요하다. 아직 정하지 않았다.
+
 ## 실행 (winpc WSL)
 
 ```bash

@@ -3,6 +3,12 @@ set -o pipefail
 
 WORKSPACE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$WORKSPACE" || exit 1
+# Runtime settings (model paths, simulator clock, bridge IP/port config); the environment overrides the file.
+while IFS='=' read -r key value; do
+    [[ $key =~ ^[A-Z_][A-Z0-9_]*$ ]] || continue
+    value="${value%%#*}"; value="${value%"${value##*[![:space:]]}"}"
+    [[ -n "${!key+x}" || -z $value ]] || export "$key=$value"           # empty: unset (an empty HF_HOME would misplace the cache)
+done < src/e2e_driver/config/runtime.env
 
 FAILURES=()
 CHILD_PIDS=()
@@ -167,6 +173,20 @@ for attempt in {1..100}; do
 done
 rosnode list >/dev/null 2>&1 || fail "ROS master did not start; package launch attempts will continue"
 
+# The model server (GPU venv, outside ROS) loads while the ROS nodes start; it listens on 127.0.0.1:47011.
+if [[ -n "${E2E_MODEL_PYTHON:-}" ]]; then
+    if [[ ! -x "$E2E_MODEL_PYTHON" ]]; then
+        fail "E2E_MODEL_PYTHON is not executable: $E2E_MODEL_PYTHON (src/e2e_driver/tools/setup_server_env.sh)"
+    else
+        model_args=(--backend "${E2E_MODEL_BACKEND:-hf}" --vlm "${E2E_MODEL_VLM:-Qwen/Qwen3-VL-4B-Instruct}")
+        [[ -n "${E2E_MODEL_CKPT:-}" ]] && model_args+=(--ckpt "$E2E_MODEL_CKPT")
+        read -r -a extra <<< "${E2E_MODEL_ARGS:-}"
+        start_process model_server env OMP_NUM_THREADS=4 MALLOC_MMAP_MAX_=0 MALLOC_TRIM_THRESHOLD_=1073741824 \
+            HF_HUB_OFFLINE=1 ${HF_HOME:+HF_HOME="$HF_HOME"} \
+            "$E2E_MODEL_PYTHON" -u "$WORKSPACE/src/e2e_driver/server/model_server.py" "${model_args[@]}" "${extra[@]}"
+    fi
+fi
+
 # E2E_SIM_CLOCK=1: the whole stack runs on the estimated simulator time (e2e_driver sim_clock_node publishes /clock),
 # because MORAI runs below real time and sends no simulation time (src/e2e_driver/README.md). Set before any node starts.
 if [[ "${E2E_SIM_CLOCK:-0}" == 1 ]]; then
@@ -179,7 +199,9 @@ fi
 # model's BEV) and velodyne_pointcloud -> lidar_leveler -> localization tunnel_wall both read. localization and
 # section_annotator feed route progress (nav text) and speed_filter's section; tf_publisher gives lidar_leveler its
 # /tf_static mount. The model server runs outside this chroot (see src/e2e_driver/README.md).
-export MORAI_BRIDGE_CONFIG="${MORAI_BRIDGE_CONFIG:-$WORKSPACE/src/e2e_driver/config/bridge_same_pc.yaml}"
+MORAI_BRIDGE_CONFIG="${MORAI_BRIDGE_CONFIG:-src/e2e_driver/config/bridge_same_pc.yaml}"
+[[ "$MORAI_BRIDGE_CONFIG" == /* ]] || MORAI_BRIDGE_CONFIG="$WORKSPACE/$MORAI_BRIDGE_CONFIG"
+export MORAI_BRIDGE_CONFIG
 start_package MORAI-UDP-Bridge-Node
 start_process velodyne roslaunch velodyne_pointcloud VLP16_points.launch
 start_package vlp16_bev

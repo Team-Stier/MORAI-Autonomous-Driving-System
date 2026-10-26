@@ -12,7 +12,7 @@ case ${1:-} in
     # 4 torch threads and heap-only malloc (no fresh mmap + page faults for the 35 MB pixel_values copies): server round
     # trip 75 -> 58 ms (p95 118 -> 71) next to a running simulator; numerics unchanged (elementwise ops, parity re-checked)
     OMP_NUM_THREADS=${OMP_NUM_THREADS:-4} MALLOC_MMAP_MAX_=${MALLOC_MMAP_MAX_:-0} MALLOC_TRIM_THRESHOLD_=${MALLOC_TRIM_THRESHOLD_:-1073741824} \
-    MORAI_VLA_TRAIN=$TRAIN HF_HUB_OFFLINE=1 setsid "$VENV/bin/python" -u "$WS/src/e2e_driver/server/model_server.py" "$@" \
+    MORAI_VLA_PYLIB=$HOME/morai-student/pylib HF_HUB_OFFLINE=1 setsid "$VENV/bin/python" -u "$WS/src/e2e_driver/server/model_server.py" "$@" \
       > "$EVAL/run/server.log" 2>&1 < /dev/null &
     echo $! > "$EVAL/run/server.pid"; echo "server pid $(cat "$EVAL/run/server.pid"), log $EVAL/run/server.log" ;;
   down)
