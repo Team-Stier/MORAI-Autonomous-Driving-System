@@ -2,8 +2,11 @@
 #include <path_planner/cores/hybrid_astar.hpp>
 #include <path_planner/libraries/checkpoints.hpp>
 #include <node_pipeline/extension.hpp>
+#include <pugixml.hpp>
 #include <cmath>
+#include <cstdint>
 #include <initializer_list>
+#include <limits>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -33,6 +36,51 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   if (params.has("checkpoints_file")) {
     for (const auto& checkpoint : readCheckpoints(params.asset("checkpoints_file")))
       p.checkpoints.emplace_back(checkpoint.x_m, checkpoint.y_m);
+  }
+  const auto stop_line_ids = params.has("protected_stop_line_ids")
+      ? params.numbers("protected_stop_line_ids") : std::vector<double>{};
+  std::unordered_set<double> unique_stop_line_ids;
+  for (double id : stop_line_ids)
+    if (!std::isfinite(id) || id <= 0 || std::floor(id) != id ||
+        id >= static_cast<double>(std::numeric_limits<std::int64_t>::max()) ||
+        !unique_stop_line_ids.insert(id).second)
+      throw std::invalid_argument("protected_stop_line_ids must contain unique positive integer IDs");
+  if (!stop_line_ids.empty()) {
+    const auto data = params.asset("protected_stop_lines_file");
+    pugi::xml_document document;
+    if (!document.load_buffer(data.data(), data.size()) || !document.child("osm"))
+      throw std::invalid_argument("invalid protected stop line OSM XML");
+    const auto osm = document.child("osm");
+    for (double id : stop_line_ids) {
+      const auto id_text = std::to_string(static_cast<std::int64_t>(id));
+      const auto way = osm.find_child_by_attribute("way", "id", id_text.c_str());
+      if (!way || std::string(way.find_child_by_attribute("tag", "k", "type").attribute("v").value()) != "stop_line")
+        throw std::invalid_argument("protected stop line way missing or not type=stop_line: " + id_text);
+      std::array<double, 4> line;
+      std::size_t count = 0;
+      for (const auto& ref : way.children("nd")) {
+        if (count >= 2 || !ref.attribute("ref"))
+          throw std::invalid_argument("protected stop line must have exactly two node refs: " + id_text);
+        const auto node = osm.find_child_by_attribute("node", "id", ref.attribute("ref").value());
+        if (!node) throw std::invalid_argument("protected stop line node missing: " + id_text);
+        for (std::size_t axis = 0; axis < 2; ++axis) {
+          const std::string text = node.find_child_by_attribute("tag", "k", axis == 0 ? "local_x" : "local_y")
+              .attribute("v").value();
+          std::size_t used = 0;
+          const double value = std::stod(text, &used);
+          if (used != text.size() || !std::isfinite(value))
+            throw std::invalid_argument("invalid protected stop line local_x/local_y: " + id_text);
+          line[2*count + axis] = value;
+        }
+        ++count;
+      }
+      if (count != 2)
+        throw std::invalid_argument("protected stop line must have exactly two node refs: " + id_text);
+      const double length = std::hypot(line[2] - line[0], line[3] - line[1]);
+      if (!std::isfinite(length) || length <= 1e-6)
+        throw std::invalid_argument("degenerate protected stop line: " + id_text);
+      p.protected_stop_lines.push_back(line);
+    }
   }
   p.transition_lengths_m = params.numbers("transition_lengths_m");
   if (params.has("lateral_offsets_m")) p.lateral_offsets_m = params.numbers("lateral_offsets_m");

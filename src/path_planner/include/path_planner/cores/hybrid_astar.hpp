@@ -4,6 +4,10 @@
 #include <lanelet2_routing/RoutingGraph.h>
 #include <lanelet2_core/geometry/Lanelet.h>
 #include <boost/geometry/algorithms/distance.hpp>
+#include <boost/geometry/algorithms/area.hpp>
+#include <boost/geometry/algorithms/correct.hpp>
+#include <boost/geometry/algorithms/difference.hpp>
+#include <boost/geometry/geometries/polygon.hpp>
 #include <lanelet2_traffic_rules/TrafficRulesFactory.h>
 #include <Eigen/Geometry>
 #include <algorithm>
@@ -32,6 +36,7 @@ struct HybridAstarParameters {
   std::vector<double> lateral_offsets_m{0.0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5, -6.0, 6.0, -7.5};
   // Official 3 m balls. Empty leaves the reference on the lane center.
   std::vector<std::pair<double, double>> checkpoints;
+  std::vector<std::array<double, 4>> protected_stop_lines;
   std::vector<double> steering_candidates_deg{-40, -35, -30, -25, -20, -15, -10, -5,
                                                0, 5, 10, 15, 20, 25, 30, 35, 40};
 };
@@ -94,6 +99,7 @@ class HybridAstar {
     std::vector<lanelet::BasicPolygon2d> roads;
     for (const auto& lane : road_lanes) roads.push_back(lane.polygon2d().basicPolygon());
     const double origin = project(center_reference.line, start.position.head<2>()).station;
+    protectStopLine(start, center_reference, origin);
     if (previous_offset_m_ != 0.0 && has_bypass_anchor_) {
       const auto projection = project(center_reference.line, bypass_anchor_);
       const auto value = sample(center_reference.line, projection.station);
@@ -125,8 +131,12 @@ class HybridAstar {
     if (previous_offset_m_ != 0.0 && has_bypass_anchor_)
       ramp_end = std::min(ramp_end, signedStation(center_reference.line, bypass_anchor_) - origin);
     // Hold the bypass only beside the obstacle, then come back. A checkpoint 11 m later stays reachable.
+    double ramp_begin = ramp_end - std::max(16.0, 2.0*prediction_speed_mps_);
+    if (protection_active_ && std::isfinite(block_far)) {
+      ramp_begin = protected_station_ - origin + 0.02;
+      ramp_end = ramp_begin + 8.0;
+    }
     const double hold_end = std::isfinite(block_far) ? std::max(ramp_end, block_far) : parameters_.path_length_m;
-    const double ramp_begin = ramp_end - std::max(16.0, 2.0*prediction_speed_mps_);
     const auto anchorFor = [&](const Reference& ref) -> Vec2 {
       const auto value = sample(center_reference.line, origin + std::max(0.0, ramp_end));
       const Vec2 tangent = value.first.head<2>().normalized();
@@ -159,8 +169,21 @@ class HybridAstar {
         point.head<2>() += offset*weight*Vec2(-tangent.y(), tangent.x());
         append(ref.line, point);
       };
-      for (double station = 0.0; station < line.stations.back(); station += 2.0) add(station);
-      add(line.stations.back());
+      std::vector<double> stations;
+      for (double station = 0.0; station < line.stations.back(); station += 2.0) stations.push_back(station);
+      if (protection_active_) {
+        for (double begin : {ramp_begin, hold_end})
+          for (double step = 0.0; step <= 8.0; step += 0.5) {
+            const double station = origin + begin + step;
+            if (station > 0.0 && station < line.stations.back()) stations.push_back(station);
+          }
+      }
+      stations.push_back(line.stations.back());
+      std::sort(stations.begin(), stations.end());
+      stations.erase(std::unique(stations.begin(), stations.end(), [](double a, double b) {
+        return std::abs(a - b) < 1e-8;
+      }), stations.end());
+      for (double station : stations) add(station);
       references.push_back(std::move(ref));
     }
     for (auto& ref : references) {
@@ -238,7 +261,10 @@ class HybridAstar {
       return emergencyStop(std::move(best), start, obstacles);
     }
     best = search(start, reference, center_reference.line, obstacles, std::move(best), best_progress);
-    if (pathLength(best) >= parameters_.path_length_m - 0.01) {
+    const double progress = project(center_reference.line, xy(best.points.back())).station - origin;
+    const bool protected_bypass_complete = protection_active_ && std::isfinite(block_far) &&
+        progress > std::max(block_far, stopping_distance);
+    if (pathLength(best) >= parameters_.path_length_m - 0.01 || protected_bypass_complete) {
       // Search primitives can bypass on either side of their reference.
       const double anchor_station = origin + std::max(0.0, ramp_end);
       const auto anchor = std::min_element(best.points.begin(), best.points.end(), [&](const auto& a, const auto& b) {
@@ -259,6 +285,7 @@ class HybridAstar {
  private:
   using Vec2 = Eigen::Vector2d;
   using Vec3 = Eigen::Vector3d;
+  using Polygon = boost::geometry::model::polygon<Vec2>;
   struct Line {
     std::vector<Vec3> points, second;
     std::vector<double> stations;
@@ -620,8 +647,91 @@ class HybridAstar {
       obstacle.departure_plane = anchor.plane;
     }
   }
+  void protectStopLine(const State& start, const Reference& reference, double origin) {
+    protection_active_ = false;
+    protected_roads_.clear();
+    for (const auto& line : parameters_.protected_stop_lines) {
+      const Vec2 a{line[0], line[1]}, b{line[2], line[3]}, edge = b - a;
+      for (std::size_t i = 1; i < reference.line.points.size(); ++i) {
+        const Vec2 p = reference.line.points[i - 1].head<2>();
+        const Vec2 delta = reference.line.points[i].head<2>() - p;
+        const double denominator = cross(delta, edge);
+        if (std::abs(denominator) < 1e-9) continue;
+        const double t = cross(a - p, edge)/denominator;
+        const double u = cross(a - p, delta)/denominator;
+        if (t < 0.0 || t > 1.0 || std::max({0.0, -u, u - 1.0})*edge.norm() > 8.0) continue;
+        const double station = project(reference.line, p + t*delta).station;
+        if (station < origin - parameters_.vehicle_front_m || station > origin + parameters_.path_length_m ||
+            (protection_active_ && station >= protected_station_)) continue;
+        protection_active_ = true;
+        protected_station_ = station;
+        protected_a_ = a; protected_b_ = b;
+        protected_normal_ = Vec2(-edge.y(), edge.x()).normalized();
+        if (protected_normal_.dot(delta) < 0.0) protected_normal_ = -protected_normal_;
+      }
+    }
+    if (!protection_active_) return;
+    protected_center_ = reference.line;
+    protected_max_offset_m_ = std::sqrt(project(reference.line, start.position.head<2>()).distance_squared) + 0.02;
+    for (const auto& lane : reference.lanes) {
+      const auto ring = lane.polygon2d().basicPolygon();
+      Polygon polygon;
+      polygon.outer().assign(ring.begin(), ring.end());
+      boost::geometry::correct(polygon);
+      protected_roads_.push_back(std::move(polygon));
+    }
+  }
+  bool protectedClear(const State& from, const State& to) const {
+    const auto side = [&](const Vec2& p) { return protected_normal_.dot(p - protected_a_); };
+    for (const auto* state : {&from, &to}) {
+      if (side(state->position.head<2>()) <= 0.0 &&
+          project(protected_center_, state->position.head<2>()).distance_squared >
+              protected_max_offset_m_*protected_max_offset_m_) return false;
+    }
+    // Both axle crossings must meet the finite line, including when the route itself misses it.
+    for (double axle : {0.0, parameters_.wheelbase_m}) {
+      const Vec2 a = from.position.head<2>() + axle*unit(from.heading);
+      const Vec2 b = to.position.head<2>() + axle*unit(to.heading);
+      const double before = side(a), after = side(b);
+      if (before > 0.0 || after <= 0.0) continue;
+      const Vec2 crossing = a + before/(before - after)*(b - a);
+      const double u = (crossing - protected_a_).dot(protected_b_ - protected_a_)/
+          (protected_b_ - protected_a_).squaredNorm();
+      if (u < 0.0 || u > 1.0) return false;
+    }
+    const auto box = sweptBox(egoBox(from, parameters_.road_margin_m), egoBox(to, parameters_.road_margin_m),
+        std::abs(parameters_.vehicle_front_m - parameters_.vehicle_rear_m)/2);
+    const Vec2 forward = unit(box.heading), lateral = normal(box.heading);
+    const std::array<Vec2, 4> corners{{box.center + box.half_length*forward + box.half_width*lateral,
+        box.center + box.half_length*forward - box.half_width*lateral,
+        box.center - box.half_length*forward - box.half_width*lateral,
+        box.center - box.half_length*forward + box.half_width*lateral}};
+    Polygon clipped;
+    Vec2 previous = corners.back();
+    double previous_side = side(previous);
+    for (const auto& point : corners) {
+      const double current_side = side(point);
+      if ((previous_side <= 0.0) != (current_side <= 0.0))
+        clipped.outer().push_back(previous + previous_side/(previous_side - current_side)*(point - previous));
+      if (current_side <= 0.0) clipped.outer().push_back(point);
+      previous = point; previous_side = current_side;
+    }
+    if (clipped.outer().size() < 3) return true;
+    boost::geometry::correct(clipped);
+    std::vector<Polygon> remaining{std::move(clipped)};
+    for (const auto& road : protected_roads_) {
+      std::vector<Polygon> next;
+      for (const auto& piece : remaining) boost::geometry::difference(piece, road, next);
+      remaining = std::move(next);
+      if (remaining.empty()) return true;
+    }
+    for (const auto& piece : remaining)
+      if (std::abs(boost::geometry::area(piece)) > 1e-6) return false;
+    return true;
+  }
   bool clear(const State& from, const State& to, const std::vector<Occupancy>& obstacles,
              bool emergency_prefix = false) const {
+    if (protection_active_ && !protectedClear(from, to)) return false;
     const double offset = std::abs(parameters_.vehicle_front_m - parameters_.vehicle_rear_m)/2;
     const auto margin = [&](const State& state) {
       return parameters_.collision_margin_m*(emergency_prefix ? std::min(1.0, state.distance/3.0) : 1.0);
@@ -765,11 +875,31 @@ class HybridAstar {
     return cost/count;
   }
   interfaces::Path connect(const State& start, const Reference& ref, double transition, double limit,
-                           const std::vector<Occupancy>& obstacles) const {
+                           const std::vector<Occupancy>& obstacles,
+                           double end_station = std::numeric_limits<double>::infinity()) const {
+    if (protection_active_ && ref.offset_m != 0.0 &&
+        protected_normal_.dot(start.position.head<2>() - protected_a_) <= 0.0) {
+      // Complete the center prefix before constructing any lateral connector.
+      const Reference center_ref{protected_center_, {}, 0.0, 0.0};
+      const double gate = protected_station_ + 0.02;
+      auto prefix = connect(start, center_ref, transition, limit, obstacles, gate);
+      const double length = pathLength(prefix);
+      const auto& pose = prefix.points.back().pose.pose;
+      const Vec2 position{pose.position.x, pose.position.y};
+      if (protected_normal_.dot(position - protected_a_) <= 0.0 || length >= limit - 1e-8) return prefix;
+      const auto value = sample(protected_center_, gate);
+      const double norm = value.first.head<2>().norm();
+      const State next{{pose.position.x, pose.position.y, pose.position.z}, poseYaw(pose),
+          std::atan(parameters_.wheelbase_m*cross(value.first.head<2>(), value.second.head<2>())/(norm*norm*norm)),
+          start.distance + length};
+      const auto suffix = connect(next, ref, transition, limit - length, obstacles);
+      prefix.points.insert(prefix.points.end(), suffix.points.begin() + 1, suffix.points.end());
+      return prefix;
+    }
     interfaces::Path path;
     path.points.push_back(output(start));
     const double origin = project(ref.line, start.position.head<2>()).station;
-    const double horizon = std::min(ref.line.stations.back() - origin, limit);
+    const double horizon = std::min({ref.line.stations.back() - origin, limit, end_station - origin});
     transition = std::min(transition, horizon);
     if (transition < 1e-6) return path;
     const auto end = sample(ref.line, origin + transition);
@@ -930,5 +1060,10 @@ class HybridAstar {
   bool has_bypass_anchor_ = false;
   Vec2 merge_anchor_ = Vec2::Zero();
   bool has_merge_anchor_ = false;
+  bool protection_active_ = false;
+  double protected_station_ = 0.0, protected_max_offset_m_ = 0.0;
+  Vec2 protected_a_ = Vec2::Zero(), protected_b_ = Vec2::Zero(), protected_normal_ = Vec2::Zero();
+  Line protected_center_;
+  std::vector<Polygon> protected_roads_;
 };
 }  // namespace path_planner

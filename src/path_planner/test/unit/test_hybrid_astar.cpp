@@ -425,6 +425,26 @@ TEST(HybridAstarParameters, LoadsGeometryCoefficientsAndRejectsUnsafeValues) {
   EXPECT_EQ(parameters.max_expansions, 12000);
   EXPECT_EQ(parameters.steering_candidates_deg, (std::vector<double>{-19, -9, 0, 9, 19}));
   EXPECT_EQ(parameters.transition_lengths_m, (std::vector<double>{8, 12, 16}));
+  EXPECT_TRUE(parameters.protected_stop_lines.empty());
+  const std::string protected_yaml = yaml +
+      "protected_stop_lines_file: ../map/kcity_lanelet2.osm\n";
+  const auto protected_parameters = pp::loadHybridAstarParameters(node_pipeline::ParamReader::fromString(
+      protected_yaml + "protected_stop_line_ids: [6254]\n", NP_PACKAGE_DIR));
+  ASSERT_EQ(protected_parameters.protected_stop_lines.size(), 1u);
+  const std::array<double, 4> expected_line{{-61.5067626, -155.3512513, -58.1281514, -155.4359442}};
+  for (std::size_t i = 0; i < expected_line.size(); ++i)
+    EXPECT_NEAR(protected_parameters.protected_stop_lines.front()[i], expected_line[i], 1e-6);
+  for (const auto& ids : {"[6254, 6254]", "[0]", "[-1]", "[6254.5]", "[.inf]", "[999999999]"}) {
+    SCOPED_TRACE(ids);
+    EXPECT_THROW(pp::loadHybridAstarParameters(node_pipeline::ParamReader::fromString(
+        protected_yaml + "protected_stop_line_ids: " + ids + "\n", NP_PACKAGE_DIR)), std::invalid_argument);
+  }
+  EXPECT_THROW(pp::loadHybridAstarParameters(node_pipeline::ParamReader::fromString(
+      yaml + "protected_stop_line_ids: [6254]\nprotected_stop_lines_file: absent.osm\n", NP_PACKAGE_DIR)),
+      std::runtime_error);
+  EXPECT_TRUE(pp::loadHybridAstarParameters(node_pipeline::ParamReader::fromString(
+      yaml + "protected_stop_line_ids: []\nprotected_stop_lines_file: absent.osm\n", NP_PACKAGE_DIR))
+      .protected_stop_lines.empty());
   const std::pair<std::string, std::string> invalid[] = {
       {"sample_step_m: 0.25", "sample_step_m: 0"},
       {"max_expansions: 12000", "max_expansions: 0"},
@@ -675,6 +695,103 @@ TEST(HybridAstar, PassesSampleBoxOnRecordedLaneGeometry) {
   EXPECT_LT(nearest, 3);
 }
 
+TEST(HybridAstar, CrossesRecordedStopLineInLaneBeforePassingSampleBox) {
+  std::ifstream map_file(std::string(NP_PACKAGE_DIR) + "/../map/kcity_lanelet2.osm");
+  ASSERT_TRUE(map_file.good());
+  const std::string map_data(std::istreambuf_iterator<char>(map_file), std::istreambuf_iterator<char>{});
+  auto map = pp::SharedMap({pp::readLaneletMap(map_data)});
+  pp::HybridAstarParameters parameters;
+  parameters.collision_margin_m = 0.4;
+  parameters.return_length_m = 8;
+  parameters.lateral_offsets_m = {0, -1.5, 1.5, -2.5, 2.5, -3.5, 3.5, -4.5, 4.5};
+  parameters.checkpoints = {{-59.885, -124.558}};
+  parameters.protected_stop_lines = {{{-61.5067626, -155.3512513, -58.1281514, -155.4359442}}};
+  const auto lanes = route(map, {130766, 130767, 130785, 130786, 100557,
+      130868, 130869, 130870, 130871, 130872, 130873, 100564});
+  pp::HybridAstar core(parameters, map);
+  auto ego = egoAt(-60.881, -171.432, 1.47);
+  ego.twist.twist.linear.x = 12.485;
+  const auto objects = obstacleAt(-60.610, -142.178, 2, 3, -83.219*pi/180);
+  const auto path = core.process(ego, objects, lanes, pp::PredictedObjects{});
+  expectGeometry(path, ego, parameters);
+  // The horizon is an upper bound; arrival is checked against CP4 below.
+  EXPECT_LE(pathLength(path), parameters.path_length_m + 1e-6);
+  const auto& line = parameters.protected_stop_lines.front();
+  const double dx = line[2] - line[0], dy = line[3] - line[1];
+  const auto side = [&](double x, double y) { return dx*(y - line[1]) - dy*(x - line[0]); };
+  double nearest = 1e9;
+  bool crossed = false;
+  for (std::size_t i = 0; i < path.points.size(); ++i) {
+    SCOPED_TRACE(i);
+    const auto& pose = path.points[i].pose.pose;
+    const double x = pose.position.x, y = pose.position.y;
+    nearest = std::min(nearest, std::hypot(x + 59.885, y + 124.558));
+    const auto footprint = rectangle(x, y, heading(pose.orientation), parameters.vehicle_front_m,
+        parameters.vehicle_rear_m, parameters.vehicle_half_width_m);
+    EXPECT_FALSE(overlap(footprint, rectangle(-60.610, -142.178, -83.219*pi/180, 1, 1, 1.5)));
+    for (const auto& corner : footprint) {
+      if (side(corner[0], corner[1]) > 0) continue;
+      double distance = 1e9;
+      for (const auto& lane : *lanes)
+        distance = std::min(distance, boost::geometry::distance(
+            lanelet::BasicPoint2d(corner[0], corner[1]), lane.polygon2d().basicPolygon()));
+      EXPECT_LE(distance, 1e-5);
+    }
+    if (i == 0) continue;
+    const auto& previous = path.points[i - 1].pose.pose.position;
+    const double before = side(previous.x, previous.y), after = side(x, y);
+    if (before <= 0 && after > 0) {
+      const double fraction = -before/(after - before);
+      const double cross_x = previous.x + fraction*(x - previous.x);
+      const double cross_y = previous.y + fraction*(y - previous.y);
+      const double along = ((cross_x - line[0])*dx + (cross_y - line[1])*dy)/(dx*dx + dy*dy);
+      EXPECT_GE(along, 0);
+      EXPECT_LE(along, 1);
+      crossed = true;
+    }
+  }
+  EXPECT_TRUE(crossed);
+  EXPECT_LT(nearest, 3);
+
+  // c4's policy snapshot already has its right footprint outside the approach lane.
+  pp::HybridAstar recorded_core(parameters, map);
+  auto recorded_ego = egoAt(-60.269228956158734, -172.40718148265537, 1.3390033500823972);
+  recorded_ego.twist.twist.linear.x = 12.399628049271683;
+  recorded_ego.twist.twist.angular.z = -0.1446368396282196;
+  const auto stopped = recorded_core.process(recorded_ego, objects, lanes, pp::PredictedObjects{});
+  ASSERT_EQ(stopped.points.size(), 1u);
+  EXPECT_DOUBLE_EQ(stopped.points.front().velocity, 0);
+  EXPECT_DOUBLE_EQ(stopped.points.front().acceleration, 0);
+}
+
+TEST(HybridAstar, DelaysBothBypassDirectionsUntilRearCrossesProtectedStopLine) {
+  auto map = straightMap(8);
+  for (double direction : {-1.0, 1.0}) {
+    SCOPED_TRACE(direction);
+    pp::HybridAstarParameters parameters;
+    parameters.collision_margin_m = 0.4;
+    parameters.return_length_m = 8;
+    parameters.lateral_offsets_m = {0, direction*3.5};
+    parameters.protected_stop_lines = {{{20, -8, 20, 8}}};
+    pp::HybridAstar core(parameters, map);
+    const auto ego = egoAt(2);
+    const auto objects = obstacleAt(34, 0, 2, 2);
+    const auto path = core.process(ego, objects, route(map, {302, 303, 304}), pp::PredictedObjects{});
+    expectGeometry(path, ego, parameters);
+    EXPECT_GT(pathLength(path), 49.9);
+    expectClear(path, objects, parameters, 8);
+    double excursion = 0;
+    for (const auto& point : path.points) {
+      const auto& pose = point.pose.pose;
+      if (pose.position.x <= 20)
+        EXPECT_NEAR(pose.position.y, 0, 0.05);
+      if (pose.position.x > 29 && pose.position.x < 36)
+        excursion = std::max(excursion, direction*pose.position.y);
+    }
+    EXPECT_GT(excursion, 2.5);
+  }
+}
+
 TEST(HybridAstar, KeepsBypassSideWhenPredictionShortensSafePrefix) {
   auto map = straightMap(8);
   pp::HybridAstarParameters parameters;
@@ -703,6 +820,36 @@ TEST(HybridAstar, KeepsBypassSideWhenPredictionShortensSafePrefix) {
     if (speed == 12.0) EXPECT_LE(max_y, 0.1);
     else EXPECT_GT(max_y, 2.0);
   }
+}
+
+TEST(HybridAstar, KeepsProtectedBypassSideAfterSafePartialSearch) {
+  auto map = straightMap(8, 11);
+  pp::HybridAstarParameters parameters;
+  parameters.collision_margin_m = 0.4;
+  parameters.return_length_m = 8;
+  parameters.lateral_offsets_m = {0, -3.5, 3.5};
+  parameters.protected_stop_lines = {{{10, -8, 10, 8}}};
+  pp::HybridAstar core(parameters, map);
+  auto ego = egoAt(2);
+  ego.twist.twist.linear.x = 12;
+  const auto objects = obstacleAt(24, 0, 2, 2);
+  const auto lanes = route(map, {302, 303, 304});
+  const auto first = core.process(ego, objects, lanes, pp::PredictedObjects{});
+  ASSERT_GT(pathLength(first), 35);
+  ASSERT_LT(pathLength(first), 49.9);
+  expectGeometry(first, ego, parameters);
+  expectClear(first, objects, parameters, 8);
+  const auto near_box = std::min_element(first.points.begin(), first.points.end(), [](const auto& a, const auto& b) {
+    return std::abs(a.pose.pose.position.x - 22) < std::abs(b.pose.pose.position.x - 22);
+  });
+  ASSERT_LT(near_box->pose.pose.position.y, -2);
+  pp::PredictedObjects predictions;
+  predictions.fill(obstacleAt(24, -3.5, 2, 2));
+  const auto second = core.process(ego, objects, lanes, predictions);
+  EXPECT_GT(pathLength(second), 13);
+  double max_y = -1e9;
+  for (const auto& point : second.points) max_y = std::max(max_y, point.pose.pose.position.y);
+  EXPECT_LE(max_y, 0.1);
 }
 
 TEST(HybridAstar, DISABLED_MeasurePrimitiveBudget) {
