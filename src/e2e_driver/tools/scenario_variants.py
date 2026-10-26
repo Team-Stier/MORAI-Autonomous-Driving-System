@@ -117,7 +117,7 @@ def make(base, route, rng, uid0, cps=None):
     for sp in d.get("spawnPointList", []):
         roundabout = sp.get("spawnVehicleTypeID", -1) != -1 and sp.get("MinDesiredVelocity_Custom", 0) < 30
         v = rng.uniform(10, 30) if roundabout else rng.uniform(50, 100)
-        period = rng.uniform(3, 10) if roundabout else rng.uniform(5, 15)
+        period = rng.uniform(3, 10) if roundabout else 5.0   # highway: the densest the rules allow (eval 10/27; collection 5-15 s)
         bias = rng.uniform(0, 0.4)
         # Safety distance and TTC never below the sample's 5 m / 1 s: lower values made roundabout NPCs drive into the
         # waiting Ego (64 collisions in 35 episodes, none with the sample scene).

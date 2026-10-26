@@ -46,13 +46,14 @@ for MODE in ${MODES:-map}; do
     rostopic echo -p /sim_clock/state > /data/clk_$N.csv & until [ -e /data/stop_$N ]; do sleep 1; done; kill %1 %2 %3\" > /dev/null 2>&1 < /dev/null &)"
   uv run --no-project -q --with numpy python "$HERE/lap_video.py" record http://192.168.0.15:8090/ "$OUT/frames_$MODE" > /dev/null 2>&1 &
   REC=$!
+  ssh winpc-wsl "(setsid nohup python3 -u $W/tools/objinfo_rec.py ~/morai-eval/data/obj_$N.csv > /dev/null 2>&1 < /dev/null & echo \$! > ~/morai-eval/run/obj.pid)"
   ssh winpc-wsl "(setsid nohup nvidia-smi --query-gpu=timestamp,memory.used --format=csv,noheader,nounits -lms 1000 > ~/morai-eval/data/vram_$N.csv 2>&1 < /dev/null & echo \$! > ~/morai-eval/run/vram.pid)"
   log "drive $N: eval lap seed $SEED"
   VIEW_FPS=15 VIEW_WIDTH=1280 bash "$HERE/eval.sh" "$N" --laps 1 --seed "$SEED" 2>&1 | grep -v "ev_poll_posix" | tee -a "$OUT/drive.log"
   kill $REC 2>/dev/null
-  ssh winpc-wsl "touch ~/morai-eval/data/stop_$N; kill \$(cat ~/morai-eval/run/vram.pid) 2>/dev/null"; sleep 3
+  ssh winpc-wsl "touch ~/morai-eval/data/stop_$N; kill \$(cat ~/morai-eval/run/vram.pid) \$(cat ~/morai-eval/run/obj.pid) 2>/dev/null"; sleep 3
   log "5080 during the lap: max $(ssh winpc-wsl "cut -d, -f2 ~/morai-eval/data/vram_$N.csv | sort -n | tail -1") MiB; server peaks: $(ssh winpc-wsl 'grep -o "gpu {[^}]*}" ~/morai-eval/run/server.log | tail -1')"
-  for f in tel dbg clk vram; do scp -q "winpc-wsl:morai-eval/data/${f}_$N.csv" "$OUT/"; done
+  for f in tel dbg clk vram obj; do scp -q "winpc-wsl:morai-eval/data/${f}_$N.csv" "$OUT/"; done
   scp -q winpc-wsl:morai-eval/run/stack.log "$OUT/stack_$MODE.log"
   cp -r "$HOME/morai-eval/runs/$N" "$OUT/eval_$MODE"
   log "drive $N done: $(tail -1 "$OUT/eval_$MODE/laps.jsonl" | cut -c1-200)"

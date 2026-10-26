@@ -68,7 +68,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("role", choices=["sim", "stack"])
     ap.add_argument("--listen", default="0.0.0.0:30011"); ap.add_argument("--connect")
-    ap.add_argument("--ports", default="9291,9293,9295,9297,9301,9999,9099,2368,9095")
+    ap.add_argument("--ports", default="9291,9293,9295,9297,9301,9999,9099,2368,9095,7505")   # 7505: Object Info (objinfo_rec.py)
     a = ap.parse_args()
     out = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     out.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1); out.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8 << 20)

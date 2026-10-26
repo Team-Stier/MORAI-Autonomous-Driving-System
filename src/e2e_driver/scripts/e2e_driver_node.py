@@ -169,7 +169,8 @@ class Node:
             assemble_ms=round(1e3 * (meta["w_req"] - meta["w0"]), 1), server_ms=round(1e3 * (time.perf_counter() - meta["w_req"]), 1),
             server=resp.get("timing", {}), pick=meta["pick"], inflight=meta["inflight"], skipped=self.skipped, loc_rejected=self.guard.rejected, v=round(self.v, 3),
             v0=round(float(resp["v0"]), 3), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info,
-            plan_a=[round(float(x), 3) for x in plan.a[:30]], plan_k=[round(float(x), 5) for x in plan.k[:30]]))))   # 3 s, for path checks
+            plan_a=[round(float(x), 3) for x in plan.a], plan_k=[round(float(x), 5) for x in plan.k],   # the 64 steps, for path checks
+            pose=[round(float(x), 3) for x in meta["pose"]] if meta["pose"] else None))))          # localization x, y, yaw at t0
 
     def infer_loop(self):
         period = 1.0 / self.rate
@@ -202,7 +203,7 @@ class Node:
                 pick = req.pop("pick", None)                    # frame selection stats: debug only, not sent
                 if self.reset_vit:
                     req["reset"], self.reset_vit = True, False
-                self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"], pick=pick,
+                self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"], pick=pick, pose=self.pose,
                                          w0=w0, w_req=time.perf_counter(), inflight=len(self.pending))
                 wire.send(self.sock, req)
             except Exception as e:
