@@ -26,10 +26,12 @@ def test_guard():
     assert all(g.ok(t, x, y, 0.0, v) for t, x, y in track[:50])
     assert not g.ok(1.0, 150.0, 80.0, 0.0, v)                                  # one swing of 170 m: dropped
     assert g.ok(1.02, 0.14 * 51, 0.0, 0.0, v)                                  # back on the track
-    assert not g.ok(1.04, float("nan"), 0.0, 0.0, v) and not g.ok(1.06, 1.9e17, 0.0, 0.0, v)
+    assert g.ok(1.03, 0.14 * 51 + 11.0, 0.0, 0.0, v)                           # an 11 m GPS-return correction passes
+    assert g.ok(1.04, 0.14 * 51, 0.0, 0.0, v)
+    assert not g.ok(1.05, float("nan"), 0.0, 0.0, v) and not g.ok(1.06, 1.9e17, 0.0, 0.0, v)
     jumped = [g.ok(1.1 + 0.02 * k, 500.0 + 0.14 * k, 0.0, 0.0, v) for k in range(60)]   # teleport: a new steady track
     assert not jumped[0] and not any(jumped[:49]) and all(jumped[51:]), jumped   # taken over after 1 s
-    alt = [g.ok(3.0 + 0.02 * k, (508.4 + 0.14 * k) if k % 2 else 0.0, 0.0, 0.0, v) for k in range(100)]
+    alt = [g.ok(3.0 + 0.02 * k, (508.4 + 0.14 * k) if k % 2 else 300.0, 0.0, 0.0, v) for k in range(100)]
     assert all(alt[1::2]) and not any(alt[0::2])                               # interleaved bad track never wins
 
 

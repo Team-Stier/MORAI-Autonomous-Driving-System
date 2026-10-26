@@ -65,17 +65,19 @@ class RouteTracker:
 
 
 class PoseGuard:
-    """localization guard: drop non-finite poses and jumps the vehicle cannot make (the filter sometimes swings tens to
-    hundreds of metres between messages, once to 1.9e17 m); route progress then runs on the odometer. A new track that
-    stays self-consistent for 1 s (a scene reload, a filter restart) is taken over."""
+    """safety net behind the localization fix (5edc217, which removed the 100-250 m swings and the 1.9e17 m value at
+    their source): drop non-finite poses and jumps far beyond any real correction, and run route progress on the
+    odometer meanwhile. The margin lets real corrections through at once: when GPS returns at the tunnel exit the
+    filter snaps 7-11 m (live, 10/26), up to ~25 m in collection. A new track that stays self-consistent for 1 s (a
+    scene reload, a filter restart) is taken over."""
 
-    def __init__(self, hold=1.0):
-        self.hold, self.fix, self.cand, self.rejected = hold, None, None, 0
+    def __init__(self, hold=1.0, margin=50.0):
+        self.hold, self.margin, self.fix, self.cand, self.rejected = hold, margin, None, None, 0
 
     def ok(self, t, x, y, yaw, v):
         if not np.isfinite([x, y, yaw]).all() or max(abs(x), abs(y)) > 1e6:
             self.rejected += 1; return False
-        lim = lambda t1: abs(v) * max(t - t1, 0.0) * 1.5 + 2.0
+        lim = lambda t1: abs(v) * max(t - t1, 0.0) * 1.5 + self.margin
         if self.fix is None or np.hypot(x - self.fix[1], y - self.fix[2]) <= lim(self.fix[0]):
             self.fix, self.cand = (t, x, y), None; return True
         if self.cand is not None and np.hypot(x - self.cand[2], y - self.cand[3]) <= lim(self.cand[1]):
