@@ -558,6 +558,25 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
     - 리허설(reh1)은 적용값을 기록하지 않았다. 그래서 디버그 기록에서 명령값만 복원했다(`debug-telemetry`, `reh1_lap000_1x_dash.mp4`).
   - 클러스터와 Vehicle Info(브레이크·악셀 그래프)는 아직 켜지 못했다. 시뮬레이터 창(800x800)이 화면 크기 0x0인 헤드리스 Xwayland의 화면 밖에 있어, XTEST 클릭이 전달되지 않는다.
 
+## 납품 주행 (`tools/delivery_drive.sh`, Mac에서 한 번 실행)
+
+두 호스트를 캠페인 세션에서 받은 뒤 실행한다:
+```bash
+src/e2e_driver/tools/delivery_drive.sh /home/taeyun_kim/morai-eval/engine/wowmayo_final wowmayo 7
+```
+1. 코드를 winpc로 동기화하고, `runtime.env`의 `E2E_MODEL_CKPT`를 납품물로, `control.mode`를 map으로 둔다.
+2. bc-250에 시뮬레이터가 없으면 MSC `execute`로 띄운다. 런처가 MSC 상태를 안 보내면 멈추고 알린다.
+3. `two_pc.sh up`(엔진 서버, 스택, 터널)과 `prep`(맵, 프리셋, 장면)을 실행한다.
+4. 주행 1, map: winpc에서 `telemetry_rec.py`, `/e2e_driver/debug`, `/sim_clock/state`를 기록하고, Mac에서 시뮬레이터 화면을 녹화한다. `eval.sh NAME_map --laps 1 --seed SEED`.
+5. 주행 2, mlp: 엔진은 그대로 두고 `control.mode: mlp`로 스택만 다시 띄워 같은 seed로 한 바퀴 돈다.
+6. 기록(`~/morai-eval/drives/NAME`)을 Mac에 모은 뒤 스택, 서버, 터널, 뷰어, 시뮬레이터를 내린다. 호스트를 바로 돌려줄 수 있다.
+7. 반납 뒤 Mac에서 영상을 만든다:
+   `lap_video.py make DRIVE/frames_MODE DRIVE/eval_MODE/lap000.clock.json OUT.mp4 30 DRIVE/tel_NAME_MODE.csv 0.04`
+
+- map과 mlp를 같은 입력으로 비교하는 시험: `test/control_map_vs_mlp.py ROWS.npz`.
+  - 검증 5,647행에서 주행 구간의 map−mlp 차이(p95)는 페달 0.07–0.10, 조향 0.8–2.9°다.
+  - 정지 구간은 hold 브레이크(0.5)와 정지 중 조향 때문에 차이가 크다.
+
 ## 가짜 대회 호스트 (Mac, `tools/fake_host_mac.sh`)
 
 시뮬레이터 없이 스택과 모델을 대회 운영 PC처럼 1배속으로 시험한다. bc-250은 실제 MORAI 호스트로만 쓴다.

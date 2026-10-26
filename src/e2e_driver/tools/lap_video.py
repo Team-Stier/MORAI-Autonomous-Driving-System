@@ -25,18 +25,25 @@ import numpy as np
 
 
 def record(url, d):
+    """frames until killed; waits for the viewer and reconnects when the stream drops (eval_manager starts the viewer)."""
     d = Path(d); d.mkdir(parents=True, exist_ok=True)
-    idx, n, f = open(d / "index.txt", "a", buffering=1), 0, urllib.request.urlopen(url, timeout=30)
+    idx, n = open(d / "index.txt", "a", buffering=1), 0
     while True:
-        line = f.readline()
-        if not line:
-            break
-        if line.lower().startswith(b"content-length:"):
-            size = int(line.split(b":")[1])
-            f.readline()                                          # blank line before the JPEG
-            data, t = f.read(size), time.time()
-            (d / f"{n:06d}.jpg").write_bytes(data)
-            idx.write(f"{n:06d}.jpg {t:.3f}\n"); n += 1
+        try:
+            f = urllib.request.urlopen(url, timeout=30)
+            while True:
+                line = f.readline()
+                if not line:
+                    break
+                if line.lower().startswith(b"content-length:"):
+                    size = int(line.split(b":")[1])
+                    f.readline()                                  # blank line before the JPEG
+                    data, t = f.read(size), time.time()
+                    (d / f"{n:06d}.jpg").write_bytes(data)
+                    idx.write(f"{n:06d}.jpg {t:.3f}\n"); n += 1
+        except OSError:
+            pass
+        time.sleep(1.0)
 
 
 FONT = "/System/Library/Fonts/Helvetica.ttc"
