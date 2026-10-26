@@ -1,20 +1,20 @@
 recognize:
   section_core_map:
-    "0": unknown.hpp
-    "1": unknown.hpp
-    "2": unknown.hpp
-    "3": unknown.hpp
-    "4": unknown.hpp
-    "5": unknown.hpp
-    "6": unknown.hpp
-    "7": unknown.hpp
-    "8": unknown.hpp
-    "9": unknown.hpp
-    "10": unknown.hpp
-    "11": unknown.hpp
-    "12": unknown.hpp
-    "13": unknown.hpp
-    "14": unknown.hpp
-    "15": unknown.hpp
-    "16": unknown.hpp
+    "0": camera7_frame_cpu.hpp
+    "1": camera7_frame_cpu.hpp
+    "2": camera7_frame_cpu.hpp
+    "3": camera7_frame_cpu.hpp
+    "4": camera7_frame_cpu.hpp
+    "5": camera7_frame_cpu.hpp
+    "6": camera7_frame_cpu.hpp
+    "7": camera7_frame_cpu.hpp
+    "8": camera7_frame_cpu.hpp
+    "9": camera7_frame_cpu.hpp
+    "10": camera7_frame_cpu.hpp
+    "11": camera7_frame_cpu.hpp
+    "12": camera7_frame_cpu.hpp
+    "13": camera7_frame_cpu.hpp
+    "14": camera7_frame_cpu.hpp
+    "15": camera7_frame_cpu.hpp
+    "16": camera7_frame_cpu.hpp
   health_core_map: []
