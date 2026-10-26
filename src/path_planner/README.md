@@ -28,8 +28,8 @@ Stage별 Core 선택은 `config/path_planner/selection.yaml`에서 관리한다.
 
 ## 체크포인트 Stage
 
-체크포인트 Stage는 구독 입력 다섯 개를 그대로 반환하고, 현재 섹션 k(0~16)를 기준으로 `checkpoints.csv`에서 아직 경유하지 않은 체크포인트 k+1~16을 순서대로 담은 배열을 함께 반환한다.
-섹션 0은 체크포인트 1~16 전체, 섹션 16은 빈 배열이다.
+체크포인트 Stage는 구독 입력 다섯 개를 그대로 반환하고, 섹션마다 `section_core_map`이 고른 Core의 `checkpoints.csv` 체크포인트 배열을 함께 반환한다.
+`checkpoint_k` Core는 체크포인트 k+1~16을 순서대로 담으며 `checkpoint_00`은 1~16 전체, `checkpoint_16`은 빈 배열이다. `checkpoint_arrival` Core는 체크포인트 1 하나를 담는다.
 남은 체크포인트 선택·저장과 입력 전달은 각 Core 파일 안에서 수행한다. 체크포인트 파일은 `config/path_planner/parameters/checkpoint_k.yaml`의 `checkpoints_file`로 지정한다.
 
 ## GlobalPath

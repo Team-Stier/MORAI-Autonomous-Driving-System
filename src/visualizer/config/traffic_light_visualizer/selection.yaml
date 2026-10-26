@@ -1,8 +1,4 @@
 render:
   section_core_map:
     '0': traffic_signal.hpp
-    '17': traffic_signal.hpp
-    '18': traffic_signal.hpp
-    '19': traffic_signal.hpp
-    '20': traffic_signal.hpp
   health_core_map: []

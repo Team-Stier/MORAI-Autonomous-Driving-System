@@ -13,12 +13,8 @@ mounts:
     "10": sensor_mounts.hpp
     "11": sensor_mounts.hpp
     "12": sensor_mounts.hpp
-    "18": sensor_mounts.hpp
     "13": sensor_mounts.hpp
     "14": sensor_mounts.hpp
-    "20": sensor_mounts.hpp
     "15": sensor_mounts.hpp
-    "19": sensor_mounts.hpp
     "16": sensor_mounts.hpp
-    "17": sensor_mounts.hpp
   health_core_map: []

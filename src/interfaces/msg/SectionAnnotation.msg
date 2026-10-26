@@ -1,10 +1,10 @@
 std_msgs/Header header
 
-# Core의 초기 저장 섹션. 첫 체크포인트 반지름에 진입하기 전에는 UNKNOWN을 반환·발행한다.
+# Core의 초기 저장 섹션. 첫 섹션 중심 반지름에 진입하기 전에는 UNKNOWN을 반환·발행한다.
 uint8 UNKNOWN=0
-# checkpoints.csv의 0-based 행 인덱스 + 1이 섹션 값이다.
+# section_annotator 섹션 중심 파일의 0-based 행 인덱스 + 1이 섹션 값이다. 17 이상은 상수 없이 같은 규칙을 따른다.
 # map XY 거리 <= config 반지름이면 Core의 저장 섹션을 해당 값으로 갱신한다.
-# 여러 반지름에 속하면 가장 가까운 체크포인트, 거리 동률이면 작은 인덱스를 선택한다.
+# 여러 반지름에 속하면 가장 가까운 섹션 중심, 거리 동률이면 작은 인덱스를 선택한다.
 # 어느 반지름에도 속하지 않으면 저장 섹션을 유지한다.
 # Core는 매 process() 호출마다 저장 섹션을 반환하며 Pipeline은 이를 발행한다.
 uint8 SECTION_1=1
