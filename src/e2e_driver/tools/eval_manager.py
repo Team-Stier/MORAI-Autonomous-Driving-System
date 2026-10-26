@@ -66,7 +66,7 @@ EGO = {"id": {"value": "Ego"}, "object_type": "OBJECT_TYPE_VEHICLE", "client_key
 
 CP_R, LIMIT_S, START_S, START_FRAC, RETURN_S = 3.0, 900.0, 60.0, 0.05, 15.0    # rules §3-2
 FINISH_M = 1.0          # route progress within this of the last waypoint = finished (tools/scorer time.finish_m)
-STUCK_S = 60.0          # shortcut: longer than any red light or give-way wait seen; signal cycles are unpublished
+STUCK_S = 60.0          # shortcut: longer than any give-way wait seen (red lights pause it); signal cycles are unpublished
 CRASH_STUCK_S = 15.0    # "cannot go on after a collision"
 PROGRESS_M = 5.0        # route progress that resets the stuck timers: a car pushing a small box creeps ~0.1 m/s (10/26)
 OFF_ROAD_S = 2.0
@@ -329,8 +329,9 @@ class Manager:
                 # drive failures -> return to the last checkpoint passed
                 if e["hit"]:
                     crash_t = tau
-                if s > prog_s + PROGRESS_M:
-                    prog_s, prog_t = s, tau
+                # a red light is not "stuck": waits at C1256W000016 ran 53-61 s and were returned (10/27 W1 lap)
+                if s > prog_s + PROGRESS_M or (e["tl"] and e["color"] & 1 and not e["color"] & 16):
+                    prog_s, prog_t = max(s, prog_s), tau
                 off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
                 off_t = (off_t if off_t is not None else tau) if off else None
                 why = None

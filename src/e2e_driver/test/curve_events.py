@@ -5,7 +5,9 @@ Mac only. Per event window (scorer lane events, -3 s .. +1 s) on the evaluation 
   engine's delays (model_ms > 100, skipped ticks). The node logged only the plan's first steps, so the plan's path is
   approximated by holding the commanded kappa for 1 s (offset predicted from the current offset and heading error).
 Judgement: plan kappa already off the road's (|kappa_cmd - kappa_road| large and the held plan leaves the lane) ->
-trajectory; plan near the road but the actual kappa lags or falls short -> tracking. Tracking constants: actual kappa vs
+trajectory; plan near the road but the actual kappa lags or falls short -> tracking. Drives whose node logged the whole
+plan (plan_a / plan_k, 34df5b9): the plans of the 2 s before the event are integrated from the Ego GT pose at their t0
+(as plan_overlay.py) and their lateral offset 1 s ahead replaces the held-kappa estimate. Tracking constants: actual kappa vs
 commanded kappa (best lag) per speed bin -> steer_gain candidates. Writes OUT_DIR/curve_events.png.
 
     python curve_events.py DRIVE_DIR ROUTE_TXT [OFFSET_S]
@@ -57,15 +59,15 @@ yr = np.convolve(np.gradient(yaw_u) / np.maximum(dt, 1e-3), np.ones(5) / 5, mode
 k_act = np.where(np.abs(v_e) > 1.0, yr / np.maximum(np.abs(v_e), 1.0), np.nan)
 
 # node debug (stack tau) -> winpc wall (sim clock state) -> Mac wall (+OFF) -> tau_eval
-clk = pd.read_csv(D / f"clk_wowmayo_{mode}.csv")
+clk = pd.read_csv(D / f"clk_{D.name}_{mode}.csv")
 wall_w, tau_st = clk["field.data0"].to_numpy(float), clk["field.data1"].to_numpy(float)
 o = np.argsort(tau_st); wall_w, tau_st = wall_w[o], tau_st[o]
 to_eval = lambda tau_stack: np.interp(np.interp(tau_stack, tau_st, wall_w) + OFF, clock[:, 0], clock[:, 1]) - T0
-dbg = [json.loads(l.split(",", 1)[1]) for l in open(D / f"dbg_wowmayo_{mode}.csv").read().splitlines()[1:]]
+dbg = [json.loads(l.split(",", 1)[1]) for l in open(D / f"dbg_{D.name}_{mode}.csv").read().splitlines()[1:]]
 t_d = to_eval(np.array([r["t0"] for r in dbg]))
 k0 = np.array([r.get("kappa0", np.nan) for r in dbg]); kc = np.array([(r.get("cmd") or {}).get("kappa", np.nan) for r in dbg])
 mms = np.array([r["server"]["model_ms"] for r in dbg]); skip = np.r_[0, np.diff([r["skipped"] for r in dbg])]
-tel = pd.read_csv(D / f"tel_wowmayo_{mode}.csv")
+tel = pd.read_csv(D / f"tel_{D.name}_{mode}.csv")
 tel["t"] = np.interp(tel.wall.to_numpy(float) + OFF, clock[:, 0], clock[:, 1]) - T0
 ts, tc = tel[tel.kind == "s"].sort_values("t"), tel[tel.kind == "c"].sort_values("t")
 
@@ -98,6 +100,17 @@ for e in events:
     # plan held 1 s from 2 s before the event: e(1) = e0 + v herr + 0.5 v^2 (kcmd - kroad)
     i = np.nonzero(pre)[0][0]; vv = abs(v_e[i])
     held = lat[i] + vv * np.sin(herr[i]) * 1.0 + 0.5 * vv ** 2 * (kcm - kr) * 1.0
+    full = [r for r, t in zip(dbg, t_d) if e["t_start"] - 2.0 <= t <= e["t_start"] and r.get("plan_k")]
+    if full:                                          # the logged plans themselves, 1 s (10 steps) ahead
+        ends = []
+        for r in full:
+            t0 = to_eval(r["t0"]); x, y, h = (np.interp(t0, t_e, ego[:, 1]), np.interp(t0, t_e, ego[:, 2]),
+                                              np.interp(t0, t_e, yaw_u)); v = r["v0"]
+            for ai, ki in list(zip(r["plan_a"], r["plan_k"]))[:10]:
+                v1 = max(v + ai * 0.1, 0.0); vm = 0.5 * (v + v1)
+                h += ki * vm * 0.1; x += vm * np.cos(h) * 0.1; y += vm * np.sin(h) * 0.1; v = v1
+            ends.append(project(x, y)[1])
+        held = float(np.array(ends)[np.argmax(np.abs(ends))])
     sw = (ts.t >= e["t_start"] - 2) & (ts.t <= e["t_start"]); cw = (tc.t >= e["t_start"] - 2) & (tc.t <= e["t_start"])
     late = int((mms[md] > 100).sum()); sk = int(skip[md].sum())
     traj = abs(held) > 1.3 or abs(kcm - kr) > 0.5 * max(abs(kr), 0.01)

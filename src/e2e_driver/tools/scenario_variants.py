@@ -124,8 +124,11 @@ def make(base, route, rng, uid0, cps=None):
         # waiting Ego (64 collisions in 35 episodes, none with the sample scene).
         sp.update(MinDesiredVelocity_Custom=v, MaxDesiredVelocity_Custom=v, minSpawnPeriod=period, maxSpawnPeriod=period,
                   MinLatBias=-bias, MaxLatBias=bias, SafetyDist=rng.uniform(5, 10), TTC=rng.uniform(1.0, 2.0),
-                  isLaneChange=False)   # vehicle type kept from the base scene: the 10/27 eval lap on bc-250 had no
+                  isLaneChange=False,   # vehicle type kept from the base scene: the 10/27 eval lap on bc-250 had no
                                         # roundabout NPC with the randomized 30200003 (the sample's 30100004 is kept)
+                  # "Maximum Spawn" counts every vehicle a point ever spawns: the sample's 50 ran out within minutes at
+                  # 3-5 s, and the 10/27 W1 lap met an empty roundabout and highway. 1000 outlasts a 15 min lap at 3 s.
+                  maximumSpawnVehicle=max(sp.get("maximumSpawnVehicle", 0), 1000))
         sps.append(dict(uid=sp["UNIQUEID"], roundabout=roundabout, kph=round(v, 1), period=round(period, 1),
                         vehicle=sp["spawnVehicleTypeID"], bias=round(bias, 2)))
     meta["spawn"] = sps
