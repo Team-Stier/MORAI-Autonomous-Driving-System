@@ -5,7 +5,7 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
-from e2e_driver.route import PoseGuard, Route  # noqa: E402
+from e2e_driver.route import PoseGuard, Route, TeleportDetector  # noqa: E402
 
 
 def test_pursuit():
@@ -35,5 +35,22 @@ def test_guard():
     assert all(alt[1::2]) and not any(alt[0::2])                               # interleaved bad track never wins
 
 
+def test_teleport():
+    d, lat0, lon0 = TeleportDetector(), 37.24, 126.77
+    m = 1.0 / 111320.0                                                          # degrees of latitude per metre
+    fired = []
+    for k in range(600):                                                        # 30 s at 7 m/s along a 30 m circle
+        t = 0.05 * k; yaw = 7.0 * t / 30.0
+        fired.append(d.status(t, (yaw + np.pi) % (2 * np.pi) - np.pi, 7.0))     # wrapped heading: no false alarm
+        if k % 2 == 0:
+            fired.append(d.gps(t, round(lat0 + 30 * np.sin(yaw) * m, 6), lon0))
+        if 200 <= k < 300 and k % 2 == 0:
+            fired.append(d.gps(t + 0.01, 0.0, 0.0))                             # a blackout in between
+    assert not any(fired)
+    assert d.status(30.05, 2.5, 0.0)                                            # heading jumps: a return to a checkpoint
+    assert not d.status(30.10, 2.5, 0.0) and not d.gps(30.1, lat0 + 300 * m, lon0)   # the same event
+    assert d.gps(33.0, lat0 + 900 * m, lon0)                                    # later, a 600 m GPS jump: a new event
+
+
 if __name__ == "__main__":
-    test_pursuit(); test_guard(); print("ok")
+    test_pursuit(); test_guard(); test_teleport(); print("ok")

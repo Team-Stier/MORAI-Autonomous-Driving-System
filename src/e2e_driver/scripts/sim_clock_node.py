@@ -13,7 +13,7 @@ import rospy
 from interfaces.msg import CompetitionVehicleStatus
 from rosgraph_msgs.msg import Clock
 from sensor_msgs.msg import NavSatFix
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, Header
 
 from e2e_driver.sim_clock import SimClock
 
@@ -41,6 +41,11 @@ def main():
     state = rospy.Publisher("~state", Float64MultiArray, queue_size=5)
     rospy.Subscriber("/vehicle/competition_status", CompetitionVehicleStatus, on_status, queue_size=50, tcp_nodelay=True)
     rospy.Subscriber("/sensors/gps/fix", NavSatFix, on_gps, queue_size=50, tcp_nodelay=True)
+
+    def on_teleport(_m):
+        with lock:
+            clock.reset_window()
+    rospy.Subscriber("/e2e_driver/teleport", Header, on_teleport, queue_size=2)
     rospy.loginfo("sim_clock: rho0 %.3f", rho0)
     n, saved = 0, None
     while not rospy.is_shutdown():

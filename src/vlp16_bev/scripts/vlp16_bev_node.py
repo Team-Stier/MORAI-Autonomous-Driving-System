@@ -8,6 +8,7 @@ import numpy as np
 import rospy
 from interfaces.msg import CompetitionVehicleStatus, LidarBevScan
 from sensor_msgs.msg import Imu
+from std_msgs.msg import Header
 from velodyne_msgs.msg import VelodyneScan
 
 from vlp16_bev.scan import BevBuilder, GridYawRate, SignalTrack
@@ -22,22 +23,28 @@ def main():
     src = rospy.get_param("~yaw_rate_source", "grid")
     imu = src == "imu"
     trend = float(rospy.get_param("~yaw_trend_window_sec", 0.3)) if src == "grid_trend" else 0.0
-    v_track, r_track = SignalTrack(), (SignalTrack() if imu else GridYawRate(trend_window=trend))
+    new_tracks = lambda: (SignalTrack(), SignalTrack() if imu else GridYawRate(trend_window=trend))
+    tracks = list(new_tracks())                                   # [v, r]; replaced on a teleport
 
     def on_status(m):
         t = m.header.stamp.to_sec()
-        v_track.add(t, m.signed_velocity_mps)
-        if not imu: r_track.add(t, m.yaw_rad)
+        tracks[0].add(t, m.signed_velocity_mps)
+        if not imu: tracks[1].add(t, m.yaw_rad)
     if imu:
-        rospy.Subscriber("/sensors/imu/data", Imu, lambda m: r_track.add(m.header.stamp.to_sec(), m.angular_velocity.z),
+        rospy.Subscriber("/sensors/imu/data", Imu, lambda m: tracks[1].add(m.header.stamp.to_sec(), m.angular_velocity.z),
                          queue_size=50, tcp_nodelay=True)
     rospy.Subscriber(rospy.get_param("~status_topic", "/vehicle/competition_status"), CompetitionVehicleStatus, on_status,
                      queue_size=50, tcp_nodelay=True)
     pub = rospy.Publisher(rospy.get_param("~topic", "/lidar_bev/scan"), LidarBevScan, queue_size=4)
     bev = BevBuilder()
 
+    def on_teleport(_m):                                          # e2e_driver saw the Ego moved in one step
+        tracks[:] = new_tracks(); bev.reset()                    # yaw/speed history and odometry: a new drive
+    rospy.Subscriber("/e2e_driver/teleport", Header, on_teleport, queue_size=2)
+
     def on_scan(scan):
         t = np.array([p.stamp.to_nsec() for p in scan.packets], np.int64) * 1e-9
+        v_track, r_track = tracks
         if not (v_track.ready() and r_track.ready()) or t[-1] - v_track.latest() > max_signal_age:
             rospy.logwarn_throttle(5.0, "vlp16_bev: no fresh competition_status, scan skipped")
             return

@@ -26,6 +26,10 @@ class SimClock:
         self.t = self.tau = self.last_status = None
         self.estimated = 0                           # number of rho updates (0: still the prior)
 
+    def reset_window(self):
+        """a teleport: the GPS path across it is not driving; rho is kept and estimated afresh after it."""
+        self.v.clear(); self.gps.clear()
+
     def add_status(self, t, v):
         self.v.append((t, abs(v))); self.last_status = t
         while self.v and self.v[0][0] < t - self.window - 1.0:

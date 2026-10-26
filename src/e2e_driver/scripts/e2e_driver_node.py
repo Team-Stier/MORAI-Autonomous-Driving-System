@@ -14,18 +14,19 @@ import socket
 import threading
 import time
 
+import rosnode
 import rospy
 from interfaces.msg import CompetitionVehicleStatus, LidarBevScan
 from morai_msgs.msg import CtrlCmd
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import CompressedImage, NavSatFix
-from std_msgs.msg import String
+from std_msgs.msg import Header, String
 
 import numpy as np
 
 from e2e_driver.control import DEFAULTS, Controller, Plan
 from e2e_driver.inputs import CAMERAS, Inputs
-from e2e_driver.route import Odometer, PoseGuard, Route, RouteTracker
+from e2e_driver.route import Odometer, PoseGuard, Route, RouteTracker, TeleportDetector
 from e2e_driver import wire
 
 
@@ -46,6 +47,8 @@ class Node:
         self.max_inflight = int(P("max_inflight", 2))
         self.follow_m, self.pose = float(P("fake_follow_route_m", 0.0)), None    # > 0: route_kappa for the fake backend
         self.guard = PoseGuard()                                                     # localization guard (on_ego)
+        self.teleport, self.restart_loc = TeleportDetector(), bool(P("restart_localization_on_teleport", True))
+        self.teleport_pub = rospy.Publisher("~teleport", Header, queue_size=2)       # vlp16_bev, sim_clock reset on it
         self.sock, self.pending, self.next_id, self.skipped = None, {}, 0, 0
         self.plan, self.plan_id, self.v, self.plan_lock = None, -1, 0.0, threading.Lock()
         self.pub = rospy.Publisher(P("command_topic", "/control_cmd"), CtrlCmd, queue_size=1, tcp_nodelay=True)
@@ -66,14 +69,31 @@ class Node:
         d = np.frombuffer(m.density, np.uint8).reshape(m.rows, m.cols)
         self.inputs.add_scan(m.header.stamp.to_sec(), h, d, (m.pose_x, m.pose_y, m.pose_yaw), m.odom_epoch)
 
+    def teleported(self, t, why):
+        """a checkpoint return or scene reload seen in the inputs (the stack is not told): start over from standstill.
+        Buffered frames, scans and ego history, route progress and the plan belong to the old place; localization is
+        restarted (respawn) from the next GPS fix; vlp16_bev and sim_clock reset on ~teleport."""
+        rospy.logwarn("e2e_driver: teleport (%s): inputs, route progress and plan reset", why)
+        self.inputs.reset()
+        self.tracker, self.odo, self.guard = RouteTracker(self.route), Odometer(), PoseGuard()
+        with self.plan_lock:
+            self.plan, self.plan_id = None, self.next_id                       # replies to earlier requests are dropped
+        self.teleport_pub.publish(Header(stamp=rospy.Time.from_sec(t), frame_id=why))
+        if self.restart_loc:
+            threading.Thread(target=rosnode.kill_nodes, args=(["/localization_node"],), daemon=True).start()
+
     def on_status(self, m):
         t = m.header.stamp.to_sec()
+        if self.teleport.status(t, m.yaw_rad, m.signed_velocity_mps):
+            self.teleported(t, "heading jump")
         self.v = m.signed_velocity_mps
         self.odo.add(t, m.signed_velocity_mps)
         self.inputs.add_status(t, m.signed_velocity_mps, m.yaw_rad)
 
     def on_gps(self, m):
         self.gps_ok = not (m.status.status < 0 or (m.latitude == 0 and m.longitude == 0))   # blackout: NO_FIX or 0,0
+        if self.teleport.gps(m.header.stamp.to_sec(), m.latitude if self.gps_ok else None, m.longitude):
+            self.teleported(m.header.stamp.to_sec(), "GPS jump")
 
     def on_ego(self, m):
         # While GPS is blacked out the EKF / tunnel_wall pose drifts along the road (23-30 m in run1023h-w1-007): route

@@ -65,6 +65,15 @@ class Inputs:
             t, data = self.work[cam].get()
             self._encode(cam, t, data)
 
+    def reset(self):
+        """drop everything buffered (a teleport): requests wait until the horizon has filled again."""
+        with self.lock:
+            for q in self.cams.values():
+                q.clear()
+            self.scans.clear(); self.ego.clear(); self._yaw = None
+        with self.cache_lock:
+            self.cache.clear()
+
     def _trim(self, q, t):
         while q and q[0][0] < t - self.horizon:
             q.popleft()
