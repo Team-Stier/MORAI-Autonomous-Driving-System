@@ -1,5 +1,5 @@
 execution: {mode: on_input, trigger_input: cloud, queue_capacity: 8, max_health_checks: 10}
-max_skew_sec: 0.1
+max_skew_sec: 0.2
 inputs:
   cloud:
     type: sensor_msgs/PointCloud2
