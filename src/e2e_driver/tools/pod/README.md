@@ -10,7 +10,7 @@ Alpamayo-Cosmos `RL_PLAN.md` 3.1의 actor 한 대: MORAI 리눅스 3대, ROS 폐
 | `setup.sh` | 부팅마다 apt 패키지, Xvfb, ko_KR 로캘, sshd를 준비하고 MORAI를 컨테이너 디스크에 푼다. 첫 부팅에만 볼륨에 catkin 빌드와 venv를 만든다 |
 | `worlds.sh up N` | MORAI N대. 런처 없이 직접 띄운다(자동 로그인). world n은 gRPC 7788+n, MSC·UDP +(n−1)×1000, `taskset` 12 CPU, `-force-vulkan -force-gfx-mt -job-worker-count 8`, 카메라 스레드 고정(`pin.sh`) |
 | `stacks.sh up N` | ROS 스택 N개. run.sh와 같은 노드 목록이고, master 11310+n, UDP +(n−1)×1000이다. run.sh는 호스트의 ROS를 모두 죽이고 다시 빌드해서 여러 번 쓸 수 없다 |
-| `actor.sh up NAME [N]` | worlds → 엔진 → stacks → world별 `rl_episode.py --host local --direct` |
+| `actor.sh up NAME [N]` | worlds → 엔진(`--dump /workspace/dump`) → stacks → world별 `rl_episode.py --host local --direct --world n --objinfo-port 7505+1000(n−1)`. 기록은 learner spool `/workspace/spool/NAME_wn/epK/`(steps.jsonl, 그 world의 req/out 덤프, critic_obs, done.json)이다 |
 | `measure.sh SECS` | 시뮬레이터별, 스택별(세션 전체), 엔진, 관리자의 CPU 코어 수와 cgroup 합계, GPU, 메모리 |
 | `mk-clone.sh`, `pin.sh`, `mon.sh` | 10/26 스크립트 그대로 |
 
@@ -34,7 +34,7 @@ Alpamayo-Cosmos `RL_PLAN.md` 3.1의 actor 한 대: MORAI 리눅스 3대, ROS 폐
 | `models/hf/` | 베이스 VLM Qwen3-VL-4B-Instruct의 HF 캐시(`HF_HOME`, 오프라인) | winpc `~/.cache/huggingface` | 8.3 GB |
 | `morai-student/pylib/` | `MORAI_VLA_PYLIB`(QAD 체크포인트용 nvidia-modelopt) | winpc | 54 MB |
 | `venv-engine/`, `venv-rl/`, `uv-python/`, `uv-cache/` | 첫 부팅에 만든다. 엔진은 레포의 `engine-requirements.txt`(winpc venv-engine 고정 목록, `--no-deps`)다 | pod | 약 20 GB(winpc venv-engine 10 GB + 캐시) |
-| `rl-out/` | 에피소드 기록(rows, timeline, rewards). learner로 가는 관측(JPEG)은 엔진 `--dump`나 learner 쪽 경로로 간다 | pod | 에피소드당 약 1 MB |
+| `dump/`, `spool/` | 엔진 덤프(판단마다 req·out)와, 에피소드 관리자가 그것을 옮겨 담은 learner spool이다. learner가 같은 볼륨이나 동기화로 읽는다 | pod | 판단당 req 수백 KB(카메라 JPEG 6장) |
 | 합계 | | | **약 48 GB + 기록. 100 GB로 잡는다** |
 
 - `V2AccountInfo.byte`는 대회 계정 로그인 정보다. 볼륨에만 두고 다른 곳(B2 등)에 올리지 않는다.
