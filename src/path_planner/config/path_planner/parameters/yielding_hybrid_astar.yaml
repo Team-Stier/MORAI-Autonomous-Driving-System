@@ -1,0 +1,27 @@
+path_length_m: 50.0
+sample_step_m: 0.25
+primitive_length_m: 1.0
+grid_resolution_m: 0.5
+yaw_bins: 72
+max_expansions: 800
+max_steer_rad: 0.698132
+wheelbase_m: 3.0
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+collision_margin_m: 0.4
+road_margin_m: 0.05
+prediction_acceleration_mps2: 6.0
+emergency_deceleration_mps2: 6.0
+occupancy_history_sec: 0.8
+return_length_m: 8.0
+checkpoint_keep_m: 1.5
+checkpoint_blend_m: 12.0
+checkpoints_file: ../map/checkpoints.csv
+transition_lengths_m: [8.0, 12.0, 16.0]
+lateral_offsets_m: [0.0, -1.5, 1.5, -2.5, 2.5, -3.5, 3.5, -4.5, 4.5]
+steering_candidates_deg: [-40, -30, -20, -10, 0, 10, 20, 30, 40]
+# Spatial yielding bounds for uncertain compact objects and observed lateral motion.
+yield_reaction_sec: 1.0
+yield_unknown_lateral_mps: 3.0
+yield_compact_max_m: 1.5
