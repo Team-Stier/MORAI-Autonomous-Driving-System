@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Two-PC operation from the Mac: MORAI on bc-250 (SIM=bc250) or the W1 copy on winpc (SIM=w1), stack + model on winpc WSL.
-#   two_pc.sh up [server args]   tunnels (bc250), model server (default: fake, route-following), ROS stack
+#   two_pc.sh up [server args]   tunnels (bc250), model server (default: runtime.env's model; e.g. --backend fake), ROS stack
 #   two_pc.sh prep [SCENE]       bc250: load the map, then the named collection presets (w1_collect), then SCENE paused
 #   two_pc.sh drive NAME SECS [SCENE]
 #        probes + raw GT + debug/localization recorders, play; whenever the Ego has stood still STUCK_S (10) s while
@@ -50,7 +50,7 @@ case ${1:-} in
       wsl 'setsid nohup python3 ~/.claude-morai-wslros-20261018/bin/udp-tunnel.py 30001 0 9093 > ~/morai-eval/run/tunnel.log 2>&1 < /dev/null & echo $! > ~/morai-eval/run/tunnel.pid'
       STACKS=wsl bash ~/.claude/skills/morai-parallel-collect/scripts/parallel.sh win_tunnel 7505,7509,9092,9095,9099,9291,9293,9295,9297,9301,9999,2368 30001 | tail -1
     fi
-    args=${*:-"--backend fake --fake-speed 7 --preprocess-config \$(ls -d ~/.cache/huggingface/hub/models--nvidia--Alpamayo-1.5-10B/snapshots/*)"}
+    args=${*:-}                                            # none: server.sh reads config/runtime.env (the delivery)
     wsl "cd $W && ./server.sh up $args && FAKE_FOLLOW_ROUTE_M=${FAKE_FOLLOW_ROUTE_M:-8} ./stack.sh up" ;;
   prep)
     SCENE=${2:-$SCENE_DEFAULT}

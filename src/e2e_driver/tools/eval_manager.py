@@ -73,6 +73,7 @@ OFF_ROAD_S = 2.0
 SKIP_M = 10.0
 GRACE_S = 10.0          # no failure checks right after a start or a return: the stack starts over from standstill
 HZ = 20.0
+VIEW_FPS, VIEW_WIDTH = os.environ.get("VIEW_FPS", "5"), os.environ.get("VIEW_WIDTH", "960")   # 15 1280 for a lap video
 OFFICIAL = "~/morai-eval-official"      # on bc-250 (fetch_official_tools.sh)
 SPAWN_SHA = "5ecc827f5fcbd1cbe00aabb5b01aa01e6d1f87293345d61c20ba5d139210a2f6"    # morai-docs assets/catalog.json
 WTC_SHA = "8c47f48a8d54b79b657920a661f582bd587c9f9065b6b55c9e911d42a0369609"
@@ -261,6 +262,7 @@ class Manager:
             raise RuntimeError(f"scene load {name}: {r}")
         lap = dict(lap=k, scene=name, seed=seed, weather=[], checkpoints=[], returns=[], scene_meta=meta)
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
+        clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
         self.weather(lap, seed, 0, 0.0)
         played = threading.Event()                      # MSC confirms play 1-15 s late (10/26): record from the paused START on
         threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
@@ -277,6 +279,7 @@ class Manager:
                 t = time.time()
                 e = self.ego()
                 tau = clock.step(t, e["x"], e["y"], e["v"])
+                clk.append((round(t, 3), round(tau, 3)))
                 s, lat = tr.update(e["x"], e["y"])
                 shade = shaded(e["x"], e["y"])
                 ns = int(tau * 1e9)
@@ -337,6 +340,7 @@ class Manager:
         lap["total_s"] = round(lap["lap_s"] + lap["scorer"].get("penalty_s", 0.0) + lap["return_penalty_s"], 2)
         with gzip.open(self.out / f"lap{k:03d}.rows.json.gz", "wt") as f:
             json.dump(rows, f)
+        json.dump(clk, open(self.out / f"lap{k:03d}.clock.json", "w"))
         with open(self.out / "laps.jsonl", "a") as f:
             f.write(json.dumps(lap, ensure_ascii=False) + "\n")
         sc = lap["scorer"]
@@ -392,7 +396,7 @@ def deploy(a):
         print(ssh(f"python3 ~/morai-eval-wtc.py up {OFFICIAL}/WeatherTimeChanger_Linux", 60).strip(), flush=True)
     if not a.no_view:                                              # the Xwayland auth file is named anew each session
         ssh("kill -0 $(cat ~/morai-eval-viewer.pid 2>/dev/null) 2>/dev/null || { DISPLAY=:0 XAUTHORITY=$(ls /run/user/1000/"
-            f".mutter-Xwaylandauth.* | head -1) setsid nohup python3 ~/morai-eval-viewer.py {HOST} 8090 5 > ~/morai-eval-viewer.log"
+            f".mutter-Xwaylandauth.* | head -1) setsid nohup python3 ~/morai-eval-viewer.py {HOST} 8090 {VIEW_FPS} {VIEW_WIDTH} > ~/morai-eval-viewer.log"
             " 2>&1 < /dev/null & echo $! > ~/morai-eval-viewer.pid; }")
 
 
