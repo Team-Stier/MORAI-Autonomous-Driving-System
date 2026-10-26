@@ -178,6 +178,8 @@ class HybridAstar {
     bool selected_anchor = false;
     bool full = false;
     bool retained_side = false;
+    const double stopping_distance = prediction_speed_mps_*prediction_speed_mps_/
+        (2*parameters_.emergency_deceleration_mps2) + 0.05*prediction_speed_mps_;
     for (std::size_t i = 0; i < references.size(); ++i) {
       auto& ref = references[i];
       auto transitions = parameters_.transition_lengths_m;
@@ -201,8 +203,9 @@ class HybridAstar {
             4*std::pow(ref.offset_m - previous_offset_m_, 2);
         const bool complete = length >= parameters_.path_length_m - 0.01;
         const bool anchored = transition == anchored_transition;
+        // Keep a bypass with room to stop instead of switching sides for a longer horizon.
         const bool stable_side = previous_offset_m_ != 0.0 && ref.offset_m == previous_offset_m_ &&
-            progress >= std::max(10.0, 2.0*prediction_speed_mps_ + parameters_.vehicle_front_m);
+            progress >= std::max(parameters_.primitive_length_m, stopping_distance);
         const bool better = (complete && !full) || (complete == full &&
             (complete ? (anchored && !selected_anchor) ||
                 (anchored == selected_anchor && cost < best_cost) : progress > best_progress + 1e-6 ||
@@ -220,7 +223,7 @@ class HybridAstar {
     }
     if (full) {
       const auto& ref = references[selected_reference];
-      remember(ref, obstacle_distance, anchorFor(ref), center_reference.line);
+      remember(ref.offset_m, obstacle_distance, anchorFor(ref), center_reference.line);
       // Finish the merge at a fixed world point instead of moving its end ahead on every replan.
       merge_anchor_ = sample(ref.line, ref.start_s + selected_transition).position.head<2>();
       has_merge_anchor_ = selected_anchor || ref.offset_m == 0.0 ||
@@ -230,11 +233,25 @@ class HybridAstar {
     }
     const auto& reference = references[selected_reference];
     if (retained_side) {
-      remember(reference, obstacle_distance, anchorFor(reference), center_reference.line);
+      remember(reference.offset_m, obstacle_distance, anchorFor(reference), center_reference.line);
       has_merge_anchor_ = false;
       return emergencyStop(std::move(best), start, obstacles);
     }
     best = search(start, reference, center_reference.line, obstacles, std::move(best), best_progress);
+    if (pathLength(best) >= parameters_.path_length_m - 0.01) {
+      // Search primitives can bypass on either side of their reference.
+      const double anchor_station = origin + std::max(0.0, ramp_end);
+      const auto anchor = std::min_element(best.points.begin(), best.points.end(), [&](const auto& a, const auto& b) {
+        return std::abs(signedStation(center_reference.line, xy(a)) - anchor_station) <
+               std::abs(signedStation(center_reference.line, xy(b)) - anchor_station);
+      });
+      const auto value = sample(center_reference.line, signedStation(center_reference.line, xy(*anchor)));
+      const Vec2 tangent = value.first.head<2>().normalized();
+      const double offset = (xy(*anchor) - value.position.head<2>()).dot(Vec2(-tangent.y(), tangent.x()));
+      const auto side = std::min_element(parameters_.lateral_offsets_m.begin(), parameters_.lateral_offsets_m.end(),
+          [&](double a, double b) { return std::abs(a - offset) < std::abs(b - offset); });
+      remember(*side, obstacle_distance, xy(*anchor), center_reference.line);
+    }
     has_merge_anchor_ = false;
     return emergencyStop(std::move(best), start, obstacles);
   }
@@ -698,9 +715,9 @@ class HybridAstar {
     }
     return path;
   }
-  void remember(const Reference& ref, double obstacle_distance, const Vec2& anchor, const Line& center_line) {
-    const bool continuing = has_bypass_anchor_ && previous_offset_m_ == ref.offset_m;
-    previous_offset_m_ = ref.offset_m;
+  void remember(double offset_m, double obstacle_distance, const Vec2& anchor, const Line& center_line) {
+    const bool continuing = has_bypass_anchor_ && previous_offset_m_ == offset_m;
+    previous_offset_m_ = offset_m;
     has_bypass_anchor_ = previous_offset_m_ != 0.0;
     if (has_bypass_anchor_) {
       avoidance_remaining_m_ = std::max(avoidance_remaining_m_, obstacle_distance);

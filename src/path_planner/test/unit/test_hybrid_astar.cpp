@@ -646,6 +646,65 @@ TEST(HybridAstar, PullsLaneCenterIntoOffCenterCheckpoint) {
   EXPECT_GT(pathLength(path), 40);
 }
 
+TEST(HybridAstar, PassesSampleBoxOnRecordedLaneGeometry) {
+  std::ifstream map_file(std::string(NP_PACKAGE_DIR) + "/../map/kcity_lanelet2.osm");
+  ASSERT_TRUE(map_file.good());
+  const std::string map_data(std::istreambuf_iterator<char>(map_file), std::istreambuf_iterator<char>{});
+  auto map = pp::SharedMap({pp::readLaneletMap(map_data)});
+  pp::HybridAstarParameters parameters;
+  parameters.collision_margin_m = 0.4;
+  parameters.return_length_m = 8;
+  parameters.lateral_offsets_m = {0, -1.5, 1.5, -2.5, 2.5, -3.5, 3.5, -4.5, 4.5};
+  parameters.checkpoints = {{-59.885, -124.558}};
+  pp::HybridAstar core(parameters, map);
+  auto ego = egoAt(-60.881, -171.432, 1.47);
+  ego.twist.twist.linear.x = 12.485;
+  const auto objects = obstacleAt(-60.610, -142.178, 2, 3, -83.219*pi/180);
+  const auto path = core.process(ego, objects, route(map, {130766, 130767, 130785, 130786,
+      100557, 130868, 130869, 130870, 130871, 130872, 130873, 100564}), pp::PredictedObjects{});
+  expectGeometry(path, ego, parameters);
+  EXPECT_GT(pathLength(path), 49.9);
+  double nearest = 1e9;
+  for (const auto& point : path.points) {
+    const auto& p = point.pose.pose.position;
+    nearest = std::min(nearest, std::hypot(p.x + 59.885, p.y + 124.558));
+    EXPECT_FALSE(overlap(rectangle(p.x, p.y, heading(point.pose.pose.orientation),
+        parameters.vehicle_front_m, parameters.vehicle_rear_m, parameters.vehicle_half_width_m),
+        rectangle(-60.610, -142.178, -83.219*pi/180, 1, 1, 1.5)));
+  }
+  EXPECT_LT(nearest, 3);
+}
+
+TEST(HybridAstar, KeepsBypassSideWhenPredictionShortensSafePrefix) {
+  auto map = straightMap(8);
+  pp::HybridAstarParameters parameters;
+  parameters.collision_margin_m = 0.4;
+  parameters.return_length_m = 8;
+  parameters.lateral_offsets_m = {0, -3.5, 3.5};
+  const auto objects = obstacleAt(30, 0, 2, 2);
+  const auto lanes = route(map, {302, 303, 304});
+  pp::PredictedObjects predictions;
+  predictions.fill(obstacleAt(30, -3.5, 2, 2));
+  for (double speed : {12.0, 30.0}) {
+    SCOPED_TRACE(speed);
+    pp::HybridAstar core(parameters, map);
+    auto ego = egoAt(2);
+    ego.twist.twist.linear.x = speed;
+    const auto first = core.process(ego, objects, lanes, pp::PredictedObjects{});
+    ASSERT_GT(pathLength(first), 49.9);
+    const auto near_box = std::min_element(first.points.begin(), first.points.end(), [](const auto& a, const auto& b) {
+      return std::abs(a.pose.pose.position.x - 28) < std::abs(b.pose.pose.position.x - 28);
+    });
+    ASSERT_LT(near_box->pose.pose.position.y, -2);
+    const auto second = core.process(ego, objects, lanes, predictions);
+    EXPECT_GT(pathLength(second), 13);
+    double max_y = -1e9;
+    for (const auto& point : second.points) max_y = std::max(max_y, point.pose.pose.position.y);
+    if (speed == 12.0) EXPECT_LE(max_y, 0.1);
+    else EXPECT_GT(max_y, 2.0);
+  }
+}
+
 TEST(HybridAstar, DISABLED_MeasurePrimitiveBudget) {
   auto map = straightMap(6);
   const auto ego = egoAt(2, 0.8, 0.08);
