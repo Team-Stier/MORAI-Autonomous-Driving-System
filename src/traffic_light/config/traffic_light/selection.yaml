@@ -13,8 +13,12 @@ recognize:
     "10": camera7_frame_cpu.hpp
     "11": camera7_frame_cpu.hpp
     "12": camera7_frame_cpu.hpp
+    "18": camera7_frame_cpu.hpp
     "13": camera7_frame_cpu.hpp
     "14": camera7_frame_cpu.hpp
+    "20": camera7_frame_cpu.hpp
     "15": camera7_frame_cpu.hpp
+    "19": camera7_frame_cpu.hpp
     "16": camera7_frame_cpu.hpp
+    "17": camera7_frame_cpu.hpp
   health_core_map: []

@@ -1,4 +1,8 @@
 render:
   section_core_map:
     '0': ego_vehicle.hpp
+    '17': ego_vehicle.hpp
+    '18': ego_vehicle.hpp
+    '19': ego_vehicle.hpp
+    '20': ego_vehicle.hpp
   health_core_map: []

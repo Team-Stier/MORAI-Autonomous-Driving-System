@@ -13,10 +13,14 @@ roi:
     "10": road_roi.hpp
     "11": road_roi.hpp
     "12": road_roi.hpp
+    "18": road_roi.hpp
     "13": road_roi.hpp
     "14": road_roi.hpp
+    "20": road_roi.hpp
     "15": road_roi.hpp
+    "19": road_roi.hpp
     "16": road_roi.hpp
+    "17": road_roi.hpp
   health_core_map: []
 clustering:
   section_core_map:
@@ -33,10 +37,14 @@ clustering:
     "10": dbscan.hpp
     "11": dbscan.hpp
     "12": dbscan.hpp
+    "18": dbscan.hpp
     "13": dbscan.hpp
     "14": dbscan.hpp
+    "20": dbscan.hpp
     "15": dbscan.hpp
+    "19": dbscan.hpp
     "16": dbscan.hpp
+    "17": dbscan.hpp
   health_core_map: []
 tf:
   section_core_map:
@@ -53,10 +61,14 @@ tf:
     "10": cluster_tf.hpp
     "11": cluster_tf.hpp
     "12": cluster_tf.hpp
+    "18": cluster_tf.hpp
     "13": cluster_tf.hpp
     "14": cluster_tf.hpp
+    "20": cluster_tf.hpp
     "15": cluster_tf.hpp
+    "19": cluster_tf.hpp
     "16": cluster_tf.hpp
+    "17": cluster_tf.hpp
   health_core_map: []
 bbox_fitting:
   section_core_map:
@@ -73,10 +85,14 @@ bbox_fitting:
     "10": obb.hpp
     "11": obb.hpp
     "12": obb.hpp
+    "18": obb.hpp
     "13": obb.hpp
     "14": obb.hpp
+    "20": obb.hpp
     "15": obb.hpp
+    "19": obb.hpp
     "16": obb.hpp
+    "17": obb.hpp
   health_core_map: []
 track:
   section_core_map:
@@ -93,8 +109,12 @@ track:
     "10": tracking.hpp
     "11": tracking.hpp
     "12": tracking.hpp
+    "18": tracking.hpp
     "13": tracking.hpp
     "14": tracking.hpp
+    "20": tracking.hpp
     "15": tracking.hpp
+    "19": tracking.hpp
     "16": tracking.hpp
+    "17": tracking.hpp
   health_core_map: []

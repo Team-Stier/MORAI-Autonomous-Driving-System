@@ -1,10 +1,10 @@
 #pragma once
 #include <interfaces/SectionAnnotation.h>
 #include <nav_msgs/Odometry.h>
-#include <array>
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include <vector>
 
 namespace section_annotator {
 struct Checkpoint {
@@ -12,7 +12,7 @@ struct Checkpoint {
   double y_m = 0;
 };
 struct CheckpointParameters {
-  std::array<Checkpoint, 16> checkpoints{};
+  std::vector<Checkpoint> checkpoints;
   double radius_m = 10.0;
 };
 

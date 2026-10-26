@@ -1,6 +1,7 @@
 #pragma once
 #include <section_annotator/cores/checkpoint_sections.hpp>
 #include <node_pipeline/extension.hpp>
+#include <array>
 #include <cmath>
 #include <istream>
 #include <sstream>
@@ -17,9 +18,15 @@ inline CheckpointParameters readCheckpoints(std::istream& stream, double radius_
   if (!std::getline(stream, line)) throw std::invalid_argument("empty checkpoints CSV");
   if (!line.empty() && line.back() == '\r') line.pop_back();
   if (line != "x,y,z,yaw,lanelet_id") throw std::invalid_argument("expected checkpoints CSV header x,y,z,yaw,lanelet_id");
-  for (auto& point : parameters.checkpoints) {
-    if (!std::getline(stream, line)) throw std::invalid_argument("expected 16 checkpoints");
+  while (std::getline(stream, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.empty()) {
+      while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (!line.empty()) throw std::invalid_argument("empty checkpoint line");
+      }
+      break;
+    }
     std::istringstream row(line);
     std::array<double, 4> values;
     for (auto& value : values) {
@@ -37,9 +44,10 @@ inline CheckpointParameters readCheckpoints(std::istream& stream, double radius_
       throw std::invalid_argument("expected positive integer checkpoint lanelet_id");
     if (row.peek() != std::char_traits<char>::eof() || line.back() == ',')
       throw std::invalid_argument("expected five checkpoint fields");
-    point = {values[0], values[1]};
+    parameters.checkpoints.push_back({values[0], values[1]});
+    if (parameters.checkpoints.size() > 32) throw std::invalid_argument("expected 16 to 32 checkpoints");
   }
-  if (std::getline(stream, line)) throw std::invalid_argument("expected exactly 16 checkpoints");
+  if (parameters.checkpoints.size() < 16) throw std::invalid_argument("expected 16 to 32 checkpoints");
   return parameters;
 }
 
