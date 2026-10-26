@@ -26,8 +26,12 @@ struct HybridAstarParameters {
   double prediction_acceleration_mps2 = 6.0;
   double emergency_deceleration_mps2 = 6.0;
   double occupancy_history_sec = 0.8;
+  double return_length_m = 0.0;
+  double checkpoint_keep_m = 1.5, checkpoint_blend_m = 12.0;
   std::vector<double> transition_lengths_m{8.0, 12.0, 16.0};
   std::vector<double> lateral_offsets_m{0.0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5, -6.0, 6.0, -7.5};
+  // Official 3 m balls. Empty leaves the reference on the lane center.
+  std::vector<std::pair<double, double>> checkpoints;
   std::vector<double> steering_candidates_deg{-40, -35, -30, -25, -20, -15, -10, -5,
                                                0, 5, 10, 15, 20, 25, 30, 35, 40};
 };
@@ -106,17 +110,22 @@ class HybridAstar {
         obstacle_distance = std::max(obstacle_distance, progress + parameters_.vehicle_rear_m + 10.0);
     }
     double ramp_end = parameters_.path_length_m;
+    double block_far = -std::numeric_limits<double>::infinity();
     for (const auto& obstacle : obstacles) {
       const double station = signedStation(center_reference.line, obstacle.box.center);
       const auto value = sample(center_reference.line, station);
       const State on_center{value.position, std::atan2(value.first.y(), value.first.x()), 0.0};
       if (station > origin - parameters_.vehicle_rear_m && station < origin + parameters_.path_length_m &&
-          overlaps(egoBox(on_center, parameters_.collision_margin_m), obstacle.box))
-        ramp_end = std::min(ramp_end, station - origin - parameters_.vehicle_front_m -
-            std::hypot(obstacle.box.half_length, obstacle.box.half_width) - 2.0);
+          overlaps(egoBox(on_center, parameters_.collision_margin_m), obstacle.box)) {
+        const double reach = std::hypot(obstacle.box.half_length, obstacle.box.half_width);
+        ramp_end = std::min(ramp_end, station - origin - parameters_.vehicle_front_m - reach - 2.0);
+        block_far = std::max(block_far, station - origin + reach + parameters_.vehicle_rear_m);
+      }
     }
     if (previous_offset_m_ != 0.0 && has_bypass_anchor_)
       ramp_end = std::min(ramp_end, signedStation(center_reference.line, bypass_anchor_) - origin);
+    // Hold the bypass only beside the obstacle, then come back. A checkpoint 11 m later stays reachable.
+    const double hold_end = std::isfinite(block_far) ? std::max(ramp_end, block_far) : parameters_.path_length_m;
     const double ramp_begin = ramp_end - std::max(16.0, 2.0*prediction_speed_mps_);
     const auto anchorFor = [&](const Reference& ref) -> Vec2 {
       const auto value = sample(center_reference.line, origin + std::max(0.0, ramp_end));
@@ -133,12 +142,19 @@ class HybridAstar {
       ref.offset_m = offset;
       ref.lanes = center_reference.lanes;
       const auto& line = center_reference.line;
+      const auto smoothstep = [](double u) {
+        u = std::max(0.0, std::min(1.0, u));
+        return u*u*u*(10.0 + u*(-15.0 + 6.0*u));
+      };
       const auto add = [&](double station) {
         const auto value = sample(line, station);
         const Vec2 tangent = value.first.head<2>().normalized();
-        const double u = ramp_end <= ramp_begin ? 1.0 : std::max(0.0, std::min(1.0,
-            (station - origin - ramp_begin)/(ramp_end - ramp_begin)));
-        const double weight = u*u*u*(10.0 + u*(-15.0 + 6.0*u));
+        const double ahead = station - origin;
+        const double rise = ramp_end <= ramp_begin ? 1.0
+            : smoothstep((ahead - ramp_begin)/(ramp_end - ramp_begin));
+        const double fall = parameters_.return_length_m > 1e-6 && ahead > hold_end
+            ? 1.0 - smoothstep((ahead - hold_end)/parameters_.return_length_m) : 1.0;
+        const double weight = rise*fall;
         Vec3 point = value.position;
         point.head<2>() += offset*weight*Vec2(-tangent.y(), tangent.x());
         append(ref.line, point);
@@ -148,6 +164,10 @@ class HybridAstar {
       references.push_back(std::move(ref));
     }
     for (auto& ref : references) {
+      if (!parameters_.checkpoints.empty()) {
+        pullToCheckpoints(ref.line, center_reference.line);
+        rebuildStations(ref.line);
+      }
       fit(ref.line);
       ref.start_s = project(ref.line, start.position.head<2>()).station;
     }
@@ -269,6 +289,42 @@ class HybridAstar {
     Line line;
     for (const auto& point : lane.centerline3d()) append(line, {point.x(), point.y(), point.z()});
     return line;
+  }
+  static void rebuildStations(Line& line) {
+    line.stations.clear();
+    if (line.points.empty()) return;
+    line.stations.push_back(0.0);
+    for (std::size_t i = 1; i < line.points.size(); ++i) {
+      const double step = (line.points[i].head<2>() - line.points[i - 1].head<2>()).norm();
+      line.stations.push_back(line.stations.back() + std::max(step, 1e-6));
+    }
+  }
+  // Move the reference onto each official checkpoint that this road actually passes.
+  void pullToCheckpoints(Line& line, const Line& gauge) const {
+    if (parameters_.checkpoints.empty() || parameters_.checkpoint_blend_m <= 1e-6 || line.points.size() < 2) return;
+    const double blend = parameters_.checkpoint_blend_m, keep = parameters_.checkpoint_keep_m;
+    for (auto& point : line.points) {
+      const double station = project(gauge, point.head<2>()).station;
+      for (const auto& checkpoint : parameters_.checkpoints) {
+        const Vec2 goal{checkpoint.first, checkpoint.second};
+        const auto projection = project(gauge, goal);
+        if (projection.distance_squared > 64.0) continue;
+        const double delta = station - projection.station;
+        if (std::abs(delta) >= blend) continue;
+        const auto value = sample(gauge, projection.station);
+        const double norm = value.first.head<2>().norm();
+        if (norm < 1e-6) continue;
+        const Vec2 normal(-value.first.y()/norm, value.first.x()/norm);
+        const double goal_lat = (goal - value.position.head<2>()).dot(normal);
+        const double point_lat = (point.head<2>() - value.position.head<2>()).dot(normal);
+        const double error = point_lat - goal_lat;
+        if (std::abs(error) <= keep) continue;
+        const double u = 1.0 - std::abs(delta)/blend;
+        const double gate = u*u*(3.0 - 2.0*u);
+        const double target = goal_lat + std::copysign(keep, error);
+        point.head<2>() += (point_lat + (target - point_lat)*gate - point_lat)*normal;
+      }
+    }
   }
   static void fit(Line& line) {
     const auto count = line.points.size();
