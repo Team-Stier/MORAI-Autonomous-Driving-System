@@ -78,6 +78,14 @@ class FrenetPath {
               selected = std::move(candidate);
               selected_marker = display.markers.size();
             }
+          } else if (selected.points.empty()) {
+            // A blocked road requests braking with geometry for the downstream controller.
+            candidate.points.resize(2);
+            for (auto& point : candidate.points) {
+              point.velocity = 0.0;
+              point.acceleration = 0.0;
+            }
+            selected = std::move(candidate);
           }
           display.markers.push_back(std::move(marker));
         }

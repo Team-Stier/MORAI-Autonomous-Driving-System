@@ -142,7 +142,9 @@ TEST_F(FrenetSpeedPathTest, PassesAnOccupiedPathAfterThePredictedObjectLeaves) {
   geometric.transition_lengths_m = parameters.transition_lengths_m;
   geometric.lateral_offsets_m = parameters.lateral_offsets_m;
   pp::FrenetPath static_planner(geometric, shared);
-  EXPECT_TRUE(static_planner.process(ego, objects, route).points.empty());
+  const auto stopped = static_planner.process(ego, objects, route);
+  ASSERT_GE(stopped.points.size(), 2u);
+  for (const auto& point : stopped.points) EXPECT_DOUBLE_EQ(point.velocity, 0.0);
   pp::FrenetSpeedPath core(parameters, shared);
   const auto path = plan(core);
   ASSERT_FALSE(path.points.empty());
