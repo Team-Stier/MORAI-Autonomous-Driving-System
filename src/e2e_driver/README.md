@@ -520,6 +520,11 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
   - eval_manager가 lap마다 남기는 (벽시계, τ) 쌍(`lapK.clock.json`)으로 τ에 맞춘다(`make`). 결과는 1배속 720p H.264 30 fps다.
   - 리허설 영상은 τ 69.1 s가 영상 69.1 s이고 크기는 1.0 MB다(`~/morai-eval/videos/reh1_lap000_1x.mp4`).
   - 녹화 중 시뮬레이터 송신률은 495 → 497 dgram/s로 변화가 없었다.
+  - 계기판은 `lap_video.py`가 직접 그린다(10/27). 화면은 1280x720이고, 시뮬레이터 화면을 왼쪽 720x720에, 계기판 패널을 오른쪽 560 px에 둔다.
+    - 패널에는 속도계, 핸들 아이콘과 앞바퀴 각도, 최근 10 s 악셀·브레이크 그래프가 있다. 실제 적용값은 실선, 노드 명령은 점선이다.
+    - 값은 `tools/telemetry_rec.py`로 받는다. chroot에서 `python3 src/e2e_driver/tools/telemetry_rec.py /data/tel_NAME.csv`로 주행 중 켜 둔다. competition_status와 /control_cmd를 winpc 벽시계로 찍는다.
+    - 영상의 τ에는 lap 시계와 Mac−winpc 시계 차(10/27 측정 0.04 s)로 맞춘다: `make DIR CLOCK OUT 30 TEL.csv 0.04`.
+    - 리허설(reh1)은 적용값을 기록하지 않았다. 그래서 디버그 기록에서 명령값만 복원했다(`debug-telemetry`, `reh1_lap000_1x_dash.mp4`).
   - 클러스터와 Vehicle Info(브레이크·악셀 그래프)는 아직 켜지 못했다. 시뮬레이터 창(800x800)이 화면 크기 0x0인 헤드리스 Xwayland의 화면 밖에 있어, XTEST 클릭이 전달되지 않는다.
 
 ## 가짜 대회 호스트 (Mac, `tools/fake_host_mac.sh`)
