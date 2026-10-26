@@ -14,8 +14,8 @@
 | 구독 | `/section_annotation` | interfaces/SectionAnnotation | section 선택 |
 | 발행 | `/localization/ego` | nav_msgs/Odometry | map 위치·자세, base_link 3축 선속도·각속도, IMU 추정 시각 |
 
-GPS·IMU·competition_status 세 입력에 issue가 하나도 없을 때만 Core를 호출한다.
-주기 조립 기준은 최신 IMU(`reference_input: imu`)이며 발행 stamp도 그 IMU 시각이다. 점군은 입력 큐에만 보관하며 조립 기준 시각이나 자세·위치의 대체 입력으로 사용하지 않는다.
+선택된 Core의 선언 입력에 issue가 하나도 없을 때만 Core를 호출한다. GPS에 Missing·ReceiveTimeout·Stale이 있으면 `health_core_map`으로 `tunnel_wall.hpp`로 교체한다.
+주기 조립 기준은 최신 IMU(`reference_input: imu`)이며 발행 stamp도 그 IMU 시각이다. 점군은 조립 기준 시각으로 사용하지 않으며, FullEkf는 점군을 쓰지 않고 TunnelWall은 벽 관측으로 쓴다.
 
 등록된 `tunnel_wall.hpp`는 수평화 점군의 roll·pitch를 다시 적용하지 않고 map 벽 위치를 계산한다.
 차체 자세는 IMU·속도 관측에 그대로 사용하며, 점별 시간에 따른 자세·이동 보상을 유지한다.
