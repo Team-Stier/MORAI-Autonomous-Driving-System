@@ -1,4 +1,8 @@
 render:
   section_core_map:
     '0': object_boxes.hpp
+    '17': object_boxes.hpp
+    '18': object_boxes.hpp
+    '19': object_boxes.hpp
+    '20': object_boxes.hpp
   health_core_map: []

@@ -1,4 +1,8 @@
 render:
   section_core_map:
     '0': local_path.hpp
+    '17': local_path.hpp
+    '18': local_path.hpp
+    '19': local_path.hpp
+    '20': local_path.hpp
   health_core_map: []

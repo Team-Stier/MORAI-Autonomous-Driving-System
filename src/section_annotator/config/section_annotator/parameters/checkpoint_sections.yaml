@@ -1,2 +1,2 @@
-checkpoints_file: ../map/checkpoints.csv
+checkpoints_file: models/section_centers.csv
 radius_m: 10.0

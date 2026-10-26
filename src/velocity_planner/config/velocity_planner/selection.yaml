@@ -13,10 +13,14 @@ inject:
     "10": curvature_velocity60.hpp
     "11": curvature_velocity100.hpp
     "12": curvature_velocity100.hpp
+    "18": curvature_velocity100.hpp
     "13": curvature_velocity60.hpp
     "14": curvature_velocity60.hpp
+    "20": curvature_velocity60.hpp
     "15": curvature_velocity60.hpp
+    "19": curvature_velocity60.hpp
     "16": curvature_velocity60.hpp
+    "17": curvature_velocity60.hpp
   health_core_map: []
 cutoff:
   section_core_map:
@@ -33,10 +37,14 @@ cutoff:
     "10": stop_line_pass_through.hpp
     "11": stop_line_pass_through.hpp
     "12": stop_line_pass_through.hpp
+    "18": stop_line_pass_through.hpp
     "13": stop_line_pass_through.hpp
     "14": stop_line_pass_through.hpp
+    "20": stop_line_pass_through.hpp
     "15": stop_line_pass_through.hpp
+    "19": stop_line_pass_through.hpp
     "16": stop_line_pass_through.hpp
+    "17": stop_line_pass_through.hpp
   health_core_map: []
 transform:
   section_core_map:
@@ -53,8 +61,12 @@ transform:
     "10": tf.hpp
     "11": tf.hpp
     "12": tf.hpp
+    "18": tf.hpp
     "13": tf.hpp
     "14": tf.hpp
+    "20": tf.hpp
     "15": tf.hpp
+    "19": tf.hpp
     "16": tf.hpp
+    "17": tf.hpp
   health_core_map: []

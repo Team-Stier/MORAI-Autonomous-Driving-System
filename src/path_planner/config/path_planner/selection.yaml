@@ -13,10 +13,14 @@ checkpoint:
     "10": checkpoint_10.hpp
     "11": checkpoint_11.hpp
     "12": checkpoint_12.hpp
+    "18": checkpoint_12.hpp
     "13": checkpoint_13.hpp
     "14": checkpoint_14.hpp
+    "20": checkpoint_14.hpp
     "15": checkpoint_15.hpp
+    "19": checkpoint_15.hpp
     "16": checkpoint_16.hpp
+    "17": checkpoint_arrival.hpp
   health_core_map: []
 global:
   section_core_map:
@@ -33,10 +37,14 @@ global:
     "10": global_path.hpp
     "11": global_path.hpp
     "12": global_path.hpp
+    "18": global_path.hpp
     "13": global_path.hpp
     "14": global_path.hpp
+    "20": global_path.hpp
     "15": global_path.hpp
+    "19": global_path.hpp
     "16": global_path.hpp
+    "17": global_path.hpp
   health_core_map: []
 prediction:
   section_core_map:
@@ -53,10 +61,14 @@ prediction:
     "10": core_prediction.hpp
     "11": core_prediction.hpp
     "12": core_prediction.hpp
+    "18": core_prediction.hpp
     "13": core_prediction.hpp
     "14": core_prediction.hpp
+    "20": core_prediction.hpp
     "15": core_prediction.hpp
+    "19": core_prediction.hpp
     "16": core_prediction.hpp
+    "17": core_prediction.hpp
   health_core_map:
     - when: [{input: objects, issue: Missing}]
       priority: 100
@@ -76,10 +88,14 @@ local:
     "10": frenet_path.hpp
     "11": frenet_speed_path.hpp
     "12": frenet_speed_path.hpp
+    "18": frenet_speed_path.hpp
     "13": frenet_path.hpp
     "14": frenet_path.hpp
+    "20": frenet_path.hpp
     "15": frenet_path.hpp
+    "19": frenet_path.hpp
     "16": frenet_path.hpp
+    "17": frenet_path.hpp
   health_core_map:
     - when: [{input: objects, issue: Missing}]
       priority: 110
