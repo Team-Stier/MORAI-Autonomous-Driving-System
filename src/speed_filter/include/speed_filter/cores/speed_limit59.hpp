@@ -5,6 +5,7 @@
 
 namespace speed_filter {
 struct SpeedLimit59Parameters {
+  double speed_limit_kph = 59.0;
   double stop_tolerance_sec = 30.0;
   double start_duration_sec = 1.0;
   double start_accel = 0.2;
@@ -25,7 +26,7 @@ class SpeedLimit59 {
     }
     previous_stamp_sec_ = now_sec;
     auto output = command;
-    if (speed_mps > 59.0 / 3.6) {
+    if (speed_mps > parameters_.speed_limit_kph / 3.6) {
       stopped_since_sec_ = -1;
       start_until_sec_ = -1;
       output.accel = 0;

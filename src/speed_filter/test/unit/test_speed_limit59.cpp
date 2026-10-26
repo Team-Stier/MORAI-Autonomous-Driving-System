@@ -61,6 +61,7 @@ TEST(SpeedLimit59, BrakesBeforeSixtyAndLeavesTheHighwayCoreUnrestricted) {
 
 TEST(SpeedLimit59, PreservesConfiguredStopAssistAndResetsItsTimers) {
   const auto config = parameters();
+  EXPECT_DOUBLE_EQ(59.0, config.speed_limit_kph);
   EXPECT_DOUBLE_EQ(30.0, config.stop_tolerance_sec);
   EXPECT_DOUBLE_EQ(1.0, config.start_duration_sec);
   EXPECT_DOUBLE_EQ(0.2, config.start_accel);
@@ -95,10 +96,27 @@ TEST(SpeedLimit59, PreservesConfiguredStopAssistAndResetsItsTimers) {
   expectCommand(kick, core.process(command, status(31, 0)));
 }
 
+TEST(SpeedLimit59, UsesTheLoadedSpeedLimit) {
+  const auto config = speed_filter::loadSpeedLimit59Parameters(node_pipeline::ParamReader::fromString(
+      "speed_limit_kph: 55.0\nstop_tolerance_sec: 30.0\nstart_duration_sec: 1.0\nstart_accel: 0.2\nstop_speed_mps: 0.1\n"));
+  speed_filter::SpeedLimit59 core(config);
+  morai_msgs::CtrlCmd command;
+  command.accel = 0.4;
+  expectCommand(command, core.process(command, status(10, 54.9)));
+  auto braking = command;
+  braking.accel = 0;
+  braking.brake = 1;
+  expectCommand(braking, core.process(command, status(11, 55.1)));
+}
+
 TEST(SpeedLimit59Parameters, RejectsUnsafeStaticCoefficients) {
   const std::string valid =
-      "stop_tolerance_sec: 30.0\nstart_duration_sec: 1.0\nstart_accel: 0.2\nstop_speed_mps: 0.1\n";
+      "speed_limit_kph: 59.0\nstop_tolerance_sec: 30.0\nstart_duration_sec: 1.0\nstart_accel: 0.2\nstop_speed_mps: 0.1\n";
   for (const auto& entry : {std::pair<std::string, std::string>{"stop_tolerance_sec: 30.0", "stop_tolerance_sec: 0"},
+                           {"speed_limit_kph: 59.0", "speed_limit_kph: 0"},
+                           {"speed_limit_kph: 59.0", "speed_limit_kph: -1"},
+                           {"speed_limit_kph: 59.0", "speed_limit_kph: .nan"},
+                           {"speed_limit_kph: 59.0", "speed_limit_kph: .inf"},
                            {"start_duration_sec: 1.0", "start_duration_sec: -1"},
                            {"start_accel: 0.2", "start_accel: 1.1"},
                            {"stop_speed_mps: 0.1", "stop_speed_mps: -0.1"}}) {
