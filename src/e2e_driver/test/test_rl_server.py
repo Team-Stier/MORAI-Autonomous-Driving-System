@@ -1,5 +1,6 @@
 """model_server --sims (RL actor) without a GPU (fake backend): three clients at once each get their own answers (id,
-one simulator slot each), a fourth is refused while three are connected, a slot frees when its client goes; and
+one simulator slot each), a fourth is refused while three are connected, a slot frees when its client goes, --dump
+keeps decisions per the request's world (else per slot); and
 backends.rl_logp against the learner's Gaussian (Alpamayo-Cosmos train/rl/policy.py gauss_logp).
 
     <training venv>/bin/python test/test_rl_server.py
@@ -8,6 +9,7 @@ import math
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -48,8 +50,9 @@ def connect(port):
 def test_server():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0)); port = s.getsockname()[1]
+    dump = Path(tempfile.mkdtemp())
     p = subprocess.Popen([sys.executable, str(HERE.parent / "server" / "model_server.py"), "--backend", "fake", "--sims", "3",
-                          "--port", str(port)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                          "--port", str(port), "--dump", str(dump)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
         for _ in range(600):                                               # a loaded host imports torch slowly
             try:
@@ -79,10 +82,12 @@ def test_server():
         for _ in range(50):                                                # the freed slot goes to the next client
             c = connect(port)
             try:
-                wire.send(c, dict(req, id=7)); r = wire.recv(c); break
+                wire.send(c, dict(req, id=7, world=5)); r = wire.recv(c); break
             except ConnectionError:
                 time.sleep(0.2)
-        assert r["id"] == 7 and r["sim"] == sims[1], r
+        assert r["id"] == 7 and r["sim"] == sims[1] and r["world"] == 5, r
+        assert wire.unpack((dump / "world5" / "out_000007.bin").read_bytes())["world"] == 5      # dumps by the node's world
+        assert (dump / "world5" / "req_000007.bin").exists() and (dump / f"sim{sims[0]}" / "req_000001.bin").exists()
         print("serve_batch ok: slots", sims, "reused", r["sim"])
     finally:
         p.terminate()

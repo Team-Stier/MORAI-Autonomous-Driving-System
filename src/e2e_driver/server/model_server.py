@@ -63,8 +63,9 @@ class Poked(queue.Queue):
 
 def client_threads(conn, backend, proc, dump, ready, lock=None):
     """receive + prepare threads of one client: prepared jobs (req, sample, prepared, t_in, t, t1, t2) into `ready` (one
-    request prepared ahead of the GPU thread), then None when the client is gone. lock: serializes the in-thread
-    preparation of several clients (tokenize's per-image cache queue is shared)."""
+    request prepared ahead of the GPU thread), then None when the client is gone. dump: req -> the directory to keep it
+    in (None: no dump). lock: serializes the in-thread preparation of several clients (tokenize's per-image cache queue
+    is shared)."""
     inbox = queue.Queue(4)
 
     def receive():
@@ -82,7 +83,7 @@ def client_threads(conn, backend, proc, dump, ready, lock=None):
                 ready.put(None); return
             req, t_in = job
             t = time.perf_counter()
-            if dump: (dump / f"req_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(req))
+            if dump: (dump(req) / f"req_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(req))
             if proc is not None:                   # --prep process: build + tokenize in the worker, pin here
                 prepared, timing, assemble_s = proc(req, f"live/{req.get('id', 0)}")
                 sample, t1, prepared = {}, t + assemble_s, backend.pin((prepared, timing))
@@ -124,7 +125,7 @@ def serve(a, backend):
         conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         log.info("client %s", peer)
         ready = queue.Queue(1)
-        client_threads(conn, backend, proc, dump, ready)
+        client_threads(conn, backend, proc, (lambda req: dump) if dump else None, ready)
         try:
             while True:
                 job = ready.get()
@@ -156,8 +157,9 @@ def serve_batch(a, backend):
     simulator (its own ViT cache, dropped when the client goes). The GPU thread takes one ready request per simulator
     and runs them as one batch (backend.run_batch) without waiting for the others: while the GPU is the bottleneck
     every simulator has one ready. Exploration std: --rl-sigma, or a request's own "sigma" (0 for an evaluation lap).
-    --lora-watch: a new LoRA version (latest.json) is merged in between batches. --dump DIR keeps DIR/simK/req_ID.bin (the request) and
-    out_ID.bin (the response: actions, chain, logp, expert, lora_version) per decision."""
+    --lora-watch: a new LoRA version (latest.json) is merged in between batches. --dump DIR keeps DIR/worldW/req_ID.bin
+    (the request) and out_ID.bin (the response: actions, chain, logp, expert, lora_version) per decision, W = the
+    request's "world" (the node's ~world, the episode manager's), or DIR/simK/ without one."""
     sims = a.sims
     poke, lock = threading.Event(), threading.Lock()
     readies, slots = [Poked(poke) for _ in range(sims)], [None] * sims
@@ -171,6 +173,11 @@ def serve_batch(a, backend):
     sigma = sigma[0] if len(sigma) == 1 else sigma                          # one std, or one per Euler step
     sigmas(sigma, a.steps)                                                  # all > 0 or all 0, else ValueError
     dump = Path(a.dump) if a.dump else None
+
+    def dump_dir(req, k):
+        d = dump / (f"world{int(req['world'])}" if "world" in req else f"sim{k}")
+        d.mkdir(parents=True, exist_ok=True)
+        return d
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((a.host, a.port)); srv.listen(sims)
@@ -187,9 +194,7 @@ def serve_batch(a, backend):
             if k is None:
                 log.warning("client %s refused: %d simulators connected", peer, sims); conn.close(); continue
             log.info("client %s = simulator %d", peer, k)
-            d = dump / f"sim{k}" if dump else None
-            if d: d.mkdir(parents=True, exist_ok=True)
-            client_threads(conn, backend, procs[k], d, readies[k], prep_lock)
+            client_threads(conn, backend, procs[k], (lambda req, k=k: dump_dir(req, k)) if dump else None, readies[k], prep_lock)
 
     threading.Thread(target=accept, daemon=True).start()
     log.info("listening on %s:%d (backend %s, %d simulators, sigma %s, LoRA %s)", a.host, a.port, a.backend, sims, sigma, a.lora_watch)
@@ -233,9 +238,9 @@ def serve_batch(a, backend):
         for (k, (req, sample, prepared, t_in, t, t1, t2)), out in zip(jobs, outs):
             out["timing"] = dict(out.get("timing", {}), wait_prep_ms=ms(t - t_in), assemble_ms=ms(t1 - t), prep_ms=ms(t2 - t),
                                  wait_run_ms=ms(t3 - t2), run_ms=ms(t4 - t3), total_ms=ms(t4 - t_in))
-            out["id"], out["sim"], out["t_wall"] = req.get("id"), k, req.get("t_wall")   # t_wall: rl_reward joins on it
+            out.update(id=req.get("id"), sim=k, world=req.get("world"), t_wall=req.get("t_wall"))   # rl_reward joins on t_wall
             if out.get("xyz") is None: out.pop("xyz", None)
-            if dump: (dump / f"sim{k}" / f"out_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(out))
+            if dump: (dump_dir(req, k) / f"out_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(out))
             try:
                 wire.send(slots[k], out)
             except (ConnectionError, OSError) as e:           # the receive thread reports the client gone

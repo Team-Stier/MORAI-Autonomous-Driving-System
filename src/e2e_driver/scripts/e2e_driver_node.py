@@ -49,6 +49,7 @@ class Node:
         self.max_inflight = int(P("max_inflight", 2))
         self.follow_m, self.pose = float(P("fake_follow_route_m", 0.0)), None    # > 0: route_kappa for the fake backend
         self.expert2_zone = [float(x) for x in P("expert2_zone", [])]              # [s0, s1): the server's 2nd expert set
+        self.world = int(P("world", 0))                                               # RL actor: which simulator (dump dir)
         self.guard = PoseGuard()                                                     # localization guard (on_ego)
         self.teleport, self.restart_loc = TeleportDetector(), bool(P("restart_localization_on_teleport", True))
         self.teleport_pub = rospy.Publisher("~teleport", Header, queue_size=2)       # vlp16_bev, sim_clock reset on it
@@ -194,7 +195,7 @@ class Node:
                 continue
             if self.follow_m > 0 and self.pose is not None:
                 req["route_kappa"] = float(self.route.pursuit_kappa(s, *self.pose, self.follow_m))
-            req["t_wall"] = t_wall                      # host clock at t0: the RL episode manager joins rewards on it
+            req["t_wall"], req["world"] = t_wall, self.world   # host clock at t0 (rl_reward joins on it), simulator
             if self.expert2_zone and self.expert2_zone[0] <= s < self.expert2_zone[1]:
                 req["expert"] = 1                       # RL_PLAN 5 A: the section expert (model_server --expert2)
             try:

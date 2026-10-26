@@ -545,7 +545,7 @@ model_server.py --backend engine --ckpt <deliver> --sims 3 --rl-sigma 0.1 --expe
 - **노이즈 샘플러**: 매 Euler 스텝 뒤에 σ_k·ε_k를 더하고(DPPO·ReinFlow), 사슬 x_0..x_10을 남긴다. 사양은 learner의 `train/rl/policy.py` `Policy.sample`이다.
   - σ는 `--rl-sigma`(값 하나 또는 스텝별 10개)이고, 요청의 `sigma`가 우선한다(평가 주행 0). 스텝 전부 > 0이거나 전부 0이어야 한다(learner는 모든 스텝의 log-prob을 쓴다).
   - 응답에 `chain` (11, 64, 2), `sigma`, `logp` (10,), `logp_sum`이 붙는다. logp_k = log N(x_{k+1}; x_k + dt·v, σ_k² I)이고, σ_k = 0이면 0이다.
-  - `--dump DIR`는 `DIR/simK/req_ID.bin`(관측)과 `out_ID.bin`(응답)을 남긴다. learner의 `train/rl/episodes.py`가 이 파일을 읽는다.
+  - `--dump DIR`는 `DIR/worldW/req_ID.bin`(관측)과 `out_ID.bin`(응답)을 남긴다. W는 노드 파라미터 `~world`(요청의 `world`)이고, 없으면 `DIR/simK/`다. learner의 `train/rl/episodes.py`가 이 파일을 읽는다.
   - 노드는 요청에 `t_wall`(t0 시점 호스트 시계)을 넣고, 서버가 응답에 복사한다. 보상 결합(`tools/rl_reward.py`, rl/env 브랜치)이 이 값을 쓴다.
 - **expert 두 벌** (`--expert2 [LORA]`, RL_PLAN 5 A): 두 번째 expert 벌을 VRAM에 올린다. 요청의 `expert: 1`이 그 벌을 고른다. 그래프가 벌마다 따로 있어서 전환 비용이 없다.
   - 노드는 `expert2_zone: [s0, s1]`(경로 s, 고주로 `[1118.7, 1741.7]`) 안에서 `expert: 1`을 보낸다. 기본값 `[]`는 끔이다.
