@@ -10,6 +10,8 @@ lidar_topic: /lidar_bev/scan
 status_topic: /vehicle/competition_status
 localization_topic: /localization/ego
 control:                      # src/e2e_driver/control.py docstring; measured with test/fit_vehicle.py (README)
+  mode: map                   # map | mlp (test/control_mlp.py, README); switch only on the user's decision
+  mlp_weights: control_mlp.npz  # in src/e2e_driver/ (with applied history) or control_mlp_nohist.npz
   wheelbase_m: 3.0
   max_steer_deg: 40.0
   steer_gain: 0.77
