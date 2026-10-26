@@ -1,4 +1,5 @@
 #include <object_detector/cores/road_roi.hpp>
+#include <object_detector/parameters/road_roi.hpp>
 #include <lanelet2_core/LaneletMap.h>
 #include <gtest/gtest.h>
 #include <array>
@@ -226,4 +227,19 @@ TEST(RoadRoi, IncludesCurrentLanePrefixReachedThroughSuccessorCycle) {
   const auto output = std::get<0>(core.process(
     cloud({{-8, 0, 1}, {-3, 0, 1}, {6, 0, 1}, {10, 5, 1}}), {}, pose(10)));
   EXPECT_EQ((std::vector<float>{0, 2, 3}), indices(output));
+}
+
+TEST(RoadRoi, CampaignConfigurationExcludesRoadsideReturnsButKeepsLaneObstacles) {
+  RoadMap road;
+  road.straight(0, 50, 2, -2);
+  auto config = pkg::loadRoadRoiParameters(node_pipeline::ParamReader::fromFile(
+      std::string(NP_PACKAGE_DIR) + "/config/object_detector/parameters/road_roi.yaml",
+      NP_PACKAGE_DIR));
+  config.map = road.map;
+  pkg::RoadRoi core(config);
+  // In-lane box, pedestrian and vehicle returns, then both road boundaries and roadside.
+  const auto input = cloud({{10, 1.5f, 1}, {15, -1.8f, 1.7f}, {25, 0, 1.5f},
+                            {30, 2, 1}, {30, -2, 1}, {30, 2.25f, 1}, {30, -2.5f, 1}});
+  EXPECT_EQ((std::vector<float>{0, 1, 2, 3, 4}),
+            indices(std::get<0>(core.process(input, {}, pose()))));
 }
