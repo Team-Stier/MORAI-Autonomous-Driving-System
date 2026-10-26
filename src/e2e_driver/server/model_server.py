@@ -28,6 +28,16 @@ from e2e_driver import wire                           # noqa: E402
 log = logging.getLogger("model_server")
 
 
+def gpu_mem():
+    """this process's CUDA memory (GiB): allocated now, peak allocated, peak reserved by the caching allocator."""
+    import torch
+    if not torch.cuda.is_available():
+        return {}
+    g = lambda x: round(x / 2**30, 2)
+    return dict(alloc_gb=g(torch.cuda.memory_allocated()), alloc_max_gb=g(torch.cuda.max_memory_allocated()),
+                reserved_max_gb=g(torch.cuda.max_memory_reserved()))
+
+
 def make_backend(a):
     import backends
     if a.backend == "fake":
@@ -35,7 +45,7 @@ def make_backend(a):
     if a.backend == "engine":
         warm = sorted(Path(a.warmup).glob("req_*.bin"))[:2] if a.warmup else []
         b = backends.EngineBackend(a.ckpt, vlm=a.vlm, num_steps=a.steps, seed=a.seed, warmup=warm, want_xyz=bool(a.dump))
-        log.info("engine %s loaded in %.0f s, warm-up %s", b.model.engine_info, b.load_s, getattr(b, "warmup_timing", None))
+        log.info("engine %s loaded in %.0f s, warm-up %s, gpu %s", b.model.engine_info, b.load_s, getattr(b, "warmup_timing", None), gpu_mem())
         return b
     return backends.HFBackend(a.ckpt, vlm=a.vlm, model_class=a.model_class, attn=a.attn, dtype=a.dtype, num_steps=a.steps, seed=a.seed)
 
@@ -107,7 +117,7 @@ def serve(a, backend):
                 if out.get("xyz") is None: out.pop("xyz", None)
                 wire.send(conn, out)
                 n += 1
-                if n % 100 == 1: log.info("request %d: %s", n, out["timing"])
+                if n % 100 == 1: log.info("request %d: %s gpu %s", n, out["timing"], gpu_mem() if a.backend != "fake" else {})
         except (ConnectionError, OSError) as e:
             log.info("send failed: %s", e)
         finally:

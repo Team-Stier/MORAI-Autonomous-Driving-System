@@ -96,7 +96,7 @@ print("long delays (> 0.3 s, current rule): %d; of them crawling (0.05 < max |v|
 for key in RULES:
     name, d = key, np.array(delays[key])
     print("  release before the launch row (s) p50 %.1f p10 %.1f" % (np.median(gt_lead[key]), np.percentile(gt_lead[key], 10)))
-    print("%s: held while the driver accelerates %.1f %% of %d rows; launch delay s p50 %.2f p90 %.2f max %.2f (> 0.3 s: %.1f %%); "
+    print("%s: held while the driver accelerates %.1f %% of %d rows; launch delay s p50 %.2f p95 %.2f max %.2f (> 0.3 s: %.1f %%); "
           "true standstill rows released %.1f %% of %d" % (name, 100 * np.mean(go_rows[key]), len(go_rows[key]), np.median(d),
-                                                            np.percentile(d, 90), d.max(), 100 * np.mean(d > 0.3),
+                                                            np.percentile(d, 95), d.max(), 100 * np.mean(d > 0.3),
                                                             100 * np.mean(stay_rows[key]), len(stay_rows[key])))
