@@ -48,6 +48,7 @@ class Node:
         self.server = (P("server_host", "127.0.0.1"), int(P("server_port", 47011)))
         self.max_inflight = int(P("max_inflight", 2))
         self.follow_m, self.pose = float(P("fake_follow_route_m", 0.0)), None    # > 0: route_kappa for the fake backend
+        self.expert2_zone = [float(x) for x in P("expert2_zone", [])]              # [s0, s1): the server's 2nd expert set
         self.guard = PoseGuard()                                                     # localization guard (on_ego)
         self.teleport, self.restart_loc = TeleportDetector(), bool(P("restart_localization_on_teleport", True))
         self.teleport_pub = rospy.Publisher("~teleport", Header, queue_size=2)       # vlp16_bev, sim_clock reset on it
@@ -168,7 +169,7 @@ class Node:
             camera_age_ms=[round(1e3 * (meta["t0"] - x), 1) for x in meta["camera_newest"]],
             assemble_ms=round(1e3 * (meta["w_req"] - meta["w0"]), 1), server_ms=round(1e3 * (time.perf_counter() - meta["w_req"]), 1),
             server=resp.get("timing", {}), pick=meta["pick"], inflight=meta["inflight"], skipped=self.skipped, loc_rejected=self.guard.rejected, v=round(self.v, 3),
-            v0=round(float(resp["v0"]), 3), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info))))
+            v0=round(float(resp["v0"]), 3), expert=resp.get("expert", 0), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info))))
 
     def infer_loop(self):
         period = 1.0 / self.rate
@@ -193,6 +194,8 @@ class Node:
                 continue
             if self.follow_m > 0 and self.pose is not None:
                 req["route_kappa"] = float(self.route.pursuit_kappa(s, *self.pose, self.follow_m))
+            if self.expert2_zone and self.expert2_zone[0] <= s < self.expert2_zone[1]:
+                req["expert"] = 1                       # RL_PLAN 5 A: the section expert (model_server --expert2)
             try:
                 if self.sock is None:
                     self.connect()

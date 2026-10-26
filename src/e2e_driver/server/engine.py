@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import torch
 
-from nvfp4 import F4Linear, F8Linear
+from nvfp4 import E4, F4Linear, F8Linear, quant_nvfp4
 
 FORMATS = {"nvfp4": F4Linear, "fp8": F8Linear}
 BITS = {"nvfp4": 4.5, "fp8": 8.0, "bf16": 16.0}                  # per weight with scales (morai_vla.qad.effective_bits)
@@ -50,9 +50,20 @@ def manifest_layers(deliver):
     return man
 
 
+def open_final(final, device):
+    """final/'s tensors one at a time on `device` -> (object with get_tensor(name), the set of names)."""
+    from safetensors import safe_open
+    index = final / "model.safetensors.index.json"                     # save_pretrained shards a full-size student (3 files)
+    shard_of = json.load(open(index))["weight_map"] if index.exists() else None
+    files = sorted(set(shard_of.values())) if shard_of else ["model.safetensors"]
+    handles = {n: safe_open(final / n, "pt", device=str(device)) for n in files}
+    if shard_of is None:
+        shard_of = {k: files[0] for k in handles[files[0]].keys()}
+    return SimpleNamespace(get_tensor=lambda k: handles[shard_of[k]].get_tensor(k)), set(shard_of)
+
+
 def load(deliver, vlm="Qwen/Qwen3-VL-4B-Instruct", device="cuda:0", attn="sdpa", quantize=True):
     from accelerate import init_empty_weights
-    from safetensors import safe_open
     from morai_vla.model import exact_action_space, load_config
     from morai_vla.student import StudentVLA
     deliver = Path(deliver)
@@ -67,14 +78,7 @@ def load(deliver, vlm="Qwen/Qwen3-VL-4B-Instruct", device="cuda:0", attn="sdpa",
     finally:
         torch.set_default_dtype(prev)
     counts, rest = {}, {}
-    index = final / "model.safetensors.index.json"                     # save_pretrained shards a full-size student (3 files)
-    shard_of = json.load(open(index))["weight_map"] if index.exists() else None
-    files = sorted(set(shard_of.values())) if shard_of else ["model.safetensors"]
-    handles = {n: safe_open(final / n, "pt", device=str(device)) for n in files}
-    if shard_of is None:
-        shard_of = {k: files[0] for k in handles[files[0]].keys()}
-    f = SimpleNamespace(get_tensor=lambda k: handles[shard_of[k]].get_tensor(k))
-    saved = set(shard_of)
+    f, saved = open_final(final, device)
     for name, q in man.items():
         parent, _, child = name.rpartition(".")
         try:
@@ -113,3 +117,62 @@ def load(deliver, vlm="Qwen/Qwen3-VL-4B-Instruct", device="cuda:0", attn="sdpa",
     torch.cuda.empty_cache()
     model.engine_info = dict(deliver=str(deliver), layers=counts, llm_expert=budget, gpu_gb=round(torch.cuda.memory_allocated(device) / 2**30, 2))
     return model
+
+
+# ---------------------------------------------------------------- expert LoRA (RL_PLAN 3.1 weight updates, 5 A)
+def read_lora(path):
+    """an expert LoRA of the learner (Alpamayo-Cosmos train/rl/policy.py LoRA.export): safetensors {<module>.lora_A
+    (r, in), <module>.lora_B (out, r)} with StudentVLA module names, metadata scale (alpha / r) and version ->
+    ({module: (A, B)}, scale, version or None)."""
+    from safetensors import safe_open
+    with safe_open(str(path), "pt") as h:
+        meta, t = h.metadata() or {}, {k: h.get_tensor(k) for k in h.keys()}
+    names = {k.rsplit(".", 1)[0] for k in t}
+    bad = [k for k in t if not k.endswith((".lora_A", ".lora_B"))] + [n for n in names if n + ".lora_A" not in t or n + ".lora_B" not in t]
+    if bad or "scale" not in meta:
+        raise ValueError("%s: not a LoRA export (keys <module>.lora_A/.lora_B, metadata scale): %s" % (path, bad[:3] or "no scale"))
+    return {n: (t[n + ".lora_A"], t[n + ".lora_B"]) for n in names}, float(meta["scale"]), meta.get("version")
+
+
+def expert_base(deliver, parts, pin=True):
+    """the delivery's BF16 weights of every linear of an expert set (FastEngine.parts entry; module names as in
+    StudentVLA), in host memory: what each LoRA is merged onto (~4.6 GB)."""
+    f, saved = open_final(Path(deliver) / "final", "cpu")
+    names = [n for n, m in parts.named_modules() if isinstance(m, (F4Linear, F8Linear, torch.nn.Linear))]
+    missing = [n for n in names if n + ".weight" not in saved]
+    if missing:
+        raise DeliveryError("final/ has no weight for expert linears %s" % missing[:3])
+    w = {n: f.get_tensor(n + ".weight").to(torch.bfloat16) for n in names}
+    try:
+        return {n: t.pin_memory() for n, t in w.items()} if pin else w
+    except RuntimeError:                                   # no page-locked memory to spare: slower copies, same result
+        return w
+
+
+@torch.no_grad()
+def apply_lora(parts, base, lora=None, scale=1.0):
+    """W + scale * B A on every linear of an expert set, in place (CUDA graphs captured on it keep their pointers);
+    lora None: the base again. Quantized as load() quantizes a delivery, with the delivered scales (QAD's calibrated
+    amax, not max|W'|; the learner's merge() keeps them too), so this equals load() of a merged delivery."""
+    lora = lora or {}
+    bad = ["%s (not in the expert)" % n for n in lora if n not in base]
+    bad += ["%s: A %s B %s for weight %s" % (n, list(A.shape), list(B.shape), list(base[n].shape)) for n, (A, B) in lora.items()
+            if n in base and (A.shape[1] != base[n].shape[1] or B.shape[0] != base[n].shape[0] or A.shape[0] != B.shape[1])]
+    if bad:                                                            # checked before anything changes
+        raise ValueError("LoRA does not fit the expert: %s" % "; ".join(bad[:3]))
+    for name, w in base.items():
+        mod = parts.get_submodule(name)
+        dev = mod.wq.device if isinstance(mod, F4Linear) else mod.w8.device if isinstance(mod, F8Linear) else mod.weight.device
+        w = w.to(dev, non_blocking=True)
+        if name in lora:
+            A, B = (x.to(dev, torch.float32) for x in lora[name])
+            w = (w.float() + scale * (B @ A)).to(torch.bfloat16)
+        if isinstance(mod, F4Linear):
+            q, s = quant_nvfp4(w.contiguous(), mod.gw)
+            mod.wq.view(torch.uint8).copy_(q.view(torch.uint8)); mod.ws.view(torch.uint8).copy_(s.view(torch.uint8))
+        elif isinstance(mod, F8Linear):
+            mod.w8.view(torch.uint8).copy_((w.float() / mod.sw).clamp(-448, 448).to(E4).view(torch.uint8))
+        else:
+            mod.weight.copy_(w)
+    torch.cuda.synchronize()
+    return len(lora)
