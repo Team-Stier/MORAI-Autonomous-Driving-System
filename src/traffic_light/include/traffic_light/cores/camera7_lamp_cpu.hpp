@@ -35,10 +35,7 @@ class Camera7LampCpu {
   interfaces::TrafficLight process(const sensor_msgs::CompressedImage& message) {
     interfaces::TrafficLight result;
     const cv::Mat image = cv::imdecode(message.data, cv::IMREAD_COLOR);
-    const std::uint8_t state = image.empty() || image.type() != CV_8UC3
-        ? static_cast<std::uint8_t>(interfaces::TrafficLight::UNKNOWN)
-        : readFrame(image);
-    result.state = confirm(state);
+    result.state = confirm(readFrame(image));
     return result;
   }
 
@@ -52,19 +49,24 @@ class Camera7LampCpu {
   };
 
   std::uint8_t confirm(std::uint8_t state) {
-    if (parameters_.minimum_repeat <= 1) {
+    if (state == previous_ && state != interfaces::TrafficLight::UNKNOWN) {
+      if (repeat_count_ < parameters_.minimum_repeat) ++repeat_count_;
+    } else {
       previous_ = state;
+      repeat_count_ = 1;
+    }
+    if (parameters_.minimum_repeat <= 1 ||
+        (state != interfaces::TrafficLight::UNKNOWN &&
+         repeat_count_ >= parameters_.minimum_repeat)) {
       return state;
     }
-    const bool agreed = state == previous_ && state != interfaces::TrafficLight::UNKNOWN;
-    previous_ = state;
-    return agreed ? state : static_cast<std::uint8_t>(interfaces::TrafficLight::UNKNOWN);
+    return static_cast<std::uint8_t>(interfaces::TrafficLight::UNKNOWN);
   }
 
   std::uint8_t readFrame(const cv::Mat& image) const {
     const int y_max = std::max(0, std::min(
         image.rows, static_cast<int>(parameters_.search_bottom_ratio * image.rows)));
-    if (y_max < 1 || image.cols < 1) return interfaces::TrafficLight::UNKNOWN;
+    if (y_max < 1) return interfaces::TrafficLight::UNKNOWN;
     cv::Mat red_mask(image.rows, image.cols, CV_8UC1, cv::Scalar(0));
     cv::Mat yellow_mask(image.rows, image.cols, CV_8UC1, cv::Scalar(0));
     cv::Mat green_mask(image.rows, image.cols, CV_8UC1, cv::Scalar(0));
@@ -220,6 +222,7 @@ class Camera7LampCpu {
 
   Camera7LampCpuParameters parameters_;
   std::uint8_t previous_ = 255;
+  int repeat_count_ = 0;
 };
 
 }  // namespace traffic_light

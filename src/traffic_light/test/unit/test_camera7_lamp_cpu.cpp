@@ -139,6 +139,25 @@ TEST(Camera7LampCpu, RepeatWaitsForASecondAgreeingFrame) {
   EXPECT_TRUE(core.process(encoded).header.stamp.isZero());
 }
 
+TEST(Camera7LampCpu, RepeatCountFollowsMinimumRepeat) {
+  traffic_light::Camera7LampCpuParameters parameters;
+  parameters.minimum_repeat = 3;
+  traffic_light::Camera7LampCpu core(parameters);
+  cv::Mat green = scene();
+  addLamp(green, 316, 70, kWeakGreen);
+  const auto green_encoded = encode(green);
+  EXPECT_EQ(interfaces::TrafficLight::UNKNOWN, core.process(green_encoded).state);
+  EXPECT_EQ(interfaces::TrafficLight::UNKNOWN, core.process(green_encoded).state);
+  EXPECT_EQ(interfaces::TrafficLight::GREEN, core.process(green_encoded).state);
+
+  cv::Mat red = scene();
+  addLamp(red, 316, 70, kRed);
+  const auto red_encoded = encode(red);
+  EXPECT_EQ(interfaces::TrafficLight::UNKNOWN, core.process(red_encoded).state);
+  EXPECT_EQ(interfaces::TrafficLight::UNKNOWN, core.process(red_encoded).state);
+  EXPECT_EQ(interfaces::TrafficLight::RED, core.process(red_encoded).state);
+}
+
 TEST(Camera7LampCpu, LoaderRejectsAnInvertedAreaRange) {
   EXPECT_THROW(traffic_light::loadCamera7LampCpuParameters(
                    node_pipeline::ParamReader::fromString("min_area: 40\nmax_area: 4\n")),
