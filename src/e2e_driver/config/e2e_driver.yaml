@@ -5,6 +5,8 @@ use_lidar: true
 server_host: 127.0.0.1
 server_port: 47011
 max_inflight: 2              # requests outstanding: the server prepares the next while the model runs
+expert2_zone: []             # [s0, s1] route s (m) driven by the server's second expert set (model_server --expert2,
+                             # RL_PLAN 5 A; highway 1118.7-1741.7); [] = off
 command_topic: /control_cmd   # -> speed_filter -> /morai_udp_bridge/control_cmd
 lidar_topic: /lidar_bev/scan
 status_topic: /vehicle/competition_status

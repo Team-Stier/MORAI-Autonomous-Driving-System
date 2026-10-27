@@ -77,9 +77,37 @@ def _graph(fn):
     return g
 
 
+def _euler_step(self, m, b, llm, B, n, nq, g, Lp):
+    """one Euler step of the expert over B rows (FastEngine._exp_buffers); self = the FastEngine (or a stand-in with
+    expert, hd, kvh) and m = the model (or one with action_in_proj, action_out_proj): the pre-RL closure names."""
+    def step(x, t, dt):
+        h = m.action_in_proj(x, t)
+        for i, layer in enumerate(self.expert.layers):
+            a = layer.self_attn
+            y = layer.input_layernorm(h)
+            q = a.q_norm(a.q_proj(y).view(B, n, nq, self.hd)).transpose(1, 2)
+            k = a.k_norm(a.k_proj(y).view(B, n, self.kvh, self.hd)).transpose(1, 2)
+            v = a.v_proj(y).view(B, n, self.kvh, self.hd).transpose(1, 2)
+            q, k = mq.apply_rotary_pos_emb(q, k, b["cos"], b["sin"])
+            llm["K"][i][:, :, Lp:].copy_(k); llm["V"][i][:, :, Lp:].copy_(v)
+            # attention as two bf16 batched GEMMs and an fp32 softmax over [prefix | action] keys, GQA folded into
+            # the query length (query heads j*g..j*g+g-1 read KV head j). Measured alternatives for 64 queries x
+            # ~1.8k keys with the padding: masked SDPA fell back to fp32 SIMT (enable_gqa) or a 16-CTA mem-efficient
+            # kernel (46 ms), cuDNN 2x slower, varlen flash (exact lengths, no mask) 64 vs 44 ms (16 CTAs, no split-KV),
+            # FlexAttention (every key block partial for a variable L) 330 us a call vs ~35 us
+            qf = q.reshape(B, self.kvh, g * n, self.hd)
+            att = (torch.matmul(qf, llm["K"][i].transpose(-1, -2)).float() * a.scaling + b["mask"]).softmax(-1)
+            o = torch.matmul(att.to(torch.bfloat16), llm["V"][i]).reshape(B, nq, n, self.hd)
+            h = h + a.o_proj(o.transpose(1, 2).reshape(B, n, nq * self.hd))
+            h = h + layer.mlp(layer.post_attention_layernorm(h))
+        vel = m.action_out_proj(self.expert.norm(h)).view(B, n, 2)
+        return x + dt * vel
+    return step
+
+
 class FastEngine:
-    def __init__(self, model, num_steps=10, use_graphs=True, compile=True, pad_to=1792):
-        self.m, self.steps, self.use_graphs, self.pad_to = model, num_steps, use_graphs, pad_to
+    def __init__(self, model, num_steps=10, use_graphs=True, compile=True, pad_to=1792, batch=1):
+        self.m, self.steps, self.use_graphs, self.pad_to, self.batch = model, num_steps, use_graphs, pad_to, batch
         # Inductor fuses norms, rotary, activation quantizers and residuals (the study: one compiled function, then the
         # graph); expert: one compiled Euler step reused 10 times inside the graph
         self.compile = (lambda f, **k: torch.compile(f, dynamic=False, **k)) if compile else (lambda f, **k: f)
@@ -95,6 +123,9 @@ class FastEngine:
         self.t_start = [ts[i].view(1, 1, 1).clone() for i in range(num_steps)]
         self.dt = [(ts[i + 1] - ts[i]).view(1, 1, 1).clone() for i in range(num_steps)]
         self.vit_cache, self.vit_graphs, self.llm, self.exp, self.rope = {}, {}, {}, {}, {}
+        self.caches, self.bkv, self.bexp = {}, {}, {}           # run_batch: ViT cache per simulator, batch K/V, graphs
+        # expert sets: [0] the model's own; EngineBackend adds a LoRA'd copy (expert2; RL_PLAN 5 A, picked per step)
+        self.parts = [torch.nn.ModuleDict(dict(expert=model.expert, action_in_proj=model.action_in_proj, action_out_proj=model.action_out_proj))]
         self.image_token = model.vlm.config.image_token_id
         self.side = torch.cuda.Stream(self.dev)
         self.stats = {}
@@ -180,58 +211,62 @@ class FastEngine:
         return b, self.compile(fn)
 
     # ---------------------------------------------------------------- expert Euler steps
-    def _exp_buffers(self, Lp, llm):
+    def _exp_buffers(self, Lp, llm, B=1, parts=None, rl=False):
+        """the Euler steps of one expert set (parts, default the model's own) over B rows reading llm's K/V (B rows).
+        rl: after each step add noise[s] (sigma_s * eps_s, zeros = deterministic) and keep the chain x_0..x_K (the RL
+        sampler, RL_PLAN 3.1; spec: Alpamayo-Cosmos train/rl/policy.py Policy.sample)."""
         ec, n = self.expert.config, self.n
-        b = dict(x0=torch.zeros(1, n, 2, device=self.dev), x=torch.zeros(1, n, 2, device=self.dev),
-                 mask=torch.zeros(1, 1, 1, Lp + n, device=self.dev, dtype=torch.float32),
-                 cos=torch.zeros(1, n, self.hd, device=self.dev, dtype=torch.bfloat16),
-                 sin=torch.zeros(1, n, self.hd, device=self.dev, dtype=torch.bfloat16))
+        b = dict(x0=torch.zeros(B, n, 2, device=self.dev), x=torch.zeros(B, n, 2, device=self.dev),
+                 mask=torch.zeros(B, 1, 1, Lp + n, device=self.dev, dtype=torch.float32),
+                 cos=torch.zeros(B, n, self.hd, device=self.dev, dtype=torch.bfloat16),
+                 sin=torch.zeros(B, n, self.hd, device=self.dev, dtype=torch.bfloat16))
+        if rl:
+            b.update(noise=torch.zeros(self.steps, B, n, 2, device=self.dev), chain=torch.zeros(self.steps + 1, B, n, 2, device=self.dev))
         nq = ec.num_attention_heads
         g = nq // self.kvh
-        m = self.m
-        def step(x, t, dt):
-            h = m.action_in_proj(x, t)
-            for i, layer in enumerate(self.expert.layers):
-                a = layer.self_attn
-                y = layer.input_layernorm(h)
-                q = a.q_norm(a.q_proj(y).view(1, n, nq, self.hd)).transpose(1, 2)
-                k = a.k_norm(a.k_proj(y).view(1, n, self.kvh, self.hd)).transpose(1, 2)
-                v = a.v_proj(y).view(1, n, self.kvh, self.hd).transpose(1, 2)
-                q, k = mq.apply_rotary_pos_emb(q, k, b["cos"], b["sin"])
-                llm["K"][i][:, :, Lp:].copy_(k); llm["V"][i][:, :, Lp:].copy_(v)
-                # attention as two bf16 batched GEMMs and an fp32 softmax over [prefix | action] keys, GQA folded into
-                # the query length (query heads j*g..j*g+g-1 read KV head j). Measured alternatives for 64 queries x
-                # ~1.8k keys with the padding: masked SDPA fell back to fp32 SIMT (enable_gqa) or a 16-CTA mem-efficient
-                # kernel (46 ms), cuDNN 2x slower, varlen flash (exact lengths, no mask) 64 vs 44 ms (16 CTAs, no split-KV),
-                # FlexAttention (every key block partial for a variable L) 330 us a call vs ~35 us
-                qf = q.reshape(1, self.kvh, g * n, self.hd)
-                att = (torch.matmul(qf, llm["K"][i].transpose(-1, -2)).float() * a.scaling + b["mask"]).softmax(-1)
-                o = torch.matmul(att.to(torch.bfloat16), llm["V"][i]).reshape(1, nq, n, self.hd)
-                h = h + a.o_proj(o.transpose(1, 2).reshape(1, n, nq * self.hd))
-                h = h + layer.mlp(layer.post_attention_layernorm(h))
-            vel = m.action_out_proj(self.expert.norm(h)).view(1, n, 2)
-            return x + dt * vel
+        P = self.parts[0] if parts is None else parts
+        # the model's own set traces through the closure names of the pre-RL step (self.expert, m.action_*): the same FX
+        # graph, so the deployment path keeps its cached compiled kernels (renamed closures compiled and autotuned anew
+        # and moved actions by up to 2e-4, 10/27); another set goes through stand-ins with the same attributes
+        if P is self.parts[0]:
+            sf, m = self, self.m
+        else:                                     # the ModuleDict has expert / action_in_proj / action_out_proj
+            P.hd, P.kvh = self.hd, self.kvh
+            sf = m = P
+        t_start = self.t_start if B == 1 else [t.expand(B, 1, 1) for t in self.t_start]   # action_in_proj cats per row
+        step = _euler_step(sf, m, b, llm, B, n, nq, g, Lp)
         # max-autotune times Triton templates against cuBLAS for the bf16 attention GEMMs (cuBLAS picks 32x32 WMMA kernels
         # for 64 queries x ~1.8k keys): expert 44.2 -> 39.8 ms (the 10/24 benchmark: 39.5); minutes once, then cached
         step = self.compile(step, mode="max-autotune-no-cudagraphs")
 
         def fn():
             x = b["x0"]
+            if rl:
+                b["chain"][0].copy_(x)
             for s in range(self.steps):
-                x = step(x, self.t_start[s], self.dt[s])
+                x = step(x, t_start[s], self.dt[s])
+                if rl:                                      # x_{k+1} = x_k + dt v(x_k, t_k) + sigma_k eps_k
+                    x = x + b["noise"][s]
+                    b["chain"][s + 1].copy_(x)
             b["x"].copy_(x)
         assert self.non_causal, "a causal expert needs a causal block in the mask"
         return b, fn
 
+    def _exp_row(self, eb, r, L, Lp, deltas, x0):
+        """row r of an expert graph's inputs: action-token rotary after the real prefix (L tokens), the padded prefix
+        rows L..Lp masked, the initial noise."""
+        n = self.n
+        pa = (torch.arange(n, device=self.dev)[None, None] + deltas.view(1, 1, 1) + L).expand(3, 1, n)
+        ca, sa = self.expert.rotary_emb(eb["cos"][r:r + 1], pa)
+        eb["cos"][r:r + 1].copy_(ca); eb["sin"][r:r + 1].copy_(sa)
+        eb["mask"][r].zero_(); eb["mask"][r, ..., L:Lp] = float("-inf")                 # padded prefix rows
+        eb["x0"][r:r + 1].copy_(x0)
+
     # ---------------------------------------------------------------- one request
-    @torch.inference_mode()
-    @torch.autocast("cuda", dtype=torch.bfloat16)          # as sample_trajectories (graphs are captured under it too)
-    def run(self, tokenized_data, hx, hr, x0, keys, lay=None):
-        """tokenized_data as sample_trajectories takes it (pixel_values may stay on the CPU), keys = fingerprints(CPU
-        pixel_values, grid), lay = layout(...) from the prepare thread (else computed here); x0 (1, 64, 2) fp32 initial
-        noise. Returns the normalised action (1, 64, 2) fp32 and the per-part times (ms)."""
-        m, ev = self.m, [torch.cuda.Event(enable_timing=True) for _ in range(5)]
-        ev[0].record()
+    def _vit_embeds(self, tokenized_data, hx, hr, keys, lay, cache):
+        """ViT of the images not in `cache` (one simulator's ViT cache, pruned in place to the current window) -> fused
+        prefix ids, per-image merger outputs and DeepStack lists, the layout, the number of new images."""
+        m = self.m
         if lay is None:
             lay = layout(tokenized_data["input_ids"], tokenized_data["image_grid_thw"], self.image_token, self.vlm.visual.spatial_merge_size)
         ids = m.fuse_traj_tokens(tokenized_data["input_ids"].to(self.dev), dict(ego_history_xyz=hx, ego_history_rot=hr))
@@ -246,7 +281,7 @@ class FastEngine:
             enc_idx = [i for i, c in enumerate(ck) if c[0] == enc_lidar]                    # beside the camera ViT
             # cameras come as N_FRAMES per camera, oldest first (assemble.py): a slot per camera's newest frame
             pattern = tuple(tuple(keys[i][:3]) for i in (enc_idx if enc_lidar else enc_idx[N_FRAMES - 1::N_FRAMES]))
-            todo = [i for i in enc_idx if ck[i] not in self.vit_cache]
+            todo = [i for i in enc_idx if ck[i] not in cache]
             new += len(todo)
             with torch.cuda.stream(self.side if enc_lidar else main):
                 while todo:
@@ -259,19 +294,22 @@ class FastEngine:
                     res = self._vit(enc_lidar, pattern, [None if i is None else pxs[i].to(self.dev, torch.bfloat16, non_blocking=True) for i in slots])
                     for i, r in zip(slots, res):
                         if i is not None:
-                            self.vit_cache[ck[i]] = r
+                            cache[ck[i]] = r
         main.wait_stream(self.side)
-        self.vit_cache = {c: self.vit_cache[c] for c in ck}                  # keep what the current window uses
-        embeds, deeps = [self.vit_cache[c][0] for c in ck], [self.vit_cache[c][1] for c in ck]
-        ev[1].record(); c1 = time.perf_counter()
+        keep = {c: cache[c] for c in ck}                                     # keep what the current window uses
+        cache.clear(); cache.update(keep)
+        return ids, [cache[c][0] for c in ck], [cache[c][1] for c in ck], lay, new
+
+    def _llm_inputs(self, ids, embeds, deeps, lay):
+        """the LLM prefill's static inputs for one prefix; its graph is captured on first use -> (buffers, fn, graph, L,
+        Lp, rope delta)."""
         L = ids.shape[1]
         Lp = max(self.pad_to, -(-L // PAD) * PAD)          # one fixed length: a new length means minutes of compiling
         pos, deltas, vis = (x.to(self.dev, non_blocking=True) for x in lay)
         if Lp not in self.llm or self.llm[Lp][0]["vis"].numel() != vis.numel():
             self.llm[Lp] = self._llm_buffers(Lp, vis.numel()) + (None,)
-            self.exp[Lp] = self._exp_buffers(Lp, self.llm[Lp][0]) + (None,)
+            self.exp = {k: v for k, v in self.exp.items() if k[0] != Lp}             # they read the old K/V buffers
         lb, lfn, lg = self.llm[Lp]
-        eb, efn, eg = self.exp[Lp]
         E = self.lm.embed_tokens(ids)
         E[0, vis] = torch.cat(embeds).to(E.dtype)
         cos, sin = self.lm.rotary_emb(E, pos)
@@ -280,15 +318,29 @@ class FastEngine:
         lb["vis"].copy_(vis)
         for j, d in enumerate(lb["deep"]):
             d.copy_(torch.cat([x[j] for x in deeps]))
-        n = self.n
-        pa = (torch.arange(n, device=self.dev)[None, None] + deltas.view(1, 1, 1) + L).expand(3, 1, n)
-        ca, sa = self.expert.rotary_emb(eb["cos"], pa)
-        eb["cos"].copy_(ca); eb["sin"].copy_(sa)
-        eb["mask"].zero_(); eb["mask"][..., L:Lp] = float("-inf")                    # padded prefix rows
-        eb["x0"].copy_(x0)
         if self.use_graphs and lg is None:
-            lg = _graph(lfn); eg = _graph(efn)
-            self.llm[Lp], self.exp[Lp] = (lb, lfn, lg), (eb, efn, eg)
+            lg = _graph(lfn)
+            self.llm[Lp] = (lb, lfn, lg)
+        return lb, lfn, lg, L, Lp, deltas
+
+    @torch.inference_mode()
+    @torch.autocast("cuda", dtype=torch.bfloat16)          # as sample_trajectories (graphs are captured under it too)
+    def run(self, tokenized_data, hx, hr, x0, keys, lay=None, expert=0):
+        """tokenized_data as sample_trajectories takes it (pixel_values may stay on the CPU), keys = fingerprints(CPU
+        pixel_values, grid), lay = layout(...) from the prepare thread (else computed here); x0 (1, 64, 2) fp32 initial
+        noise; expert = index into self.parts. Returns the normalised action (1, 64, 2) fp32 and the per-part times (ms)."""
+        ev = [torch.cuda.Event(enable_timing=True) for _ in range(5)]
+        ev[0].record()
+        ids, embeds, deeps, lay, new = self._vit_embeds(tokenized_data, hx, hr, keys, lay, self.vit_cache)
+        ev[1].record(); c1 = time.perf_counter()
+        lb, lfn, lg, L, Lp, deltas = self._llm_inputs(ids, embeds, deeps, lay)
+        if (Lp, expert) not in self.exp:
+            self.exp[(Lp, expert)] = self._exp_buffers(Lp, lb, parts=self.parts[expert]) + (None,)
+        eb, efn, eg = self.exp[(Lp, expert)]
+        self._exp_row(eb, 0, L, Lp, deltas, x0)
+        if self.use_graphs and eg is None:
+            eg = _graph(efn)
+            self.exp[(Lp, expert)] = (eb, efn, eg)
         ev[2].record(); c2 = time.perf_counter()
         lg.replay() if lg is not None else lfn()
         ev[3].record()
@@ -299,3 +351,47 @@ class FastEngine:
         self.stats = dict(cpu_assemble_ms=round(1e3 * (c2 - c1), 1), vit_ms=round(t[0], 1), gpu_assemble_ms=round(t[1], 1), llm_ms=round(t[2], 1), expert_ms=round(t[3], 1),
                           llm_expert_ms=round(t[2] + t[3], 1), new_images=new, prefix_tokens=L, padded=Lp)
         return eb["x"].clone(), self.stats
+
+    # ---------------------------------------------------------------- several simulators (RL actor)
+    @torch.inference_mode()
+    @torch.autocast("cuda", dtype=torch.bfloat16)
+    def run_batch(self, items, expert=0):
+        """one request per simulator, all on expert set `expert` (model_server --sims). items: dicts sim (its ViT cache
+        key), td, hx, hr, keys, lay as run() takes them, x0 (1, 64, 2), noise (steps, 1, 64, 2) = sigma_k eps_k added
+        after each Euler step (zeros: deterministic). Each request's ViT and LLM prefill run on the single path's graphs
+        with its simulator's cache; its K/V go to its row of the batch K/V; then one expert graph runs the Euler steps of
+        all rows (M = 64 x rows in the expert GEMMs). -> actions (b, 64, 2), chain x_0..x_K (steps + 1, b, 64, 2) fp32,
+        per-part times (ms)."""
+        b = len(items)
+        assert 0 < b <= self.batch, f"{b} requests for a batch of {self.batch}"
+        ev = [torch.cuda.Event(enable_timing=True) for _ in range(3)]
+        ev[0].record()
+        Lp = max(max(self.pad_to, -(-it["td"]["input_ids"].shape[1] // PAD) * PAD) for it in items)
+        if Lp not in self.bkv:
+            kv = lambda: [torch.zeros(self.batch, self.kvh, Lp + self.n, self.hd, device=self.dev, dtype=torch.bfloat16) for _ in self.lm.layers]
+            self.bkv[Lp] = dict(K=kv(), V=kv())
+        kv = self.bkv[Lp]
+        if (Lp, b, expert) not in self.bexp:          # rows 0..b-1 of the batch K/V (every group runs on them in turn)
+            rows = {k: [t[:b] for t in v] for k, v in kv.items()}
+            self.bexp[(Lp, b, expert)] = self._exp_buffers(Lp, rows, B=b, parts=self.parts[expert], rl=True) + (None,)
+        eb, efn, eg = self.bexp[(Lp, b, expert)]
+        new = []
+        for r, it in enumerate(items):
+            ids, embeds, deeps, lay, k = self._vit_embeds(it["td"], it["hx"], it["hr"], it["keys"], it.get("lay"), self.caches.setdefault(it["sim"], {}))
+            new.append(k)
+            lb, lfn, lg, L, Li, deltas = self._llm_inputs(ids, embeds, deeps, lay)
+            lg.replay() if lg is not None else lfn()
+            for K, Kb in ((lb["K"], kv["K"]), (lb["V"], kv["V"])):
+                torch._foreach_copy_([t[r, :, :Li] for t in Kb], [t[0, :, :Li] for t in K])
+            self._exp_row(eb, r, L, Lp, deltas, it["x0"])
+            eb["noise"][:, r:r + 1].copy_(it["noise"])
+        ev[1].record()
+        if self.use_graphs and eg is None:
+            eg = _graph(efn)
+            self.bexp[(Lp, b, expert)] = (eb, efn, eg)
+        eg.replay() if eg is not None else efn()
+        ev[2].record()
+        torch.cuda.synchronize()
+        stats = dict(prefill_ms=round(ev[0].elapsed_time(ev[1]), 1), expert_ms=round(ev[1].elapsed_time(ev[2]), 1),
+                     batch=b, new_images=new, padded=Lp)
+        return eb["x"].clone(), eb["chain"].clone(), stats

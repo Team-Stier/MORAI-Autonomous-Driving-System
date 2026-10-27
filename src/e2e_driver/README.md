@@ -531,6 +531,47 @@ expert는 64 × (a, κ)를 낸다. a는 종가속도(m/s²), κ는 경로 곡률
   - QAD 가짜 양자화 출력과의 평균 궤적 차이는 서비스 경로 0.017 m, eager 엔진 0.019 m다. 같은 가중치의 BF16은 0.065 m다.
   - ADE는 QAD 5.505, 엔진 5.504다.
 
+## RL actor 엔진 (`--sims`, `--expert2`, `--lora-watch`; RL_PLAN 3.1·5)
+
+배포 경로(`--sims` 없음)는 그대로다. 아래는 강화학습 actor와 구간 전환 배포에 더한 기능이다.
+
+```bash
+model_server.py --backend engine --ckpt <deliver> --sims 3 --rl-sigma 0.1 --expert2 --lora-watch <learner out>/lora/latest.json [--dump DIR]
+```
+- **묶음 추론** (`--sims N`): 노드 N개가 같은 포트에 붙는다. 연결 순서가 시뮬레이터 슬롯이고, 슬롯마다 ViT 캐시가 따로 있다.
+  - GPU 스레드는 준비된 요청을 시뮬레이터마다 하나씩 모아 한 묶음으로 돈다. 다른 시뮬레이터를 기다리지 않는다.
+  - 요청마다 ViT와 LLM 프리필은 배포 경로의 그래프로 돌고, K/V를 묶음 K/V의 자기 행으로 복사한다. 그다음 expert 10 step을 그래프 하나로 모든 행에 돈다(GEMM M = 64 × 행 수).
+  - 그래프는 (프리픽스 길이, 행 수, expert 벌)마다 하나다. 워밍업에서 모두 compile한다.
+- **노이즈 샘플러**: 매 Euler 스텝 뒤에 σ_k·ε_k를 더하고(DPPO·ReinFlow), 사슬 x_0..x_10을 남긴다. 사양은 learner의 `train/rl/policy.py` `Policy.sample`이다.
+  - σ는 `--rl-sigma`(값 하나 또는 스텝별 10개)이고, 요청의 `sigma`가 우선한다(평가 주행 0). 스텝 전부 > 0이거나 전부 0이어야 한다(learner는 모든 스텝의 log-prob을 쓴다).
+  - 응답에 `chain` (11, 64, 2), `sigma`, `logp` (10,), `logp_sum`이 붙는다. logp_k = log N(x_{k+1}; x_k + dt·v, σ_k² I)이고, σ_k = 0이면 0이다.
+  - `--dump DIR`는 `DIR/worldW/req_ID.bin`(관측)과 `out_ID.bin`(응답)을 남긴다. W는 노드 파라미터 `~world`(요청의 `world`)이고, 없으면 `DIR/simK/`다. learner의 `train/rl/episodes.py`가 이 파일을 읽는다.
+  - 노드는 요청에 `t_wall`(t0 시점 호스트 시계)을 넣고, 서버가 응답에 복사한다. 보상 결합(`tools/rl_reward.py`, rl/env 브랜치)이 이 값을 쓴다.
+- **expert 두 벌** (`--expert2 [LORA]`, RL_PLAN 5 A): 두 번째 expert 벌을 VRAM에 올린다. 요청의 `expert: 1`이 그 벌을 고른다. 그래프가 벌마다 따로 있어서 전환 비용이 없다.
+  - 노드는 `expert2_zone: [s0, s1]`(경로 s, 고주로 `[1118.7, 1741.7]`) 안에서 `expert: 1`을 보낸다. 기본값 `[]`는 끔이다.
+  - 배포 경로에서도 쓸 수 있다(`--expert2 <LoRA>`, `--sims` 없이).
+- **LoRA 교체** (`--lora-watch latest.json`): learner의 `publish()`를 따른다(`vNNNNN.safetensors`: 키 `<모듈>.lora_A/B`, metadata `scale`, 그리고 `latest.json` {version, path}). 묶음 사이에 1초마다 확인하고, version이 바뀌면 마지막 expert 벌에 병합한다. 응답의 `lora_version`이 그 값이고, 납품 expert는 0이다.
+  - 병합은 W' = bf16(W + scale·B·A)이다. 납품 BF16 가중치는 호스트 메모리에 둔다(약 4.6 GB).
+  - 양자화는 납품물 amax 그대로다(QAD의 격자, learner `merge()`와 같은 규칙). 그래서 병합한 납품물을 `engine.load`한 것과 같다.
+  - 제자리 복사라 CUDA 그래프를 다시 잡지 않는다. 이름이나 shape가 안 맞는 LoRA는 아무것도 바꾸기 전에 거부한다.
+- **시험**: `test/test_rl_server.py`(Mac, 가짜 백엔드: 동시 접속·슬롯·logp 식), `test/rl_engine_check.py`(5080), `test/server_bench.py --clients 3`.
+- **5080 실측** (10/27, `test/rl_engine_check.py`, 실주행 요청 `dump_fh6`): 아래 표는 실제 와우마요 납품물(`wowmayo_final`, NVFP4 454층·FP8 146층)이고, 노이즈 샘플러 줄만 실제 크기 시험 납품물(`synthetic_475`)이다.
+
+  | 항목 | 결과 |
+  |---|---|
+  | 배포 경로 비트 일치 (1b69cef 대비) | compile 경로 14/14, compile 없이 10/10 일치. 한 스텝 92.9 대 92.5 ms |
+  | 3대 묶음 처리량 | 초당 13.6번 판단(묶음 221 ms = 프리필 3건 164 + expert 63). 하나씩이면 10.9번(274 ms). 노이즈 모드 13.1번 |
+  | 노이즈 샘플러 (1대, synthetic_475) | σ = 0 묶음 경로가 단일 경로와 12/12 비트 일치. σ = 0.1 사슬을 eager로 다시 계산하면 logp_sum 1142.09 대 1142.16, 역산 ε RMS 오차 0.002. 지연 102.5 ms(단일 결정적 109.9) |
+  | LoRA 병합·재양자화 교체 | 0.82–0.95 s(expert 252층). 기본 벌 그대로, 다른 LoRA 뒤 되돌리면 비트 일치, 새 양자화와 바이트 일치 |
+  | expert 두 벌 전환 | 매 스텝 번갈아도 LLM+expert 79.3 ms로 같다 |
+  | 두 벌이 섞인 묶음 (2+1행) | 261 ms(한 벌 묶음 221 ms) |
+  | VRAM 최대 | 9.6 GB(두 번째 벌과 묶음 K/V 포함) |
+  | CPU 전처리 | 요청당 46 ms(3대면 묶음 시간 안에 든다) |
+
+  - 묶음 행과 단일 경로는 같은 노이즈에서 정규화 행동이 최대 0.09(대개 0.01–0.02) 다르다. expert GEMM의 M이 192와 64로 달라 다른 커널이 돈다. log-prob은 묶음 경로 자신의 계산으로 기록하므로 맞다.
+  - 처음 본 모양은 compile에 수 분 걸린다(b = 3 expert 171 s). 캐시가 맞으면 다음부터는 바로 뜬다.
+  - 배포 경로 비트 일치에서 처음에는 12개 중 4개만 같았다. expert step 클로저 이름을 바꾼 탓에 Inductor FX 캐시를 못 맞히고, 새로 autotune해서 다른 커널을 골랐다. 이름을 되돌려(`_euler_step`) 해결했다.
+
 ## 두 대 구성 리허설: bc-250 MORAI + 5080 엔진 (10/27 00:56–01:19, 4.75비트 시험 납품물)
 
 - 순서: `SIM=bc250 tools/two_pc.sh up`(인자 없이 runtime.env의 납품물을 띄운다) → `two_pc.sh prep` → `VIEW_FPS=15 VIEW_WIDTH=1280 tools/eval.sh NAME --laps 1`.
