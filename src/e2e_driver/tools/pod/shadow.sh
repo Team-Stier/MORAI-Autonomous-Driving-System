@@ -14,6 +14,8 @@
 #   (make-bridge.py config) and speed_filter, no remaps: the R2 Mac stack's driver.
 # restart: the driver nodes anew (an episode's spawn is a jump the planners must not see; rl_episode --loc-restart),
 #   back once /local_path is out again (25 s at most). Logs: /root/shadow/n/. Env: SHADOW_CPUS (all).
+# TAKEOVER=1 (shadow mode): the start intervention, takeover.py watch (here) + pub (stack n's master, TAKEOVER_S 25):
+#   the shadow's control command drives a car stopped that long where the shadow says go, until 3 m/s or 5 s.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}
 SW=$V/shadow/ws; ST=$V/shadow/gt; R=/root/shadow; WS_EVAL=${WS:-$V/MORAI-Autonomous-Driving-System}
@@ -27,6 +29,7 @@ inm() {  # MASTER_PORT cmd...: in that ROS master (wall time), shadow workspace
 build() {  # the fork snapshot ($V/shadow/shadow_src.tar from the Mac) -> $SW, built (the packages listed below only)
   mkdir -p "$SW" /workspaces && tar -xf $V/shadow/shadow_src.tar -C "$SW" || return 1
   sed -i 's/^stop_timeout_sec: .*/stop_timeout_sec: 600.0/' "$SW/src/velocity_planner/config/velocity_planner/parameters/stop_line_state.yaml"
+  local f; for f in "$HERE"/shadow_patches/*.patch; do patch -s -N -p1 -d "$SW" < "$f" || { echo "patch $f failed"; return 1; }; done   # early lane changes
   ln -sfn "$SW" /workspaces/MORAI-Autonomous-Driving-System      # the GT nodes' fixed paths (relay module, global path)
   local p pk=""; for p in path_planner velocity_planner control node_pipeline section_annotator tf_publisher speed_filter morai_test interfaces MORAI-ROS_morai_msgs MORAI-UDP-Bridge-Node; do pk+=" $SW/src/$p"; done
   (set +u; source /opt/ros/noetic/setup.bash; apt-get update -qq > /dev/null 2>&1; rosdep update --rosdistro noetic > /dev/null 2>&1   # the bundle lacks lanelet2 (10/28)
@@ -54,6 +57,14 @@ up() {  # n [drive]
   ROS_MASTER_URI=http://127.0.0.1:$m ROS_IP=127.0.0.1 ROS_HOME=$d/ros setsid taskset -c "$cpus" bash -c \
     "cd $SW && source /opt/ros/noetic/setup.bash && source devel/setup.bash && exec python3 -u $HERE/shadow_rec.py $mode $V/shadow/rec_w$n" > "$d/rec.log" 2>&1 < /dev/null &
   echo $! > "$d/rec.pid"
+  if [[ $mode == shadow && ${TAKEOVER:-0} == 1 ]]; then   # the start intervention (takeover.py): the only shadow -> car path
+    ROS_MASTER_URI=http://127.0.0.1:$m ROS_IP=127.0.0.1 ROS_HOME=$d/ros setsid taskset -c "$cpus" bash -c \
+      "cd $SW && source /opt/ros/noetic/setup.bash && source devel/setup.bash && exec python3 -u $HERE/takeover.py watch $((47210 + n)) $V/shadow/rec_w$n/takeover.jsonl ${TAKEOVER_S:-25}" > "$d/takeover_watch.log" 2>&1 < /dev/null &
+    echo $! > "$d/takeover_watch.pid"
+    ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 setsid taskset -c "$cpus" bash -c \
+      "cd $WS_EVAL && source /opt/ros/noetic/setup.bash && source devel/setup.bash && exec python3 -u $HERE/takeover.py pub $((47210 + n))" > "$d/takeover_pub.log" 2>&1 < /dev/null &
+    echo $! > "$d/takeover_pub.pid"
+  fi
   nodes "$n"
 }
 
@@ -108,7 +119,7 @@ down() {
   for d in "$R"/*/; do
     n=$(basename "$d"); [[ -e $d/roscore.pid ]] || continue
     stop_nodes "$n"
-    for f in rec relay_out tee roscore; do [[ -e $d/$f.pid ]] && { pkill -INT -s "$(cat "$d/$f.pid")" 2> /dev/null; kill "$(cat "$d/$f.pid")" 2> /dev/null; rm -f "$d/$f.pid"; }; done
+    for f in rec relay_out tee takeover_watch takeover_pub roscore; do [[ -e $d/$f.pid ]] && { pkill -INT -s "$(cat "$d/$f.pid")" 2> /dev/null; kill "$(cat "$d/$f.pid")" 2> /dev/null; rm -f "$d/$f.pid"; }; done
     pkill -f "rosmaster.*-p $((11320 + n))" 2> /dev/null
     echo "shadow $n down"
   done

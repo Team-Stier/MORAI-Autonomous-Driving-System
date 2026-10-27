@@ -32,7 +32,30 @@ def load(ep):
     d = dict(np.load(ep / "dagger_debug.npz"))
     z = np.load(ep / "dagger_labels.npz")
     d.update(ak=z["ak"], valid=z["valid"][:, 0], source=z["source"])
+    for k in ("signal", "stop_d", "intervened"):
+        if k in z.files:
+            d[k] = z[k]
+    if "rolled" not in d:
+        d["rolled"] = d["valid"]
     return d
+
+
+def checks(D):
+    """label checker verdicts and reasons, signal and lane summaries over the decisions of D."""
+    import collections
+    V = np.concatenate([d["verdict"] for d in D]) if "verdict" in D[0] else np.array([])
+    R = [r for d in D for r in d.get("check_reasons", [])]
+    reasons = collections.Counter(x for r in R for x in str(r).split())
+    sig = np.concatenate([d["signal"] for d in D]) if "signal" in D[0] else np.zeros(0)
+    mode = collections.Counter(m for d in D for m in d.get("mode", []) if m)
+    red = sig == 1
+    red_cross = sum(("signal:" in str(r)) and not str(r).startswith("start") for d in D for r, g in zip(d.get("check_reasons", []), d.get("signal", [])) if g == 1)
+    lane = np.array(["lane:" in str(r) for r in R], bool)
+    return dict(verdicts=dict(collections.Counter(V.tolist())), reasons=dict(reasons.most_common(20)),
+                signal_rows={k: int((sig == c).sum()) for k, c in (("unknown", 0), ("red", 1), ("yellow", 2), ("green", 3))},
+                modes=dict(mode), red_rows_with_signal_reason=int(red_cross),
+                lane_reason_pct=round(100 * float(lane.mean()), 2) if len(lane) else None,
+                interventions_rows=int(sum(int(d.get("intervened", np.zeros(0, bool)).sum()) for d in D)))
 
 
 def errors(d):
@@ -145,7 +168,9 @@ def figure(path, d, j, rec, lane, title):
         b2.plot(tt, d["ak_actual"][j, :, 1], color="tab:olive", lw=1, ls=":", label="driven kappa")
     bx.set_xlabel("s"); bx.grid(alpha=0.3); bx.legend(fontsize=7, loc="upper left"); b2.legend(fontsize=7, loc="upper right")
     fl = [str(n) for n, f in zip(d["flag_cols"], d["flags"][j]) if f]
-    fig.suptitle(f"{title}  |  reason {d['reasons'][d['reason'][j]]}, flags {fl}, d_lane {d['dbg'][j, 3]:.2f} m, plan_d0 {d['dbg'][j, 1]:.2f} m", fontsize=10)
+    ck = f", check {d['verdict'][j]} {d['check_reasons'][j]}" if "verdict" in d else ""
+    md = f", mode {d['mode'][j]}" if "mode" in d else ""
+    fig.suptitle(f"{title}  |  {d['reasons'][d['reason'][j]]}{md}, flags {fl}, d_lane {d['dbg'][j, 3]:.2f} m{ck}", fontsize=9)
     fig.tight_layout(); fig.savefig(path, dpi=110); plt.close(fig)
 
 
@@ -180,6 +205,7 @@ def main():
         D = [load(e) for e in eps]
         R = np.concatenate([d["reason"] for d in D]); S = np.concatenate([d["source"] for d in D]); Vd = np.concatenate([d["valid"] for d in D])
         reasons = D[0]["reasons"]
+        summ.setdefault("checks", {})[name] = checks(D)
         summ["coverage"][name] = dict(decisions=int(len(R)), empty_pct=round(100 * (~Vd).mean(), 2),
                                       empty_reasons={str(reasons[i]): int(((R == i) & ~Vd).sum()) for i in np.unique(R[~Vd])},
                                       source1_pct=round(100 * (S == 1).mean(), 2),
@@ -206,7 +232,16 @@ def main():
             for e, d in zip(eps, D):
                 rec = dl.Rec(dl.load_rec(rec_dir, d["t_wall"].min() - 8, d["t_wall"].max() + 10))
                 tags = classify(d, rec, d["t_wall"])
-                for tag in ("straight", "curve", "deviation", "red_stop", "ped_yield", "roundabout_follow", "highway_npc", "static_obstacle"):
+                md = d.get("mode", np.array([""] * len(d["t_wall"])))
+                sg = d.get("signal", np.zeros(len(d["t_wall"]), np.int8))
+                nxt = np.r_[sg[1:], sg[-1:]]
+                hold = [(sg[j] == 1 and md[j] == "stop" and (sg[j + 1:j + 30] == 3).any()) for j in range(len(sg))]   # picking only
+                for j, tg in enumerate(tags):
+                    tg |= {t for t, ok in (("red_hold_before_green", hold[j]), ("red_go_unstoppable", md[j] == "go_unstoppable"),
+                                           ("red_go_past", md[j] == "go_past"),
+                                           ("takeover", bool(d.get("intervened", np.zeros(len(tags), bool))[j]))) if ok}
+                for tag in ("straight", "curve", "deviation", "red_stop", "ped_yield", "roundabout_follow", "highway_npc", "static_obstacle",
+                            "red_hold_before_green", "red_go_unstoppable", "red_go_past", "takeover"):
                     js = [j for j, tg in enumerate(tags) if tag in tg]
                     cnt = summ.setdefault(f"scene_counts_{name}", {}); cnt[tag] = cnt.get(tag, 0) + len(js)
                     if js and tag not in picked:

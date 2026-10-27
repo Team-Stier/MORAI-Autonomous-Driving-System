@@ -21,7 +21,11 @@ Per decision (t_wall, t_sim from steps.jsonl; the shadow's records by host wall 
     constant velocity; kinematic bicycle, a = 5.74 accel - min(18.76 brake, A_BRAKE_MAX).
   - (a, kappa): the 16-point GT history (rows, simulator time) + the rollout's speed and heading at 0.1 s.
 Out per episode (the runner's contract, do not change): EP_DIR/dagger_labels.npz step int32 (N,) = steps.jsonl line,
-ak float32 (N, 64, 2) a m/s^2 and kappa 1/m at 0.1 s, valid bool (N, 64), source int8 (N,) 0 planner / 1 official lane.
+ak float32 (N, 64, 2) a m/s^2 and kappa 1/m at 0.1 s, valid bool (N, 64), source int8 (N,) 0 planner / 1 official lane;
+optional: signal int8 (N,) t0 light for the next judged stop line (0 none/unknown, 1 red, 2 yellow, 3 green), stop_d
+float32 (N,) front axle to that line along the route (m), intervened bool (N,) inside a takeover.py start intervention.
+valid is False where the label checker (tools/scorer/label_check.py) says fail or unrecoverable, and where no label
+could be rolled out. No future information: the plan, light and objects of t0 only (user 10/28).
 Debug: EP_DIR/dagger_debug.npz (rollout xy, v, flags, reasons) for dagger_eval.py.
 """
 import argparse
@@ -52,7 +56,12 @@ PLAN_AGE_S, NO_PLAN_S, PLAN_D0_M, PLAN_HE_RAD, LANE_D_M = 0.5, 2.0, 5.0, 0.5, 4.
 # a plan that keeps the car off the route lane (both > 2 m from it, 30 m ahead too) is the planner following a wrong lane,
 # unless a standing object sits on the route lane ahead: then it is the obstacle bypass (10/28 shadow run: 3-4 m, plan 3 m)
 PLAN_LANE_D_M, BYPASS_D_M = 2.0, 3.0
-REPLAN_D_M = 3.0                                      # a later plan applies to the rolled-out car when it starts this close
+# velocity_planner (collection fork) when it injects one target speed into every point (curvature_velocity60/100.yaml,
+# stop_line_state.yaml): curvature preview, time filter and rate limits, the stop-line cutoff on the ~50 m path. Only
+# t0 information (user 10/28: no future light or object state in a label): the light holds its t0 state.
+VP = dict(preview=45.0, spacing=2.0, a_lat=2.6, v_min=4.166666666666667, approach=1.70, eps=0.001, tau=0.35, acc=2.0,
+          acc_curve=1.5, dec=5.0, cap60=16.666666666666668, cap100=27.77777777777778, stop_x=5.0, horizon=50.0, yellow_z=3.0)
+SIGNAL_CODE = dict(unknown=0, red=1, yellow=2, green=3)     # the runner's code (as _ego): 0 none/unknown, 1 red, 2 yellow, 3 green
 REASONS = ["ok", "plan_stale", "plan_far", "plan_heading", "off_lane", "no_plan", "wrong_way", "off_route", "no_history", "no_gt"]
 OBJ_R_M = 120.0
 
@@ -207,7 +216,7 @@ def load_gt(gt_dir):
     return mods
 
 
-def pp_step(st, path, v_path):
+def pp_step(st, path, v_path, speed=None):
     """control/cores/pp.hpp process() on the path in map frame; st: x y yaw v steer prev_v has_prev integ -> (accel, brake, steer rad, nearest)."""
     c, s = math.cos(st["yaw"]), math.sin(st["yaw"])
     dx, dy = path[:, 0] - st["x"], path[:, 1] - st["y"]
@@ -232,7 +241,7 @@ def pp_step(st, path, v_path):
     desired = math.atan2(2.0 * PP["wheelbase_m"] * ty, tx * tx + ty * ty) if tx > 0 else 0.0
     step = PP["steering_rate_limit_radps"] * PP["control_period_sec"]
     st["steer"] = min(max(min(max(desired, -STEER_LIMIT), STEER_LIMIT), st["steer"] - step), st["steer"] + step)
-    target = float(v_path[nearest])
+    target = float(v_path[nearest]) if speed is None else speed(nearest)
     deriv = (v - st["prev_v"]) / PP["control_period_sec"] if st["has_prev"] else 0.0
     st["prev_v"], st["has_prev"] = v, True
     if target == 0.0 and v <= PP["stop_speed_mps"]:
@@ -249,10 +258,43 @@ def pp_step(st, path, v_path):
     return (acc / PP["acceleration_gain_mps2"], 0.0, nearest) if acc >= 0 else (0.0, -acc / PP["braking_gain_mps2"], nearest)
 
 
-def rollout(path, v_path, x, y, yaw, v, steer, objs, section, gt, replan=None):
+class Speeds:
+    """velocity_planner's target per 0.05 s step on this path (VP): min over the 2 m samples within 45 m ahead of
+    sqrt(curve_target^2 + 2 * 1.7 * d), filtered (0.35 s) and rate limited from its t0 target, capped; 0 while a stop
+    line it stops for lies within its 50 m path (stop_station: path distance of its stop point, 5 m before the line)."""
+
+    def __init__(self, path, v_t0, cap, stop_station=None):
+        cum = np.r_[0, np.cumsum(np.hypot(*np.diff(path, axis=0).T))]
+        self.cum, self.cap, self.stop = cum, cap, stop_station
+        g = np.arange(0.0, cum[-1], VP["spacing"])
+        P = np.stack([np.interp(g, cum, path[:, 0]), np.interp(g, cum, path[:, 1])], -1)
+        a, b, c = P[:-2], P[1:-1], P[2:]
+        den = np.hypot(*(b - a).T) * np.hypot(*(c - b).T) * np.hypot(*(c - a).T)
+        cross = np.abs((b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1]) - (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0]))
+        k = np.where(den > 1e-12, 2.0 * cross / np.maximum(den, 1e-12), 0.0)
+        ct = np.clip(np.sqrt(VP["a_lat"] / np.maximum(k, 1e-9)), VP["v_min"], cap)
+        self.g, self.ct = g[1:-1], np.where(k > VP["eps"], ct, np.inf)
+        self.last = self.filt = min(v_t0, cap)
+
+    def __call__(self, nearest):
+        cur = self.cum[nearest]
+        m = (self.g > cur) & (self.g <= cur + VP["preview"])
+        raw = self.cap
+        if m.any():
+            raw = min(raw, float(np.min(np.sqrt(self.ct[m] ** 2 + 2.0 * VP["approach"] * (self.g[m] - cur)))))
+        dt = PP["control_period_sec"]
+        self.filt += (1.0 - math.exp(-dt / VP["tau"])) * (raw - self.filt)
+        acc = VP["acc_curve"] if raw < self.cap - 1e-9 else VP["acc"]
+        self.last = min(min(max(self.filt, self.last - VP["dec"] * dt), self.last + acc * dt), self.cap)
+        self.filt = min(self.filt, self.cap)
+        if self.stop is not None and self.stop - cur <= VP["horizon"]:
+            return 0.0
+        return self.last
+
+
+def rollout(path, v_path, x, y, yaw, v, steer, objs, section, gt, speed=None):
     """-> (x, y, yaw, v at 0.1 ... 6.4 s, flags dict): the collection driver from this state along path (M, 2) with
-    point speeds v_path; objs from Rec.objects (moved at constant velocity). replan(t, x, y, yaw) -> (path, v_path) or
-    None: the planner's later output where it applies to this car (every 0.1 s)."""
+    point speeds v_path, or speed(nearest index) -> target (Speeds); objs from Rec.objects (moved at constant velocity)."""
     Y, A = gt["yield"], gt["aeb"]
     # the speed loop's integral as at steady speed (it holds the car against its drag; 0 at a stop, as pp resets it)
     i0 = (CAR["a0"] + CAR["drag"] * v) * PP["acceleration_gain_mps2"] / (CAR["accel"] * PP["speed_ki"]) if v > 0.5 else 0.0
@@ -264,11 +306,7 @@ def rollout(path, v_path, x, y, yaw, v, steer, objs, section, gt, replan=None):
     queue = [(0.0, 0.0)] * CAR["delay_steps"]         # commands reach the car one control step late
     for k in range(N_FUT * SUB):
         t = k * dt
-        if replan is not None and k % 2 == 0 and k:
-            new = replan(t, st["x"], st["y"], st["yaw"])
-            if new is not None:
-                path, v_path = new; flags["replans"] = flags.get("replans", 0) + 1
-        accel, brake, near = pp_step(st, path, v_path)
+        accel, brake, near = pp_step(st, path, v_path, speed)
         if (moving or aebo) and k % 2 == 0:
             ahead = path[near:]
             rel = np.vstack([[st["x"], st["y"]], ahead]) if len(ahead) else np.array([[st["x"], st["y"]]])
@@ -358,11 +396,12 @@ def one(j):
     c = _C; steps, G, rec, lane, gt = c["steps"], c["G"], c["rec"], c["lane"], c["gt"]
     tw, ts = c["tw"][j], c["ts"][j]
     nan9, f5 = np.full(9, np.nan), np.zeros(5, bool)
+    none = dict(verdict="none", valid=False, reasons="", tags="", signal=0, stop_d=math.inf, mode="")
     if not c["ok_hist"][j]:
-        return REASONS.index("no_history"), 0, False, None, nan9, f5
+        return REASONS.index("no_history"), 0, False, None, nan9, f5, none
     e = rec.ego_at(tw)
     if e is None:
-        return REASONS.index("no_gt"), 0, False, None, nan9, f5
+        return REASONS.index("no_gt"), 0, False, None, nan9, f5, none
     x, y, yaw, _ = e
     v = float(np.interp(ts, G[:, 0], G[:, 4]))
     s0, d, h0 = lane.project(x, y, steps[j].get("s"))
@@ -398,35 +437,50 @@ def one(j):
         src = 1
         for bad, r in ((abs(ey) > math.pi / 2, "wrong_way"), (abs(d) > 15.0, "off_route"), (P is None, "no_plan")):
             if bad:
-                return REASONS.index(r), 1, False, None, dbg, f5
+                return REASONS.index(r), 1, False, None, dbg, f5, none
         path = lane.ahead(s0, 160.0)
         i0 = int(np.argmin(np.hypot(P[:, 0] - x, P[:, 1] - y)))
         cs = np.r_[0, np.cumsum(np.hypot(*np.diff(P[i0:], axis=0).T))]
         vp = np.interp(np.arange(len(path)) * 0.5, cs, Pv[i0:])
     path, vp = extend(path, vp, lane, s0, v, sec)
-    rp = None
-    if src == 0 and c["replan"]:
-        last = [p[1]]
+    # the t0 light and the judged stop line ahead (scorer stop lines, front axle; LabelChecker's own reading)
+    chk = c["chk"]
+    ego = dict(x=x, y=y, yaw=yaw, v=v, s=steps[j].get("s"))
+    sig = chk.signal_at(rec.rows.get("tlgt", []), tw, ego)
+    sh = chk._s_hint(ego)
+    front = float(chk._frenet(np.array([[x, y]]), sh, np.zeros(1))[0][0]) + chk.front
+    ahead = {sid: chk._ahead(front, st_) for sid, st_ in chk.stops.items()}
+    stop_d = min(ahead.values()) if ahead else math.inf
+    tgt = min(chk.stops, key=lambda k: chk._ahead(front, chk.stops[k] + 5.0), default=None)   # zone: 5 m past the line
+    past = tgt is not None and chk._ahead(front, chk.stops[tgt] + 5.0) < 5.0
+    d_line = ahead[tgt] if tgt is not None and not past else math.inf
+    uniform = bool(np.ptp(Pv) < 0.05)                 # velocity_planner injected one target (else the path planner's own speeds)
+    plan_zero = uniform and Pv[0] < 0.05              # the planner is stopping at t0 (a light it saw, before its n_frames greens)
+    mode = "plan"
+    if d_line < VP["horizon"] + 30.0 or past:
+        brake_m = v * c["max_brake_delay_s"] + v * v / (2 * c["max_brake_mps2"])
+        if past and (sig in ("red", "yellow") or plan_zero):
+            mode = "go_past"                          # front axle over the line at t0: go once the way is clear (yield/AEB)
+        elif sig == "red" or (plan_zero and sig != "green") or (sig == "green" and plan_zero):
+            mode = "stop" if d_line >= brake_m else "go_unstoppable"
+        elif sig == "yellow":
+            mode = "stop" if v * v / (2 * VP["yellow_z"]) <= d_line + chk.front - VP["stop_x"] else "go_yellow"
+    cap = VP["cap100"] if sec in NO_LIMIT_SECTIONS else VP["cap60"]
+    speed = None
+    if uniform or mode != "plan":
+        v_t0 = v if mode.startswith("go") and plan_zero else float(Pv[0])
+        stop_station = (d_line + chk.front - VP["stop_x"]) if mode == "stop" else None
+        if mode == "plan" and plan_zero:
+            stop_station = 0.0                        # stopping for a line this map reading does not see: keep it
+        speed = Speeds(path, v_t0, cap, stop_station)
+    out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, speed)
+    r = chk.check(ego, out, signal=sig, objects=objs, steer=steer)
+    extra = dict(verdict=r["verdict"], valid=bool(r["valid"]), reasons=" ".join(r["reasons"]), tags=" ".join(r["tags"]),
+                 signal=SIGNAL_CODE.get(sig, 0), stop_d=stop_d, mode=mode)
+    return REASONS.index(why), src, True, out, dbg, np.array([fl["yield0"], fl["aeb0"], fl["yield_on"], fl["aeb_on"], fl["sf_on"]]), extra
 
-        def rp(t, cx, cy, cyaw):
-            """velocity_planner injects one time-filtered target speed into every point (10/28: 14.7 m/s on the whole
-            path, 0 two seconds later at a stop line), so the plan at t0 cannot see the curve or the stop ahead: the
-            planner's own later output takes over where it starts at this car (REPLAN_D_M, PLAN_HE_RAD)."""
-            q = rec.last("vp", float(np.interp(ts + t, c["ts"], c["tw"], right=c["tw"][-1] + (ts + t - c["ts"][-1]) * c["rho"])))
-            if q is None or q[1] <= last[0] or len(q[3]) < 2:
-                return None
-            Q, Qv = np.stack([q[3], q[4]], -1), np.asarray(q[5], float)
-            dd = np.hypot(Q[:, 0] - cx, Q[:, 1] - cy); i = int(np.argmin(dd))
-            j = min(i + 4, len(Q) - 1)
-            if dd[i] > REPLAN_D_M or j == i or abs(wrap(math.atan2(Q[j, 1] - Q[i, 1], Q[j, 0] - Q[i, 0]) - cyaw)) > PLAN_HE_RAD:
-                return None
-            last[0] = q[1]
-            return extend(Q[i:], Qv[i:], lane, lane.project(cx, cy, s0 + 30.0, 60.0)[0], v, sec)
-    out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, rp)
-    return REASONS.index(why), src, True, out, dbg, np.array([fl["yield0"], fl["aeb0"], fl["yield_on"], fl["aeb_on"], fl["sf_on"]])
 
-
-def label_episode(ep, rec_dir, lane, gt, conv, actual=False, jobs=1, replan=True):
+def label_episode(ep, rec_dir, lane, gt, conv, chk, actual=False, jobs=1):
     steps = [json.loads(l) for l in open(ep / "steps.jsonl")]
     if not steps:
         return None
@@ -443,8 +497,17 @@ def label_episode(ep, rec_dir, lane, gt, conv, actual=False, jobs=1, replan=True
         V[j, :N_HIST], YAW[j, :N_HIST] = np.interp(th[j], G[:, 0], G[:, 4]), np.interp(th[j], G[:, 0], G[:, 3])
         Va[j], YAWa[j] = V[j], YAW[j]
         Va[j, N_HIST:], YAWa[j, N_HIST:] = np.interp(tf[j], G[:, 0], G[:, 4]), np.interp(tf[j], G[:, 0], G[:, 3])
-    rho = float(np.polyfit(ts, tw, 1)[0]) if len(ts) > 10 else 1.0   # wall s per simulator s
-    _C.update(steps=steps, G=G, rec=rec, lane=lane, gt=gt, tw=tw, ts=ts, ok_hist=ok_hist, rho=rho, replan=replan)
+    iv, n_iv = np.zeros(N, bool), 0                   # takeover.py's start interventions (wall clock windows)
+    for f in (Path(rec_dir) / "takeover.jsonl", Path(rec_dir) / "takeover.jsonl.gz"):
+        if f.exists():
+            for line in (gzip.open(f, "rt") if f.suffix == ".gz" else open(f)):
+                w = json.loads(line)
+                hit = (tw >= w["t_start"]) & (tw <= w["t_end"])
+                iv |= hit; n_iv += bool(hit.any())
+            break
+    sg = chk.lc["signal"]
+    _C.update(steps=steps, G=G, rec=rec, lane=lane, gt=gt, tw=tw, ts=ts, ok_hist=ok_hist, chk=chk,
+              max_brake_mps2=sg["max_brake_mps2"], max_brake_delay_s=sg["max_brake_delay_s"])
     if jobs > 1:
         import multiprocessing as mp
         with mp.get_context("fork").Pool(jobs) as pool:
@@ -453,27 +516,38 @@ def label_episode(ep, rec_dir, lane, gt, conv, actual=False, jobs=1, replan=True
         res = [one(j) for j in range(N)]
     reason = np.array([r[0] for r in res], np.int8); source = np.array([r[1] for r in res], np.int8)
     valid = np.array([r[2] for r in res], bool); dbg = np.stack([r[4] for r in res]); flags = np.stack([r[5] for r in res])
+    ex = [r[6] for r in res]
+    rolled = valid.copy()                             # a rollout exists (the label checker may still fail it)
+    valid &= np.array([e["valid"] for e in ex], bool)   # LabelChecker: fail and unrecoverable -> no label
     roll = np.full((N, N_FUT, 4), np.nan)
     for j, r in enumerate(res):
-        if r[3] is not None:
+        if r[3] is not None and rolled[j]:
             roll[j] = r[3]
             x0yaw = rec.ego_at(tw[j])[2]
             V[j, N_HIST:] = r[3][:, 3]
             YAW[j, N_HIST:] = YAW[j, N_HIST - 1] + np.unwrap(np.r_[x0yaw, r[3][:, 2]])[1:] - x0yaw
     ak = np.zeros((N, N_FUT, 2), np.float32); fxy = np.full((N, N_FUT, 2), np.nan)
-    if valid.any():
-        ak[valid], fxy[valid] = conv(V[valid], YAW[valid])
-    np.savez(ep / "dagger_labels.npz", step=np.arange(N, dtype=np.int32), ak=ak,
-             valid=np.repeat(valid[:, None], N_FUT, 1), source=source)
+    if rolled.any():
+        ak[rolled], fxy[rolled] = conv(V[rolled], YAW[rolled])
+    tmp = ep / "dagger_labels.tmp.npz"                # the runner reads it once it appears: write, then rename
+    np.savez(tmp, step=np.arange(N, dtype=np.int32), ak=ak, valid=np.repeat(valid[:, None], N_FUT, 1), source=source,
+             signal=np.array([e["signal"] for e in ex], np.int8), stop_d=np.array([e["stop_d"] for e in ex], np.float32),
+             intervened=iv)
+    tmp.replace(ep / "dagger_labels.npz")
     extra = {}
     if actual and ok_act.any():                       # the drive that really happened (expert-drive accuracy runs)
         extra["ak_actual"], extra["fxy_actual"] = np.zeros((N, N_FUT, 2), np.float32), np.full((N, N_FUT, 2), np.nan)
         extra["ak_actual"][ok_act], extra["fxy_actual"][ok_act] = conv(Va[ok_act], YAWa[ok_act])
-    np.savez(ep / "dagger_debug.npz", t_wall=tw, t_sim=ts, rollout=roll, fxy=fxy, dbg=dbg, reason=reason, flags=flags,
+    np.savez(ep / "dagger_debug.npz", t_wall=tw, t_sim=ts, rollout=roll, fxy=fxy, dbg=dbg, reason=reason, flags=flags, rolled=rolled,
+             verdict=np.array([e["verdict"] for e in ex]), check_reasons=np.array([e["reasons"] for e in ex]),
+             check_tags=np.array([e["tags"] for e in ex]), mode=np.array([e["mode"] for e in ex]),
              ok_actual=ok_act, reasons=np.array(REASONS), dbg_cols=np.array(["plan_age", "plan_d0", "plan_he", "d_ego", "yaw_err",
              "d_plan_30m", "route_s", "v", "scorer_s"]), flag_cols=np.array(["yield0", "aeb0", "yield", "aeb", "speed_filter"]), **extra)
+    import collections
     return dict(episode=str(ep), n=N, valid=int(valid.sum()), source1=int((source == 1).sum()),
-                reasons={r: int((reason == i).sum()) for i, r in enumerate(REASONS) if (reason == i).any()})
+                reasons={r: int((reason == i).sum()) for i, r in enumerate(REASONS) if (reason == i).any()},
+                verdicts=dict(collections.Counter(e["verdict"] for e in ex)), interventions=n_iv, intervened_rows=int(iv.sum()),
+                modes=dict(collections.Counter(e["mode"] for e in ex if e["mode"])))
 
 
 def selftest():
@@ -511,7 +585,8 @@ def main():
     ap.add_argument("--route", default=str(HERE.parent / "assets" / "route.json"))
     ap.add_argument("--actual", action="store_true", help="also convert the driven future (expert-drive accuracy)")
     ap.add_argument("--jobs", type=int, default=1, help="worker processes for the rollouts (fork)")
-    ap.add_argument("--no-replan", action="store_true", help="the plan at t0 only (no later planner output)")
+    ap.add_argument("--scorer", default=str(HERE.parents[3] / "Alpamayo-Cosmos" / "tools" / "scorer"),
+                    help="tools/scorer (LabelChecker: verdicts, judged stop lines)")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -521,8 +596,11 @@ def main():
         curvature_std=0.026148280660833106, a_lambda=1e-4, a_ridge=1e-4, kappa_lambda=1e-4, kappa_ridge=1e-4,
         theta_lambda=1e-6, theta_ridge=1e-8, v_lambda=1e-6, v_ridge=1e-4, dt=0.1, n_waypoints=64)   # train/tests/test_data_math.py
     conv, lane, gt = Converter(cfg, a.alpamayo), Lane(a.route), load_gt(a.gt)
+    sys.path.insert(0, a.scorer)
+    from label_check import LabelChecker
+    chk = LabelChecker()
     for ep in a.episodes:
-        print(json.dumps(label_episode(Path(ep), a.rec, lane, gt, conv, a.actual, a.jobs, not a.no_replan)), flush=True)
+        print(json.dumps(label_episode(Path(ep), a.rec, lane, gt, conv, chk, a.actual, a.jobs)), flush=True)
 
 
 if __name__ == "__main__":

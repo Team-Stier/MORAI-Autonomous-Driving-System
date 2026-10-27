@@ -55,6 +55,19 @@ import rl_critic
 import rl_reward
 
 LIMIT_S = 150.0      # simulator s after play; CP9 -> CP12 + 100 m is 911 m (46.5 s median for the 623 m exemption alone)
+# --red-cap LO HI (user 10/28): a red wait at a judged stop line ends after a time drawn from [LO, HI] s: the
+# intersection gets its phase with the route's green (SetIntersectionPhase over Infrastructure gRPC restarts that phase,
+# then the normal cycle; morai-parallel-collect r2_lights). The cycle itself is fixed in the map (MGeo), so a scene can
+# only set the arrival phase; this keeps approach, stop, start and yellow while a wait never fills an episode.
+# route s of the judged stop line -> (intersection, phase with the route's green, MORAI status bit of that green)
+RED_LIGHTS = {208.5: ("IntTL9", 1, 16), 315.9: ("IntTL7", 0, 16), 436.8: ("IntTL3", 2, 16), 609.9: ("IntTL1", 3, 32)}
+
+
+def set_phase(ch, intersection, phase):
+    """Infrastructure/SetIntersectionPhase(IntersectionPhase{1 id: ObjectIdentifier{1 value}, 2 phase}), raw protobuf."""
+    ld = lambda f, p: bytes([f << 3 | 2, len(p)]) + p
+    return ch.unary_unary("/morai_sim_api.infrastructure.Infrastructure/SetIntersectionPhase", request_serializer=lambda x: x,
+                          response_deserializer=lambda x: x)(ld(1, ld(1, intersection.encode())) + bytes([0x10, phase]), timeout=10)
 HERE = Path(__file__).resolve().parent
 
 
@@ -99,6 +112,7 @@ class Episodes(em.Manager):
         t_play = t_move = x0 = None
         prog_s, prog_t, crash_t, off_t, grace = 0.0, math.inf, -math.inf, None, math.inf
         end = t_end = None
+        waits, rng, ep["red_cap"] = {}, np.random.default_rng(seed), []
         w0 = time.time()
         while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
             t = time.time()
@@ -123,6 +137,21 @@ class Episodes(em.Manager):
                 passed += 1
                 ep["checkpoints"].append([passed, round(tau - t_play, 2) if t_play is not None else 0.0])
                 self.weather(ep, seed, passed, tau - (t_play or tau))
+            if self.a.red_cap and t_play is not None:   # cap red waits at the judged stop lines
+                for s_stop, (ic, ph, bit) in RED_LIGHTS.items():
+                    if not s_stop - 40.0 <= s <= s_stop + 2.0:
+                        continue
+                    if abs(e["v"]) >= 0.5 or (e["color"] if e["color"] is not None else -1) & bit:
+                        waits.pop(s_stop, None)   # moving, or the route's green is on (no light: -1)
+                        continue
+                    w = waits.setdefault(s_stop, [tau, float(rng.uniform(*self.a.red_cap)), None])
+                    if tau - w[0] >= w[1] and (w[2] is None or tau - w[2] > 3.0):
+                        try:
+                            set_phase(self.sim.ch, ic, ph)
+                        except Exception as err:   # grpc.RpcError: the wait just goes on
+                            print(f"red cap {ic}: {err}", flush=True)
+                        w[2] = tau
+                        ep["red_cap"].append([s_stop, round(tau - w[0], 1), round(tau - (t_play or tau), 1)])
             if e["hit"]:
                 crash_t = tau
             if s > prog_s + em.PROGRESS_M:
@@ -297,6 +326,7 @@ def main():
     ap.add_argument("--out", default="~/morai-eval/rl", help="the learner spool (NAME = actor)")
     ap.add_argument("--port", type=int, default=8092)
     ap.add_argument("--direct", action="store_true", help="Spawn and weather over gRPC instead of the official programs")
+    ap.add_argument("--red-cap", type=float, nargs=2, metavar=("LO", "HI"), help="red waits end after a time drawn from [LO, HI] s")
     ap.set_defaults(sync=None, tick_ms=100, serial=False)   # eval_manager.Manager's sync-mode arguments: free-running here
     a = ap.parse_args()
     assert 0 <= a.start_cp < a.end_cp <= 14, (a.start_cp, a.end_cp)

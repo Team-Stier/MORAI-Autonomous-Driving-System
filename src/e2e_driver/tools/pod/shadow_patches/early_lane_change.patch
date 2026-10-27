@@ -1,0 +1,50 @@
+--- a/src/path_planner/include/path_planner/cores/global_path.hpp	2026-10-28 08:04:59
++++ b/src/path_planner/include/path_planner/cores/global_path.hpp	2026-10-28 08:04:59
+@@ -47,6 +47,7 @@
+         for (std::size_t i = 0; i + 1 < checkpoints.size(); ++i)
+           via.push_back(map_->laneletLayer.get(checkpoints[i].lanelet_id));
+         route_ = graph_->shortestPathVia(start, via, map_->laneletLayer.get(checkpoints.back().lanelet_id));
++        if (route_) route_ = earlyLaneChanges(*route_, checkpoint_ids_);
+       }
+     }
+ 
+@@ -99,6 +100,39 @@
+     return closest;
+   }
+ 
++  // DAgger shadow (10/28): lanelet2's shortest path changes lanes at the last lanelet it can, and frenet_path ranks its
++  // candidates by progress along the route's own lanes, so the car changed lanes near the end of each parallel stretch.
++  // Each change moves back to the first lanelet of the straight stretch from which the neighbour lane runs alongside
++  // to the target (graph left/right: lane change allowed by the markings), never dropping a checkpoint lanelet;
++  // frenet_path's collision check still holds the change until there is a gap.
++  lanelet::routing::LaneletPath earlyLaneChanges(const lanelet::routing::LaneletPath& path, const lanelet::Ids& keep) const {
++    lanelet::ConstLanelets lanes(path.begin(), path.end());
++    const auto side = [&](const lanelet::ConstLanelet& a, bool left) { return left ? graph_->left(a) : graph_->right(a); };
++    const auto follows = [&](const lanelet::ConstLanelet& a, const lanelet::ConstLanelet& b) {
++      const auto next = graph_->following(a, false);
++      return std::any_of(next.begin(), next.end(), [&](const lanelet::ConstLanelet& n) { return n == b; });
++    };
++    const auto kept = [&](const lanelet::ConstLanelet& a) { return std::find(keep.begin(), keep.end(), a.id()) != keep.end(); };
++    for (std::size_t k = 0; k + 1 < lanes.size(); ++k) {
++      bool left = false;
++      const auto l = graph_->left(lanes[k]), r = graph_->right(lanes[k]);
++      if (l && *l == lanes[k + 1]) left = true;
++      else if (!(r && *r == lanes[k + 1])) continue;
++      std::size_t j = k;   // lanes[j + 1 .. k] are dropped for their neighbours
++      while (j > 0 && follows(lanes[j - 1], lanes[j]) && !kept(lanes[j])) {
++        const auto a = side(lanes[j - 1], left), b = side(lanes[j], left);
++        if (!a || !b || !follows(*a, *b)) break;
++        --j;
++      }
++      if (j == k) continue;
++      lanelet::ConstLanelets out(lanes.begin(), lanes.begin() + j + 1);
++      for (std::size_t i = j; i <= k; ++i) out.push_back(*side(lanes[i], left));   // side(lanes[k]) == lanes[k + 1]
++      out.insert(out.end(), lanes.begin() + k + 2, lanes.end());
++      lanes = std::move(out);
++    }
++    return lanelet::routing::LaneletPath(lanes);
++  }
++
+   lanelet::ConstLanelet match(const lanelet::BasicPoint2d& position, double yaw_rad) const {
+     // ponytail: ten spatial candidates; increase the query count if junction density requires it.
+     const auto candidates = lanelet::geometry::findNearest(map_->laneletLayer, position, 10);

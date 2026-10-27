@@ -24,6 +24,7 @@ if [[ -n ${ATTACH:-} ]]; then                         # a box this script set up
   ID=$ATTACH; SSHC=$HOME/morai-eval/pod/${ATTACH_NAME:?}/ssh_config
   rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ --exclude '*.onnx' \
     --exclude object_detector/models --exclude traffic_light/models "$REPO/src/e2e_driver/" pod:/workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/
+  rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$REPO/../Alpamayo-Cosmos/tools/scorer" pod:/workspace/Alpamayo-Cosmos/tools/
 else
   PROVIDER=vast BUNDLE=v1 CREATE_ONLY=1 bash "$HERE/eval_pod.sh" "$NAME" /workspace/models/wowmayo_final
   ID=$(sed -n 's/.*vast create: instance \([0-9]*\).*/\1/p' "$HOME/morai-eval/pod/$NAME/eval_pod.log" | tail -1)

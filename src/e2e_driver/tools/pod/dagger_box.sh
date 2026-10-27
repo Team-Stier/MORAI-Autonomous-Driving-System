@@ -22,13 +22,15 @@ T=$(nproc --all)
 if (( T >= 24 )); then export CPUS_1=0-9 STACK_CPUS=10-13 ENGINE_CPUS=14-$((T - 5)) SHADOW_CPUS=$((T - 4))-$((T - 1))
 else export CPUS_1=0-7 STACK_CPUS=8-10 ENGINE_CPUS=11-13 SHADOW_CPUS=14-$((T - 1)); fi   # 16 CPUs: tight, measure.sh shows it
 export E2E_APPLY_DELAY_S=0.1                          # as eval3: a plan observed at tau drives from tau + 0.1 s
+RED_CAP=${RED_CAP:-5 20}                              # red waits end after 5-20 s (rl_episode --red-cap, user 10/28)
+export TAKEOVER=${TAKEOVER:-1} TAKEOVER_S=$(( ${RED_CAP##* } + 5 ))   # start intervention after the longest red + 5 s
 stamp "dagger_box $NAME: $K shadow laps, $D drive laps ($RANGE), seed $SEED, $(nvidia-smi --query-gpu=name --format=csv,noheader), $T CPUs, quota $(cat /sys/fs/cgroup/cpu.max); world $CPUS_1 stack $STACK_CPUS engine $ENGINE_CPUS shadow $SHADOW_CPUS"
 
 SHADOW_CPUS=0-$((T - 1)) bash "$HERE/shadow.sh" build > "$OUT/shadow_build.log" 2>&1 &   # all CPUs until the engine loads
 BUILD=$!
 DELIVER=$V/models/wowmayo_final
 SHADOW=1 ENGINE_ARGS="--backend engine --ckpt $DELIVER --vlm Qwen/Qwen3-VL-4B-Instruct --sims 1" \
-  RL_ARGS="$RANGE --limit-s 1100 --episodes $K --seed $SEED" \
+  RL_ARGS="$RANGE --limit-s 1100 --episodes $K --seed $SEED --red-cap $RED_CAP" \
   bash "$HERE/actor.sh" up "$NAME" 1 > "$OUT/actor.log" 2>&1
 wait $BUILD; [[ -e $V/shadow/BUILT ]] && stamp "shadow built" || { stamp "shadow build failed"; tail -30 $V/shadow/build.log; }
 grep -q "listening on" /root/actor/server0.log && stamp "engine ready: $(grep -o 'loaded in.*' /root/actor/server0.log | cut -c1-100)" || stamp "engine failed"
@@ -45,6 +47,14 @@ mv /root/actor/managers.pids /root/actor/managers.pids.old
 kill $(cat /root/actor/server.pids) 2> /dev/null; mv /root/actor/server.pids /root/actor/server.pids.old
 bash "$HERE/stacks.sh" down > /dev/null; bash "$HERE/shadow.sh" down > /dev/null
 
+if [[ ${LORA_CHECK:-1} == 1 ]]; then                  # dagger-engine: LLM LoRA swap check on this 5090 while the engine is down
+  mkdir -p /tmp/lora_reqs; i=0
+  for f in $V/spool/${NAME}_w1/ep*/[0-9]*.req.bin; do ln -sf "$f" /tmp/lora_reqs/req_$(printf %06d $i).bin; i=$((i + 1)); done
+  (cd $E2E/server && HF_HUB_OFFLINE=1 HF_HOME=$V/models/hf MORAI_VLA_PYLIB=$V/morai-student/pylib TORCHINDUCTOR_CACHE_DIR=$V/cache/inductor \
+   TRITON_CACHE_DIR=$V/cache/triton timeout 2700 taskset -c "$ENGINE_CPUS" $V/venv-engine/bin/python ../test/lora_llm_check.py "$DELIVER" \
+   /tmp/lora_reqs 1 - "$OUT/lora_llm_check.json" > "$OUT/lora_llm_check.log" 2>&1; stamp "lora_llm_check exit $? ($i requests)") &
+  LORA=$!
+fi
 if (( D > 0 )); then                                  # the collection driver drives world 1 itself
   export SHADOW_CPUS=10-$((T - 1))                     # the engine's and the stack's CPUs are free now
   bash "$HERE/shadow.sh" up 1 drive || stamp "shadow drive up failed"
@@ -53,7 +63,7 @@ if (( D > 0 )); then                                  # the collection driver dr
   SCORER=$V/Alpamayo-Cosmos/tools/scorer setsid $V/venv-rl/bin/python -u $E2E/tools/rl_episode.py "${NAME}_drive_w1" \
     --scorer $V/Alpamayo-Cosmos/tools/scorer --out $V/spool --host local --direct --grpc 127.0.0.1:7789 --world 1 \
     --objinfo-port 27505 --launcher $d/MoraiLauncher_Lin_Data --port 8092 --seed $((SEED + 500)) \
-    --loc-restart "bash $HERE/shadow.sh restart 1" $RANGE --limit-s 1100 --episodes "$D" \
+    --loc-restart "bash $HERE/shadow.sh restart 1" $RANGE --limit-s 1100 --episodes "$D" --red-cap $RED_CAP \
     > /root/actor/drive_w1.log 2>&1 < /dev/null &
   MGR=$!; stamp "expert drive started"
   while kill -0 $MGR 2> /dev/null; do sleep 10; done
@@ -62,6 +72,7 @@ if (( D > 0 )); then                                  # the collection driver dr
   bash "$HERE/shadow.sh" down > /dev/null
 fi
 bash "$HERE/worlds.sh" down > /dev/null
+[[ -n ${LORA:-} ]] && wait $LORA
 
 cfg=$(find "$DELIVER" -maxdepth 2 -name config.json | head -1)
 LBL="$V/venv-engine/bin/python -u $E2E/tools/dagger_label.py --rec $V/shadow/rec_w1 --gt $V/shadow/gt --config $cfg --jobs $((T - 2))"
