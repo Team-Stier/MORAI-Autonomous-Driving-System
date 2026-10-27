@@ -45,6 +45,19 @@ PROVIDER=vast OFFER="<offer id 1> <offer id 2> <offer id 3>" BUNDLE=v1 LAPS=8 LA
   - 상자 안의 idle watchdog도 GPU가 15분 놀면 상자를 멈춘다.
 - 이미 띄운 상자에 다시 붙이기: `ATTACH=<instance id> ATTACH_T0=<생성 epoch> PROVIDER=vast …`
 
+### 새 납품본이 나오면 바로 영상 받기 (`deliver_watch.sh`, 10/28)
+```bash
+cd src/e2e_driver/tools/pod && nohup bash deliver_watch.sh > ~/morai-eval/deliver_watch.log 2>&1 < /dev/null & disown
+nohup caffeinate -i -w $! > /dev/null 2>&1 &         # the Mac stays awake while it waits
+```
+- R2 미세조정 감시(`Alpamayo-Cosmos/tools/vast/r2ft_autowatch.py`)가 `~/.r2ft-watch.events`에 `STAGE 납품 완료: b2://…/<run>/deliver/final`을 쓰면 다음을 한다:
+  - 가장 싼 vast 5090 후보 4개를 고른다(위 조건, $1/h 이하).
+  - `eval_pod.sh BUNDLE=v1`을 `b2:<run>/deliver`로 띄운다. `qad_export.py deliver` 출력(`final/` + `quant_manifest.json`)이 와우마요 납품본과 같은 형식이라 변환이 필요 없다.
+  - 8바퀴를 돈다. 시드 28은 10/28 rt8과 같은 장면이다.
+  - 바퀴마다 "[R2 미세조정 납품본]"으로 시작하는 DM을 보내고, 끝나면 B2 동기화 후 자동 삭제한다.
+- 감시를 켜기 전에 적힌 줄은 보지 않는다. 시험은 `EVENTS=<가짜 파일> DRY_RUN=1`로 한다.
+- 새 QAD의 층별 NVFP4/FP8 배치가 옛 납품본과 다르면 5090 컴파일 캐시가 맞지 않는다. 그러면 첫 엔진 준비에 컴파일과 autotune으로 10–20분이 더 걸린다. 그동안 world는 멈추고, `EVAL_MAX_MIN` 330분이 이를 덮는다.
+
 ### 새 상자 기동 실측 (10/28, vast 58001997: 노르웨이 Ryzen 9 7900X 5.74 GHz, 24 vCPU, 60 GB, 929 Mbps, $0.695/h, `LAPS=1`)
 | 단계 | 생성 후 |
 |---|---|

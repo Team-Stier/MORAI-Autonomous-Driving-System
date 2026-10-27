@@ -21,7 +21,8 @@
 #   vars, ssh keys from the account; vastai CLI on the Mac). LAPS=K: K laps per world (seed S -> scenes S*1000+k);
 #   LAP_DELIVER=1: each lap's 1x phone video (< 24 MB) and one-line report go to B2 runs/eval_vps/NAME/lap_KK/ and, from
 #   the Mac, to the user's Discord DM (bot token in ~/.claude/channels/discord/.env, never printed; a failed attachment
-#   falls back to a 7-day B2 link).
+#   falls back to a 7-day B2 link). MSG_PREFIX starts each lap message (e.g. "[R2 미세조정 납품본] ").
+#   DELIVER b2:<path> (a qad_export.py deliver dir: final/ + quant_manifest.json) is fetched on the box (eval3.sh).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
@@ -154,6 +155,7 @@ deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and r
     [[ -e $LOCAL/$(basename "$f").sent ]] && continue
     IFS=$'\t' read -r line url vid < <(P "cat $f")
     mkdir -p "$LOCAL/laps"; scp -q -F "$SSHC" "pod:$vid" "$LOCAL/laps/" 2> /dev/null
+    line="${MSG_PREFIX:-}$line"
     code=$( [[ -s $LOCAL/laps/$(basename "$vid") ]] && dm "$line" "$LOCAL/laps/$(basename "$vid")" || echo none)
     [[ $code == 200 ]] || code="$code, link: $(dm "$line
 영상(7일 링크): $url")"
