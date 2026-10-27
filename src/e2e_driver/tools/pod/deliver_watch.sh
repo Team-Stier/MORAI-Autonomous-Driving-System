@@ -15,7 +15,17 @@ echo "$(date +%T) delivery seen: $line -> b2:$src"
 offers=$(vastai search offers "gpu_name=RTX_5090 num_gpus=1 rentable=true verified=true cpu_ghz>=4.5 inet_down>=900 reliability>0.98 cpu_ram>=30 cpu_cores_effective>=16 dph_total<=${MAX_DPH:-1.0}" -o 'dph+' --raw |
   python3 -c "import json,sys; print(' '.join(str(o['id']) for o in json.load(sys.stdin)[:${OFFERS_N:-4}]))")
 NAME=$(date +%Y%m%d-%H%M)_${RUNTAG:-r2ft}_rt${LAPS:-8}
-cmd=(env MSG_PREFIX="${LABEL:-[R2 미세조정 납품본] }" PROVIDER=vast OFFER="$offers" BUNDLE=v1 LAPS=${LAPS:-8} LAP_DELIVER=1 VIEW_FPS=15
+EVENT_T0=$(date -j -f "%Y-%m-%d %H:%M:%S" "$(echo "$line" | cut -c1-19)" +%s 2> /dev/null || date +%s)
+# a box booted beforehand for this (PRE = ~/morai-eval/pod/prelaunch: "NAME instance create_epoch"; worlds, stacks and the
+# engine's compile cache for the new manifest are up): only the weights are fetched there
+read -r pname pid pt0 < "${PRE:-$HOME/morai-eval/pod/prelaunch}" 2> /dev/null
+if [[ -n ${pid:-} ]] && [[ $(vastai show instance "$pid" --raw 2> /dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("actual_status"))' 2> /dev/null) == running ]]; then
+  NAME=$pname; att=(ATTACH=$pid ATTACH_T0=$pt0); echo "$(date +%T) using the prelaunched box $pid ($pname)"
+  for i in $(seq 120); do   # it may still be booting: its setup must be done before the eval is attached
+    ssh -F "$HOME/morai-eval/pod/$pname/ssh_config" -o ConnectTimeout=15 pod 'ls /workspace/setup.done.* > /dev/null 2>&1' 2> /dev/null && break; sleep 10
+  done
+else att=(); fi
+cmd=(env "${att[@]}" EVENT_T0=$EVENT_T0 MSG_PREFIX="${LABEL:-[R2 미세조정 납품본] }" PROVIDER=vast OFFER="$offers" BUNDLE=v1 LAPS=${LAPS:-8} LAP_DELIVER=1 VIEW_FPS=15
      EVAL_MAX_MIN=${EVAL_MAX_MIN:-330} bash "$HERE/eval_pod.sh" "$NAME" "b2:$src" "${SEED:-28}")
 echo "$(date +%T) offers [$offers] -> ${cmd[*]}"
 [[ -n $offers ]] || { echo "no 5090 offer under \$${MAX_DPH:-1.0}/h"; exit 1; }

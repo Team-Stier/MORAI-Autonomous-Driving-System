@@ -7,6 +7,7 @@ NPCs and the replay check.      lap_report.py DIR K | lap_report.py --selfcheck
 """
 import csv
 import json
+import os
 import sys
 from collections import Counter
 from pathlib import Path
@@ -41,6 +42,11 @@ def report(d, k):
             f"model {'/'.join(map(str, r['model_ms'])) if r['model_ms'] else '-'} ms (p50/p95) | 날씨 {','.join(r['weather'])} | "
             f"터널 {r['tunnel']} | 동적 {dict(dyn)} | NPC {r['npcs']} | 재생 "
             + ("확인됨" if r["replay_ok"] else f"실패 {r['replay_failures']}" if r["replay_ok"] is False else "기록 없음"))
+    ev, tl = os.environ.get("EVENT_T0"), d.parent / "timeline.txt"
+    first = [float(l.split()[0]) for l in (tl.read_text().splitlines() if tl.exists() else []) if l.split(" ", 2)[2:3] == ["first steps"]]
+    if k == 0 and ev and first:                      # deliver_watch.sh: the delivery event's epoch
+        s = first[0] - float(ev); r["event_to_first_step_s"] = round(s)
+        line += f" | 납품 이벤트→첫 주행 step {int(s // 60)}분 {int(s % 60)}초"
     return line, r
 
 
