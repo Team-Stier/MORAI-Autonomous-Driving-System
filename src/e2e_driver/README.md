@@ -554,7 +554,13 @@ model_server.py --backend engine --ckpt <deliver> --sims 3 --rl-sigma 0.1 --expe
   - 병합은 W' = bf16(W + scale·B·A)이다. 납품 BF16 가중치는 호스트 메모리에 둔다(약 4.6 GB).
   - 양자화는 납품물 amax 그대로다(QAD의 격자, learner `merge()`와 같은 규칙). 그래서 병합한 납품물을 `engine.load`한 것과 같다.
   - 제자리 복사라 CUDA 그래프를 다시 잡지 않는다. 이름이나 shape가 안 맞는 LoRA는 아무것도 바꾸기 전에 거부한다.
+  - **LLM LoRA** (DAgger `llm+expert`, 10/28): `--expert2` 없이 띄우면 LoRA에 LLM 디코더 층(`vlm.model.language_model.layers.*`, 납품물 이름 그대로)도 들어갈 수 있다. 같은 규칙으로 병합·재양자화한다. expert만 있는 LoRA는 전과 같다.
+    - 납품 LLM BF16 가중치도 시작할 때 호스트 메모리에 올린다(약 7.3 GB 더, expert와 합쳐 약 12 GB).
+    - 교체할 때는 새 LoRA의 층과 이전 LoRA가 바꾼 층만 다시 쓴다. 그래서 LLM LoRA 다음에 expert만 있는 LoRA가 오면 LLM은 납품물로 돌아간다.
+    - ViT 키는 거부한다(늘 얼림). `--expert2`로 두 벌이면 LLM을 같이 쓰므로 LLM 키가 든 LoRA를 거부한다.
+    - ViT 캐시는 그대로 쓴다. LLM 프리필은 요청마다 새로 돌기 때문에 K/V를 버릴 필요가 없다.
 - **시험**: `test/test_rl_server.py`(Mac, 가짜 백엔드: 동시 접속·슬롯·logp 식), `test/rl_engine_check.py`(5080), `test/server_bench.py --clients 3`.
+  - LLM LoRA: `test/test_lora_llm.py`(Mac CPU, 가짜 가중치: 이름, 거부, 버전, 되돌리기), `test/lora_llm_check.py`(GPU, 실제 납품물: 교체 시간, 비트 일치, 새 양자화, model_ms 전후, BF16 + LoRA 기준).
 - **5080 실측** (10/27, `test/rl_engine_check.py`, 실주행 요청 `dump_fh6`): 아래 표는 실제 와우마요 납품물(`wowmayo_final`, NVFP4 454층·FP8 146층)이고, 노이즈 샘플러 줄만 실제 크기 시험 납품물(`synthetic_475`)이다.
 
   | 항목 | 결과 |

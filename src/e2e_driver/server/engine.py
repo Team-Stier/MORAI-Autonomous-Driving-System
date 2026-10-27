@@ -119,11 +119,15 @@ def load(deliver, vlm="Qwen/Qwen3-VL-4B-Instruct", device="cuda:0", attn="sdpa",
     return model
 
 
-# ---------------------------------------------------------------- expert LoRA (RL_PLAN 3.1 weight updates, 5 A)
+# ---------------------------------------------------------------- expert / LLM LoRA (RL_PLAN 3.1 weight updates, 5 A; DAgger)
+LLM = "vlm.model.language_model.layers."                         # StudentVLA (and quant_manifest.json) names of the LLM decoder
+VIT = ("vlm.model.visual.", "vlm.model.lidar_visual.")           # always frozen
+
+
 def read_lora(path):
-    """an expert LoRA of the learner (Alpamayo-Cosmos train/rl/policy.py LoRA.export): safetensors {<module>.lora_A
-    (r, in), <module>.lora_B (out, r)} with StudentVLA module names, metadata scale (alpha / r) and version ->
-    ({module: (A, B)}, scale, version or None)."""
+    """a LoRA of the learner (Alpamayo-Cosmos train/rl/policy.py LoRA.export, train/dagger): safetensors {<module>.lora_A
+    (r, in), <module>.lora_B (out, r)} with StudentVLA module names (expert and/or LLM decoder linears), metadata scale
+    (alpha / r) and version -> ({module: (A, B)}, scale, version or None)."""
     from safetensors import safe_open
     with safe_open(str(path), "pt") as h:
         meta, t = h.metadata() or {}, {k: h.get_tensor(k) for k in h.keys()}
@@ -134,14 +138,15 @@ def read_lora(path):
     return {n: (t[n + ".lora_A"], t[n + ".lora_B"]) for n in names}, float(meta["scale"]), meta.get("version")
 
 
-def expert_base(deliver, parts, pin=True):
-    """the delivery's BF16 weights of every linear of an expert set (FastEngine.parts entry; module names as in
-    StudentVLA), in host memory: what each LoRA is merged onto (~4.6 GB)."""
+def expert_base(deliver, parts, pin=True, prefix=""):
+    """the delivery's BF16 weights of every linear under `parts` (an expert set: FastEngine.parts entry; or the LLM
+    decoder layers with prefix LLM), keyed by StudentVLA module name, in host memory: what each LoRA is merged onto
+    (expert ~4.6 GB, LLM ~7.3 GB)."""
     f, saved = open_final(Path(deliver) / "final", "cpu")
-    names = [n for n, m in parts.named_modules() if isinstance(m, (F4Linear, F8Linear, torch.nn.Linear))]
+    names = [prefix + n for n, m in parts.named_modules() if isinstance(m, (F4Linear, F8Linear, torch.nn.Linear))]
     missing = [n for n in names if n + ".weight" not in saved]
     if missing:
-        raise DeliveryError("final/ has no weight for expert linears %s" % missing[:3])
+        raise DeliveryError("final/ has no weight for linears %s" % missing[:3])
     w = {n: f.get_tensor(n + ".weight").to(torch.bfloat16) for n in names}
     try:
         return {n: t.pin_memory() for n, t in w.items()} if pin else w
@@ -150,17 +155,22 @@ def expert_base(deliver, parts, pin=True):
 
 
 @torch.no_grad()
-def apply_lora(parts, base, lora=None, scale=1.0):
-    """W + scale * B A on every linear of an expert set, in place (CUDA graphs captured on it keep their pointers);
-    lora None: the base again. Quantized as load() quantizes a delivery, with the delivered scales (QAD's calibrated
-    amax, not max|W'|; the learner's merge() keeps them too), so this equals load() of a merged delivery."""
+def apply_lora(parts, base, lora=None, scale=1.0, dirty=None):
+    """W + scale * B A on the linears of `base` (names resolved under `parts`: an expert set, or the model for expert +
+    LLM names), in place (CUDA graphs captured on them keep their pointers); every other name in `dirty` (what the
+    previous LoRA changed; None = all of base) gets its base weight back; lora None: the base again. Quantized as load()
+    quantizes a delivery, with the delivered scales (QAD's calibrated amax, not max|W'|; the learner's merge() keeps them
+    too), so this equals load() of a merged delivery. -> the names now changed (the next call's dirty)."""
     lora = lora or {}
-    bad = ["%s (not in the expert)" % n for n in lora if n not in base]
+    bad = ["%s (ViT: frozen)" % n for n in lora if n.startswith(VIT)]
+    bad += ["%s (not a LoRA target here)" % n for n in lora if n not in base and not n.startswith(VIT)]
     bad += ["%s: A %s B %s for weight %s" % (n, list(A.shape), list(B.shape), list(base[n].shape)) for n, (A, B) in lora.items()
             if n in base and (A.shape[1] != base[n].shape[1] or B.shape[0] != base[n].shape[0] or A.shape[0] != B.shape[1])]
     if bad:                                                            # checked before anything changes
-        raise ValueError("LoRA does not fit the expert: %s" % "; ".join(bad[:3]))
+        raise ValueError("LoRA does not fit the engine: %s" % "; ".join(bad[:3]))
     for name, w in base.items():
+        if dirty is not None and name not in lora and name not in dirty:    # untouched: still the delivered weight
+            continue
         mod = parts.get_submodule(name)
         dev = mod.wq.device if isinstance(mod, F4Linear) else mod.w8.device if isinstance(mod, F8Linear) else mod.weight.device
         w = w.to(dev, non_blocking=True)
@@ -175,4 +185,4 @@ def apply_lora(parts, base, lora=None, scale=1.0):
         else:
             mod.weight.copy_(w)
     torch.cuda.synchronize()
-    return len(lora)
+    return set(lora)

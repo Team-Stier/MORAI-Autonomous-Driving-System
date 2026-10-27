@@ -281,7 +281,8 @@ def main():
                     help="engine: a second expert set picked by the request's 'expert' (RL_PLAN 5 A): the delivery's expert "
                          "+ this LoRA file (train/rl LoRA.export); no file = a copy of the base")
     ap.add_argument("--lora-watch", metavar="LATEST_JSON", help="engine: the learner's <out>/lora/latest.json; each new "
-                    "version is merged into the last expert set (--sims servers check between batches, once a second)")
+                    "version is merged into the last expert set, and without --expert2 also its LLM decoder layers "
+                    "(--sims servers check between batches, once a second)")
     ap.add_argument("--warmup", default=str(HERE.parent / "assets" / "warmup"),
                     help="engine: dumped requests (req_*.bin) to compile and capture the graphs on before listening")
     a = ap.parse_args()
