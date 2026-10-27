@@ -14,8 +14,9 @@
 # (--sync, TICK_MS 100 | 50, SERIAL=1: each reply before the tick), the engine batches the worlds' requests together
 # (--gather GATHER 0.1 s, --prep PREP process). SIMS: engine slots (N). Parts already up (worlds, stacks, an engine
 # from sync_bench.sh or an earlier KEEP_UP=1 run) are reused; KEEP_UP=1 leaves them up at the end (another wave).
-# CPU_LAYOUT=shared: worlds and stacks share all CPUs but the engine's 8 (no spinner pinning) instead of 12 per world.
+# CPU_LAYOUT=shared (SYNC default): worlds and stacks share all CPUs but the engine's 8, every world's camera spinners on 4 CPUs.
 set -uo pipefail
+[[ ${SYNC:-0} == 1 ]] && CPU_LAYOUT=${CPU_LAYOUT:-shared}            # sync_bench 10/28: shared + pinned spinners
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@"); (( ${#SEEDS[@]} )) || SEEDS=(7 8 9)
 N=${#SEEDS[@]}; OUT=$V/results/$NAME; FR=/root/frames/$NAME; SCORER=$V/Alpamayo-Cosmos/tools/scorer; PY=$V/venv-rl/bin/python
@@ -68,7 +69,13 @@ stamp "worlds, stacks and engine starting"
 
 wait $WORLDS || { stamp "worlds failed"; tail -5 "$OUT/worlds.log"; bash "$HERE/stacks.sh" down; kill "$(cat /root/actor/server.pids)"; exit 1; }
 stamp "worlds ready"
-until grep -q "listening on" "$OUT/server.log" || ! kill -0 $ENGINE 2> /dev/null; do sleep 2; done
+if ! grep -q "listening on" "$OUT/server.log"; then   # idle worlds burn ~3.8 cores each: the engine gets the CPU quota (10/28)
+  sims=$(pgrep -f "[S]imulator.real"); kill -STOP $sims
+  until grep -q "listening on" "$OUT/server.log" || ! kill -0 $ENGINE 2> /dev/null; do sleep 1; done
+  kill -CONT $sims
+fi
+# every world's camera spinners on 4 CPUs (shared layout): unpinned they burn ~4 cores per world (10/28: N=6 0.52 -> 0.76 sim-s/s)
+[[ ${CPU_LAYOUT:-split} == shared ]] && SPIN_CPUS=$((T - 12))-$((T - 9)) bash "$HERE/pin.sh" >> "$OUT/worlds.log" 2>&1
 grep -q "listening on" "$OUT/server.log" || { stamp "engine failed"; tail -20 "$OUT/server.log"; bash "$HERE/stacks.sh" down; bash "$HERE/worlds.sh" down; exit 1; }
 stamp "engine ready: $(grep -o 'loaded in.*' "$OUT/server.log" | cut -c1-120)"
 for n in $(seq "$N"); do until inrosn "$n" "rosnode list 2> /dev/null" | grep -q e2e_driver; do sleep 2; done; done

@@ -266,7 +266,7 @@ class Manager:
             self.dt, self.k, self.link = a.tick_ms / 1000.0, 0, SyncLink(a.sync)
             self.m = max(1, round(0.1 / self.dt))         # steps per decision
             self.clock.rho = 1.0
-            self.steplog = open(self.out / "steps.jsonl", "a")
+            self.steplog = open(self.out / "steps.jsonl", "a", buffering=1)
 
     def set_sync(self, on):
         req = {"type": 2, "tick_period": self.a.tick_ms} if on else {"type": 0}

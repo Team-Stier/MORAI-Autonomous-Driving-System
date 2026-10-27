@@ -53,7 +53,14 @@ for combo in "${COMBOS[@]}"; do
   bash "$HERE/worlds.sh" up "$N" >> "$OUT/worlds.log" 2>&1 || { stamp "worlds failed (worlds.log)"; exit 1; }
   bash "$HERE/stacks.sh" up "$N" >> "$OUT/stacks.log" 2>&1
   for n in $(seq "$N"); do until inrosn "$n" "rosnode list 2> /dev/null" | grep -q e2e_driver; do sleep 2; done; done
-  until grep -q "listening on" "/proc/$ENGINE/fd/1" 2> /dev/null || ! kill -0 "$ENGINE" 2> /dev/null; do sleep 2; done
+  if ! grep -q "listening on" "/proc/$ENGINE/fd/1" 2> /dev/null; then   # idle worlds burn ~3.8 cores each: the engine load and
+    sims=$(pgrep -f "[S]imulator.real"); kill -STOP $sims             # compile get the pod's CPU quota (10/28: 8 worlds = 30 cores)
+    stamp "worlds paused while the engine loads"
+    until grep -q "listening on" "/proc/$ENGINE/fd/1" 2> /dev/null || ! kill -0 "$ENGINE" 2> /dev/null; do sleep 1; done
+    kill -CONT $sims
+  fi
+  # every world's camera spinners on 4 CPUs: unpinned they burn ~4 cores per world and N=6 hit the quota (0.52 -> 0.76 sim-s/s)
+  [[ ${CPU_LAYOUT:-shared} == shared ]] && SPIN_CPUS=$((T - 12))-$((T - 9)) bash "$HERE/pin.sh" >> "$OUT/worlds.log" 2>&1
   kill -0 "$ENGINE" 2> /dev/null || { stamp "engine died"; exit 1; }
   stamp "$combo: $N worlds, stacks and engine up"
   nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used,power.draw --format=csv,noheader,nounits -lms 1000 > "$C/gpu.csv" 2>&1 &

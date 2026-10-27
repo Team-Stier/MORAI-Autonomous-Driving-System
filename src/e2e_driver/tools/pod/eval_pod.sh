@@ -11,6 +11,9 @@
 #   KEEP=1 leaves the pod running at the end (stop it yourself), CREATE_ONLY=1 stops after setup (first boot, tests),
 #   EVAL_MAX_MIN (110): create to end of eval3 before giving up; SIM_FPS / APPLY_DELAY_S pass through to eval3.sh (worlds.sh TargetFrameRate cap; tau delay of a plan, 0.1).
 #   SYNC=1 (MORAI synchronous mode) with TICK_MS, SERIAL, CPU_LAYOUT, GATHER, PREP pass through too (eval3.sh).
+#   RUN=actor: actor.sh up NAME N instead (N = the one SEED argument, default 3; RL_ENGINE_ARGS = its ENGINE_ARGS, default
+#   the batched engine on DELIVER with --expert2 --rl-sigma 0.1; RL_ARGS pass through); stops watching at the first episode
+#   step (the RL owner runs the pod from there: KEEP=1).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
@@ -80,10 +83,19 @@ P "tail -3 /workspace/setup.\$(hostname).log; nvidia-smi --query-gpu=name,driver
 P "grep -q 'setup.*done' /workspace/setup.\$(hostname).log" || { log "setup failed"; exit 1; }
 log "setup done"
 [[ ${CREATE_ONLY:-0} == 1 ]] && { KEEP=1; exit 0; }
+if [[ ${RUN:-eval} == actor ]]; then
+  N=${SEEDS[0]:-3}; EA=${RL_ENGINE_ARGS:---backend engine --ckpt $DELIVER --vlm Qwen/Qwen3-VL-4B-Instruct --sims $N --expert2 --rl-sigma 0.1}
+  P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt && \
+     (ENGINE_ARGS='$EA' RL_ARGS='${RL_ARGS:-}' setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/actor.sh up $NAME $N \
+     > /workspace/results/$NAME.log 2>&1 < /dev/null &)"
+  log "actor.sh up $NAME $N: $EA"
+  until P "ls /workspace/spool/${NAME}_w*/ep*/steps.jsonl 2> /dev/null | xargs -r cat | grep -q ."; do late 1800 "actor: no episode step"; sleep 10; done
+  log "first episode steps $(( $(date +%s) - ${T0%.*} )) s after pod create"; KEEP=1; exit 0
+fi
 
 P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt && \
    (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
-    CPU_LAYOUT=${CPU_LAYOUT:-split} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $NAME $DELIVER ${SEEDS[*]} \
+    CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $NAME $DELIVER ${SEEDS[*]} \
    > /workspace/results/$NAME.log 2>&1 < /dev/null &)"
 log "eval3 running: ssh -F $SSHC pod tail -f /workspace/results/$NAME.log"
 until P "test -e /workspace/results/$NAME/DONE || ! pgrep -f '[e]val3.sh $NAME' > /dev/null"; do late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; sleep 20; done
