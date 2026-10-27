@@ -15,8 +15,8 @@ control:                      # src/e2e_driver/control.py docstring; measured wi
                                        # applied value offline and risks locking onto its own output in closed loop
   wheelbase_m: 3.0
   max_steer_deg: 40.0
-  steer_gain: 0.77
-  steer_lookahead_s: 0.1
+  steer_gain: [[6.5, 0.77], [8.0, 0.67], [11.5, 0.67], [13.0, 0.77]]   # [speed m/s, g]; 7-12 m/s understeer (actual kappa 0.86 x command, 10/27)
+  steer_lookahead_s: 0.3        # closed-loop kappa lag ~0.3 s (10/27 laps; was 0.1)
   accel_lookahead_s: 0.1
   accel_map_low: [[0.0, -0.55], [0.06, 0.0], [0.15, 0.51], [0.25, 0.94], [0.35, 1.40], [0.45, 2.18], [0.55, 2.58], [0.67, 3.45], [1.0, 5.0]]
   accel_map_cruise: [[0.0, -0.40], [0.06, 0.0], [0.15, 0.27], [0.25, 0.48], [0.35, 0.87], [0.45, 1.08], [0.55, 1.37], [0.67, 1.75], [1.0, 2.6]]

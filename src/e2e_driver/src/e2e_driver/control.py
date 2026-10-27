@@ -12,6 +12,9 @@ the step under t + lookahead and maps it through the vehicle. Constants were mea
                                   is right +, command +1 turns left)
               g = 0.77            kappa = g tan(delta) / L, fits 0.782 / 0.753 / 0.757 (R^2 0.96-0.97); control
                                   morai_mpc.yaml steering_prediction.gain says 0.75
+            closed loop (10/27 WoWmayo laps, test/curve_events.py): actual kappa follows the command ~0.3 s late (applied
+            angle 0.1 s + yaw build-up) and reaches ~0.86 of it at 7-12 m/s, so the config reads the plan 0.3 s ahead and
+            g may be a [[speed m/s, g], ...] table (interpolated on the measured speed)
   pedals    dv/dt of the applied pedal (other pedal 0) is a table over pedal and speed (accel_map_low below 4.5 m/s,
             accel_map_cruise above 7.5 m/s, linear in between; brake_map at any speed); pedal 0 is the coast row.
             accel/brake = the table inverse at the measured speed. The response follows the applied pedal without lag,
@@ -111,7 +114,10 @@ class Controller:
             accel, brake, steer_deg = self._mlp(plan, t, v, applied)
             return float(accel), float(brake), float(np.clip(steer_deg / p["max_steer_deg"], -1.0, 1.0)), {"mode": "mlp"}
         kappa = plan.k[plan.step(t + p["steer_lookahead_s"])]
-        delta = math.atan(p["wheelbase_m"] * kappa / p["steer_gain"])
+        g = p["steer_gain"]
+        if isinstance(g, (list, tuple)):   # [[speed m/s, g], ...]: closed-loop understeer differs by speed (10/27 laps)
+            g = float(np.interp(abs(v), *np.asarray(g, float).T))
+        delta = math.atan(p["wheelbase_m"] * kappa / g)
         steering = float(np.clip(delta / math.radians(p["max_steer_deg"]), -1.0, 1.0))
         a = plan.a[plan.step(t + p["accel_lookahead_s"])] + p["speed_kp"] * (plan.speed(t) - v)
         accel, brake = self.pedals(a, v)
