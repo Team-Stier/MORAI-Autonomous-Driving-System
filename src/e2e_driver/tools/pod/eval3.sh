@@ -40,15 +40,15 @@ OMP_NUM_THREADS=4 MALLOC_MMAP_MAX_=0 MALLOC_TRIM_THRESHOLD_=1073741824 HF_HUB_OF
 TORCHINDUCTOR_CACHE_DIR=$V/cache/inductor TRITON_CACHE_DIR=$V/cache/triton \
   setsid taskset -c "$ENGINE_CPUS" $V/venv-engine/bin/python -u $E2E/server/model_server.py --backend engine --ckpt "$DELIVER" \
   --vlm Qwen/Qwen3-VL-4B-Instruct --sims "$N" --port 47011 > "$OUT/server.log" 2>&1 < /dev/null &
-echo $! > /root/actor/server.pids                         # measure.sh's engine
+ENGINE=$!; echo $ENGINE > /root/actor/server.pids          # measure.sh's engine
 stamp "worlds, stacks and engine starting"
 (nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader,nounits -lms 1000 > "$OUT/gpu.csv" 2>&1 &
  echo $! > /root/actor/gpu.pid)
 
 wait $WORLDS || { stamp "worlds failed"; tail -5 "$OUT/worlds.log"; bash "$HERE/stacks.sh" down; kill "$(cat /root/actor/server.pids)"; exit 1; }
 stamp "worlds ready"
-until grep -q "listening on\|Traceback\|Error" "$OUT/server.log"; do sleep 2; done
-grep -q "listening on" "$OUT/server.log" || { stamp "engine failed"; tail -20 "$OUT/server.log"; exit 1; }
+until grep -q "listening on" "$OUT/server.log" || ! kill -0 $ENGINE 2> /dev/null; do sleep 2; done
+grep -q "listening on" "$OUT/server.log" || { stamp "engine failed"; tail -20 "$OUT/server.log"; bash "$HERE/stacks.sh" down; bash "$HERE/worlds.sh" down; exit 1; }
 stamp "engine ready: $(grep -o 'loaded in.*' "$OUT/server.log" | cut -c1-120)"
 for n in $(seq "$N"); do until inrosn "$n" "rosnode list 2> /dev/null" | grep -q e2e_driver; do sleep 2; done; done
 stamp "stacks ready"

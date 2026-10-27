@@ -2,7 +2,7 @@
 # Pod boot (RunPod, image ros:noetic-ros-base-focal, network volume at /workspace, env NVIDIA_DRIVER_CAPABILITIES=all;
 # create_pod.sh / eval_pod.sh make this the start command). Idempotent. Volume layout: README.md.
 #   first boot (a CPU pod is enough): apt lists and .deb files land in $V/apt, rosdep, the catkin build and the venvs on
-#     the volume; $V/apt/packages.txt = every package the boot added to the image
+#     the volume; $V/apt/packages.txt = every package installed after it
 #   later boots: install packages.txt from the cached .deb files (no download, no rosdep), unpack MORAI to the container
 #     disk, sshd; the build and venvs are reused. REBUILD=1 runs catkin_make again (C++ changes)
 # Writes $V/setup.done.<container hostname> at the end (eval_pod.sh waits for it).
@@ -18,14 +18,13 @@ printf 'Dir::Cache::Archives "%s/apt/archives";\nDir::State::Lists "%s/apt/lists
   "$V" "$V" > /etc/apt/apt.conf.d/99volume
 FIRST=0; [[ -s $V/apt/packages.txt ]] || FIRST=1
 if (( FIRST )); then
-  dpkg-query -W -f='${Package}\n' | sort > /tmp/pkgs.before
   apt-get update -qq
   # MORAI Linux: Vulkan loader (the NVIDIA ICD comes with the driver capabilities), X libs for Xvfb, ko_KR locale (the
   # simulator's date parsing). Triton (engine) needs gcc and python3-dev. viewer.py: python3-xlib, python3-pil; videos: ffmpeg
   apt-get install -y -qq --no-install-recommends openssh-server xvfb libvulkan1 vulkan-tools libgtk-3-0 libglu1-mesa \
     libxcursor1 libxrandr2 libxinerama1 libxi6 libxss1 libxkbcommon-x11-0 libasound2 locales python3-pip python3-yaml \
     rsync psmisc procps iproute2 bc util-linux gcc python3-dev ros-noetic-compressed-image-transport \
-    python3-xlib python3-pil ffmpeg curl ca-certificates > /dev/null
+    python3-xlib python3-pil ffmpeg curl ca-certificates git > /dev/null
 else
   apt-get install -y -qq --no-install-recommends $(cat $V/apt/packages.txt) > /dev/null
 fi
@@ -50,7 +49,7 @@ mkdir -p $V/cache/home-cache $V/cache/triton
 [[ -L /root/.triton ]] || ln -sfn $V/cache/triton /root/.triton
 
 log ROS build
-source /opt/ros/noetic/setup.bash
+set +u; source /opt/ros/noetic/setup.bash; set -u            # ROS's setup reads unset variables
 PKGS="morai_msgs;interfaces;node_pipeline;velodyne;velodyne_driver;velodyne_laserscan;velodyne_msgs;velodyne_pcl;velodyne_pointcloud;morai_udp_bridge;tf_publisher;lidar_leveler;localization;section_annotator;vlp16_bev;e2e_driver;speed_filter"   # run.sh EVAL_PACKAGES
 cd $WS
 if (( FIRST )); then
@@ -62,18 +61,19 @@ fi
 [[ -r devel/setup.bash && ${REBUILD:-0} == 0 ]] || catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCATKIN_WHITELIST_PACKAGES="$PKGS" -j"$(nproc --all | awk '{print ($1 > 16) ? 16 : $1}')" > $V/catkin.log 2>&1
 
 log venvs
-if [[ ! -x $V/venv-rl/bin/python || ! -x $V/venv-engine/bin/python ]]; then
+if [[ ! -e $V/venv-rl/.ok || ! -e $V/venv-engine/.ok ]]; then     # .ok: the install finished
   python3 -m pip install -q uv
   export PATH=$HOME/.local/bin:$PATH
 fi
 # managers, scorer, summary, videos (lap_video make), plan overlays
-[[ -x $V/venv-rl/bin/python ]] || { uv venv -q --python 3.12 $V/venv-rl && uv pip install -q --python $V/venv-rl/bin/python \
-  grpcio protobuf pillow pandas matplotlib -r $V/Alpamayo-Cosmos/tools/scorer/requirements.txt; }
+[[ -e $V/venv-rl/.ok ]] || { uv venv -q --clear --python 3.12 $V/venv-rl && uv pip install -q --python $V/venv-rl/bin/python \
+  grpcio protobuf pillow pandas matplotlib -r $V/Alpamayo-Cosmos/tools/scorer/requirements.txt && touch $V/venv-rl/.ok; }
 # the engine: winpc's ~/morai-eval/venv-engine frozen as is (torch 2.14.1+cu130, flashinfer 0.7.2.post1, cutlass-dsl, model deps)
-[[ -x $V/venv-engine/bin/python ]] || { uv venv -q --python 3.12 $V/venv-engine && uv pip install -q --python $V/venv-engine/bin/python \
-  --no-deps --index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cu130 -r $HERE/engine-requirements.txt; }
+[[ -e $V/venv-engine/.ok ]] || { uv venv -q --clear --python 3.12 $V/venv-engine && uv pip install -q --python $V/venv-engine/bin/python \
+  --no-deps --index-strategy unsafe-best-match --extra-index-url https://download.pytorch.org/whl/cu130 -r $HERE/engine-requirements.txt \
+  && touch $V/venv-engine/.ok; }
 if (( FIRST )); then
-  dpkg-query -W -f='${Package}\n' | sort | comm -13 /tmp/pkgs.before - > $V/apt/packages.txt
+  dpkg-query -W -f='${Package}\n' > $V/apt/packages.txt     # all of them: the image's own are no-ops on later boots
   log "packages for later boots: $(wc -l < $V/apt/packages.txt) in $V/apt/packages.txt"
 fi
 touch "$V/setup.done.$(hostname)"
