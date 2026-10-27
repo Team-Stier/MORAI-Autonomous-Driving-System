@@ -48,6 +48,7 @@ if [[ ! -x /root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Project/Simul
   mkdir -p /root/Workspaces/scratches
   for f in $V/morai/part*.tar $V/morai/morai.tar; do [[ -e $f ]] && tar -xf "$f" -C /root/Workspaces/scratches & done; wait
 fi
+for i in $(seq 300); do [[ -e $V/morai/config.tar ]] && break; sleep 2; done   # bundle boots: eval_pod.sh copies it from the Mac
 mkdir -p /root/.config && tar -xf $V/morai/config.tar -C /root/.config  # unity3d/MORAI (login prefs), morai-stier/sim-args
 mkdir -p /root/.config/morai-stier && echo "-force-vulkan -force-gfx-mt -job-worker-count 8" > /root/.config/morai-stier/sim-args   # 10/26: Mono crash fix
 cp $WS/src/e2e_driver/tools/msc.py /root/morai-eval-msc.py

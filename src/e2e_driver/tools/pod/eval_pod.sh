@@ -11,9 +11,10 @@
 #   KEEP=1 leaves the pod running at the end (stop it yourself), CREATE_ONLY=1 stops after setup (first boot, tests),
 #   EVAL_MAX_MIN (110): create to end of eval3 before giving up; SIM_FPS / APPLY_DELAY_S pass through to eval3.sh (worlds.sh TargetFrameRate cap; tau delay of a plan, 0.1).
 #   SYNC=1 (MORAI synchronous mode) with TICK_MS, SERIAL, CPU_LAYOUT, GATHER, PREP pass through too (eval3.sh).
-#   RUN=actor: actor.sh up NAME N instead (N = the one SEED argument, default 3; RL_ENGINE_ARGS = its ENGINE_ARGS, default
-#   the batched engine on DELIVER with --expert2 --rl-sigma 0.1; RL_ARGS pass through); stops watching at the first episode
-#   step (the RL owner runs the pod from there: KEEP=1).
+#   BUNDLE=TAG: no network volume, any data centre: the start command fetches the B2 bundle (bundle.py fetch TAG, ~1 GB
+#   shards in parallel) to /workspace and runs setup.sh; the competition account comes from the Mac's ~/.morai-secrets
+#   (config.tar, V2AccountInfo.byte; never in B2). Then N = the most worlds this host takes (VRAM, CPU quota, RAM;
+#   README "sync") and the seeds run in waves of N (KEEP_UP between them).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
@@ -36,7 +37,15 @@ bye() {
 }
 trap bye EXIT; trap 'exit 130' INT TERM
 
-start="bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
+[[ -n ${BUNDLE:-} ]] && VOLUMES=(none:any)
+# BUNDLE: a stdlib-python bootstrap (the image has no curl) takes bundle.py from B2 and fetches the shards first
+boot=$(printf '%s' "import base64,json,os,urllib.request as u
+e=dict(l.split('=',1) for l in open('/proc/1/environ').read().split(chr(0)) if '=' in l); e.update(os.environ)
+h={'Authorization':'Basic '+base64.b64encode((e['B2_APPLICATION_KEY_ID']+':'+e['B2_APPLICATION_KEY']).encode()).decode()}
+a=json.load(u.urlopen(u.Request('https://api.backblazeb2.com/b2api/v2/b2_authorize_account',headers=h)))
+open('/bundle.py','wb').write(u.urlopen(u.Request(a['downloadUrl']+'/file/morai2026-alpamayo/podimg/${BUNDLE:-}/bundle.py',headers={'Authorization':a['authorizationToken']})).read())" | base64 | tr -d '\n')
+start="${BUNDLE:+mkdir -p /workspace && python3 -c \"\$(echo $boot | base64 -d)\" && python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
+bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
 DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 & sleep infinity"
 for try in $(seq $(( ${RETRY_MIN:-30} + 1 ))); do         # stock is Low: every GPU x volume, then again a minute later
 for vd in "${VOLUMES[@]}"; do VOLUME=${vd%%:*}; DC=${vd#*:}
@@ -47,10 +56,11 @@ import json, os, sys
 g, vol, dc, start, pub, dph, name = sys.argv[1:8]
 env = dict(NVIDIA_DRIVER_CAPABILITIES="all", NVIDIA_VISIBLE_DEVICES="all", PUBLIC_KEY=pub, DPH_USD=dph,
            B2_APPLICATION_KEY_ID="{{ RUNPOD_SECRET_b2_key_id }}", B2_APPLICATION_KEY="{{ RUNPOD_SECRET_b2_app_key }}")
+where = (f'containerDiskInGb: 60, volumeInGb: 0, networkVolumeId: {json.dumps(vol)}, dataCenterId: {json.dumps(dc)}, volumeMountPath: "/workspace", '
+         if vol != "none" else 'containerDiskInGb: 150, volumeInGb: 0, ')          # BUNDLE: ~50 GB of files + frames
 inp = (f'cloudType: SECURE, gpuCount: 1, gpuTypeId: {json.dumps(g)}, minVcpuCount: {int(os.environ.get("VCPU", 32))}, '
        f'minMemoryInGb: {int(os.environ.get("MEM_GB", 60))}, name: {json.dumps(name)}, imageName: "ros:noetic-ros-base-focal", '
-       f'containerDiskInGb: 60, volumeInGb: 0, networkVolumeId: {json.dumps(vol)}, dataCenterId: {json.dumps(dc)}, '
-       f'volumeMountPath: "/workspace", ports: "22/tcp", supportPublicIp: true, dockerArgs: {json.dumps("bash -c " + json.dumps(start))}, '
+       f'{where}ports: "22/tcp", supportPublicIp: true, dockerArgs: {json.dumps("bash -c " + json.dumps(start))}, '
        'env: [' + ", ".join(f"{{key: {json.dumps(k)}, value: {json.dumps(v)}}}" for k, v in env.items()) + ']')
 print(json.dumps({"query": "mutation { podFindAndDeployOnDemand(input: {%s}) { id costPerHr machine { gpuDisplayName } } }" % inp}))
 PY
@@ -74,6 +84,13 @@ P() { ssh -F "$SSHC" pod "$@"; }
 late() { (( $(date +%s) - ${T0%.*} > $1 )) && { log "$2: gave up"; exit 1; }; true; }   # the trap terminates the pod
 until P true 2> /dev/null; do late 900 "no ssh 15 min after create (setup.sh died before sshd? /workspace/setup.<host>.log)"; sleep 3; done
 log "ssh up ($ip:$port)"
+if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
+  M=/root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Version
+  until P "test -d $M"; do late 900 "bundle fetch (/workspace/fetch.log)"; sleep 5; done
+  scp -q -F "$SSHC" ~/.morai-secrets/V2AccountInfo.byte pod:$M/ && P "mkdir -p /workspace/morai" &&
+    scp -q -F "$SSHC" ~/.morai-secrets/config.tar pod:/workspace/morai/config.tar.part && P "mv /workspace/morai/config.tar.part /workspace/morai/config.tar"
+  log "bundle fetched: $(P "tail -1 /workspace/fetch.log")"
+fi
 rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ --exclude '*.onnx' \
   --exclude object_detector/models --exclude traffic_light/models "$REPO/" pod:/workspace/MORAI-Autonomous-Driving-System/
 rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/
@@ -83,22 +100,22 @@ P "tail -3 /workspace/setup.\$(hostname).log; nvidia-smi --query-gpu=name,driver
 P "grep -q 'setup.*done' /workspace/setup.\$(hostname).log" || { log "setup failed"; exit 1; }
 log "setup done"
 [[ ${CREATE_ONLY:-0} == 1 ]] && { KEEP=1; exit 0; }
-if [[ ${RUN:-eval} == actor ]]; then
-  N=${SEEDS[0]:-3}; EA=${RL_ENGINE_ARGS:---backend engine --ckpt $DELIVER --vlm Qwen/Qwen3-VL-4B-Instruct --sims $N --expert2 --rl-sigma 0.1}
-  P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt && \
-     (ENGINE_ARGS='$EA' RL_ARGS='${RL_ARGS:-}' setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/actor.sh up $NAME $N \
-     > /workspace/results/$NAME.log 2>&1 < /dev/null &)"
-  log "actor.sh up $NAME $N: $EA"
-  until P "ls /workspace/spool/${NAME}_w*/ep*/steps.jsonl 2> /dev/null | xargs -r cat | grep -q ."; do late 1800 "actor: no episode step"; sleep 10; done
-  log "first episode steps $(( $(date +%s) - ${T0%.*} )) s after pod create"; KEEP=1; exit 0
-fi
 
-P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt && \
-   (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
-    CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $NAME $DELIVER ${SEEDS[*]} \
-   > /workspace/results/$NAME.log 2>&1 < /dev/null &)"
-log "eval3 running: ssh -F $SSHC pod tail -f /workspace/results/$NAME.log"
-until P "test -e /workspace/results/$NAME/DONE || ! pgrep -f '[e]val3.sh $NAME' > /dev/null"; do late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; sleep 20; done
-rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4.raw' pod:/workspace/results/$NAME/ pod:/workspace/results/$NAME.log "$LOCAL/"
-P "test -e /workspace/results/$NAME/DONE" && log "done: $LOCAL" || log "eval3 stopped early: $LOCAL/$NAME.log"
-cat "$LOCAL/summary.txt" 2> /dev/null
+# worlds this host takes (sync_bench 10/28, 5090: N=7 used 29.2 GB VRAM, 23.5 cores, ~38 GB RAM): VRAM 3.13 N + 7.3 GB,
+# CPU 3.1 N + 2.5 cores of 90 % of the quota, RAM 4.8 N + 4.5 GB of 85 %; the seeds run in waves of N
+NMAX=$(P "python3 -c 'import subprocess as s; q=open(\"/sys/fs/cgroup/cpu.max\").read().split(); c=int(q[0])/int(q[1]) if q[0] != \"max\" else len(open(\"/proc/cpuinfo\").read().split(\"processor\"))-1; m=open(\"/sys/fs/cgroup/memory.max\").read().strip(); r=(int(m) if m != \"max\" else int(open(\"/proc/meminfo\").read().split()[1])*1024)/2**30; v=int(s.check_output([\"nvidia-smi\",\"--query-gpu=memory.total\",\"--format=csv,noheader,nounits\"]).split()[0])/1024; print(max(1, min(int((v-0.8-7.3)/3.13), int((0.9*c-2.5)/3.1), int((0.85*r-4.5)/4.8))), round(c,1), round(r), round(v,1))'")
+read -r N CPUQ RAMG VRAMG <<< "$NMAX"; [[ ${SYNC:-0} == 1 ]] || N=${#SEEDS[@]}
+log "host: CPU quota $CPUQ cores, RAM $RAMG GiB, VRAM $VRAMG GiB -> $N worlds at once; ${#SEEDS[@]} seeds"
+P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt"
+for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
+  wave=("${SEEDS[@]:w:N}"); WN=$NAME; (( ${#SEEDS[@]} > N )) && WN=${NAME}_wave$((w / N + 1))
+  P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$NAME/timeline.txt /workspace/results/$WN/ && \
+     (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
+      KEEP_UP=$(( w + N < ${#SEEDS[@]} )) CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
+      /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
+  log "eval3 $WN (seeds ${wave[*]}) running: ssh -F $SSHC pod tail -f /workspace/results/$WN.log"
+  until P "test -e /workspace/results/$WN/DONE || ! pgrep -f '[e]val3.sh $WN' > /dev/null"; do late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; sleep 20; done
+  mkdir -p "$LOCAL/$WN"; rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4.raw' pod:/workspace/results/$WN/ pod:/workspace/results/$WN.log "$LOCAL/$WN/"
+  P "test -e /workspace/results/$WN/DONE" && log "done: $LOCAL/$WN" || { log "eval3 stopped early: $LOCAL/$WN/$WN.log"; break; }
+  cat "$LOCAL/$WN/summary.txt" 2> /dev/null
+done

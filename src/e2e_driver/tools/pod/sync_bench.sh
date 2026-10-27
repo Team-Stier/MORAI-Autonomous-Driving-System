@@ -84,7 +84,7 @@ for combo in "${COMBOS[@]}"; do
   sleep "${MEAS_S:-150}"
   for p in "${pids[@]}"; do pkill -INT -P "$p" 2> /dev/null; kill -INT "$p" 2> /dev/null; done
   for p in "${pids[@]}"; do wait "$p"; done
-  kill "${recs[@]}" $GPU 2> /dev/null; wait 2> /dev/null
+  kill "${recs[@]}" $GPU 2> /dev/null; pkill -f "[r]ostopic echo"; wait "${recs[@]}" $GPU 2> /dev/null   # not the engine, also a child
   stamp "$combo: done ($(cat "$C"/w*/steps.jsonl 2> /dev/null | wc -l) steps)"
 done
 $PY "$HERE/sync_bench_summary.py" "$OUT" | tee "$OUT/bench.txt"

@@ -93,7 +93,7 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/rec.pids
   (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --laps 1 --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
     --port $((8094 + n)) --no-view --direct --host local --grpc 127.0.0.1:$((7788 + n)) --launcher "$(wdir "$n")/MoraiLauncher_Lin_Data" \
-    ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
+    --objinfo-port $((7505 + 1000 * (n - 1))) ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
   echo $! >> /root/actor/managers.pids
 done
 stamp "drives started ($N managers)"

@@ -29,6 +29,11 @@ def drive(d):
              checkpoints=len(lap["checkpoints"]), counts=sc.get("counts"), competition_failed=sc.get("competition_failed"),
              wall_s=lap["wall_s"], tau_s=round(float(c[-1, 1] - c[0, 1]), 1), wall_span_s=round(float(c[-1, 0] - c[0, 0]), 1))
     r["rtf"] = round(r["tau_s"] / r["wall_span_s"], 3)
+    v = lap.get("validation")                         # eval_manager's GT replay check (None: not recorded)
+    r["replay_ok"], r["replay_failures"] = (v["ok"], v["failures"]) if v else (None, [])
+    r["scene"] = dict(tunnel=lap.get("scene_meta", {}).get("tunnel"), weather=lap.get("weather"),
+                      actors=[{k: a.get(k) for k in ("zone", "id", "cls", "ptype", "timing")} for a in lap.get("scene_meta", {}).get("actors", [])],
+                      npcs=dict(roundabout=v and v.get("roundabout_npcs"), highway=v and v.get("highway_npcs"), sizes=v and v.get("vehicle_sizes")))
     dbg = [json.loads(l.split(",", 1)[1]) for l in (d / f"dbg_{n}.csv").read_text().splitlines()[1:] if "," in l]
     if dbg:
         t = np.array([x["t0"] for x in dbg]); dt = np.diff(t)
@@ -66,7 +71,8 @@ def main(out):
         st = r.get("steps", {})
         print(f"{r['world']} seed {r['seed']}: {r['end']} lap {r['lap_s']:.1f} s + pen {r['penalty_s']} + returns {r['returns']} "
               f"= {r['total_s']:.1f} s | RTF {r['rtf']:.2f} | tau {st.get('hz_tau')} Hz, 0.1 s {st.get('share_0p1s')}, "
-              f"late {st.get('late_share')} | model_ms {st.get('model_ms')} | {r['return_reasons']}")
+              f"late {st.get('late_share')} | model_ms {st.get('model_ms')} | {r['return_reasons']} | replay "
+              f"{'ok' if r['replay_ok'] else r['replay_failures'] if r['replay_ok'] is False else '-'}")
     print("total", json.dumps(tot))
 
 

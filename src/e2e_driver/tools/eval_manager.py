@@ -38,6 +38,10 @@ anew after each scene load) and this manager is its only clock. Per step: Ego st
 simulation time -> the stack's step through its sync_clock_node on 127.0.0.1:PORT (the command for this step latched,
 the request sent on the 0.1 s grid; --serial: its reply awaited before the tick) -> Tick(1). Each step's wall-time
 breakdown goes to OUT/NAME/steps.jsonl. --max-s ends a lap after that much driving (speed measurements).
+Replay check (--objinfo-port, GT): MORAI Object Info within 80 m of the Ego per step (lapK.objects.json.gz) -> lap
+"validation": every dynamic object the Ego came within its trigger distance of moved, every static one stood where the
+scene put it, the roundabout and the highway had NPC vehicles while the Ego was there (and how many vehicle sizes), with
+tracks split at jumps (MORAI reuses object ids across scene loads: a new scene's object can show at the old position).
 Viewer: http://localhost:8091 shows the simulator window (viewer.py on bc-250: MJPEG on 192.168.0.15:8090) and the
 lap status.
 """
@@ -50,6 +54,7 @@ import math
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -165,6 +170,88 @@ class Clock:
         return self.tau
 
 
+def objinfo(port):
+    """MORAI Object Info on UDP port (7505 + world offset) -> drain(): the newest record per id since the last call,
+    (id, kind 0 pedestrian / 1 vehicle / 2 obstacle, x, y, z, heading, length, width, height)."""
+    sys.path.insert(0, str(HERE.parents[1] / "visualizer" / "scripts"))
+    from object_info_udp import decode_objects
+    new, lock = {}, threading.Lock()
+
+    def run():
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", port))
+        while True:
+            pkt = sock.recv(65535)
+            try:
+                objs = decode_objects(pkt)
+            except ValueError:
+                continue
+            with lock:
+                new.update({o[0]: o for o in objs})
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def drain():
+        with lock:
+            out = list(new.values()); new.clear()
+        return out
+    return drain
+
+
+def validate(meta, ego, objs, ring, highway):
+    """the scene played as generated (GT): ego [(tau, x, y, s)], objs [(tau, [[id, kind, x, y, l, w, h], ...])], ring and
+    highway = route s ranges. -> dict(ok, failures, dynamic, static, roundabout_npcs, highway_npcs, vehicle_sizes)."""
+    tracks = {}                                       # id -> [(tau, x, y)], split at jumps no driving can make
+    for tau, os_ in objs:
+        for i, k, x, y, *_ in os_:
+            tr = tracks.setdefault((i, k), [])
+            if tr and math.hypot(x - tr[-1][1], y - tr[-1][2]) > 3.0 + (35.0 if k == 1 else 10.0) * (tau - tr[-1][0]):
+                tr.clear()                            # faster than a vehicle (35 m/s) or a prop / pedestrian (10 m/s)
+            tr.append((tau, x, y))
+    E = np.array([e[:3] for e in ego]) if ego else np.zeros((0, 3))
+    res, fails = dict(dynamic=[], static=[]), []
+    for a in meta.get("actors", []):
+        if "xy" not in a:
+            continue
+        ax, ay = a["xy"]
+        dyn = a["zone"].endswith("_dynamic")
+        reach = a.get("active", 0.0) + 2.0 if dyn else 40.0
+        near = E[np.hypot(E[:, 1] - ax, E[:, 2] - ay) <= reach] if len(E) else E
+        if not len(near):
+            (res["dynamic"] if dyn else res["static"]).append(dict(zone=a["zone"], id=a["id"], status="not_reached"))
+            continue
+        kinds = (0,) if a.get("ped") else (2, 0, 1)
+        cand = [tr for (i, k), tr in tracks.items() if k in kinds and any(math.hypot(x - ax, y - ay) < 3.0 for _, x, y in tr)]
+        if dyn:
+            need = min(2.0, 0.3 * a.get("move", 4.0))
+            moved = max((max(math.hypot(x - tr[0][1], y - tr[0][2]) for _, x, y in tr) for tr in cand), default=0.0)
+            st = "missing" if not cand else "moved" if moved >= need else "did_not_move"
+            res["dynamic"].append(dict(zone=a["zone"], id=a["id"], ptype=a.get("ptype"), status=st, moved_m=round(moved, 1)))
+        else:
+            st = "present" if cand else "missing"
+            res["static"].append(dict(zone=a["zone"], id=a["id"], status=st))
+        if st in ("missing", "did_not_move"):
+            fails.append(f"{a['zone']} {a['id']} {st}")
+
+    at = {round(e[0], 3): e for e in ego}
+
+    def npcs(lo, hi, radius):
+        inside = {t for t, e in at.items() if lo <= e[3] <= hi}
+        ids, sizes = set(), set()
+        for tau, os_ in objs:
+            if round(tau, 3) in inside:
+                e = at[round(tau, 3)]
+                for i, k, x, y, l, w, h in os_:
+                    if k == 1 and math.hypot(x - e[1], y - e[2]) <= radius:
+                        ids.add(i); sizes.add((round(l, 1), round(w, 1), round(h, 1)))
+        return (len(ids), sorted(sizes)) if inside else (None, [])
+    (res["roundabout_npcs"], rs), (res["highway_npcs"], hs) = npcs(*ring, 35.0), npcs(*highway, 80.0)
+    res["vehicle_sizes"] = [list(x) for x in sorted(set(rs) | set(hs))]
+    fails += [f"{n} empty" for n in ("roundabout", "highway") if res[n + "_npcs"] == 0]
+    return dict(ok=not fails, failures=fails, **res)
+
+
 class SyncLink:
     """the stack's sync_clock_node: one JSON line each way per simulator step."""
 
@@ -262,6 +349,9 @@ class Manager:
         self.out = Path(a.out).expanduser() / a.name
         self.out.mkdir(parents=True, exist_ok=True)
         self.status, self.history = "starting", []
+        self.objects = objinfo(a.objinfo_port) if a.objinfo_port else None
+        cs = lambda j: float(self.track.s[self.cp_i[j]])
+        self.ring, self.highway = (cs(8) - 20.0, cs(9) + 20.0), (1118.7, 1741.7)   # ring entry/exit checkpoints; RL_PLAN highway
         if a.sync:                                        # the simulator's clock: k steps of dt since the first lap
             self.dt, self.k, self.link = a.tick_ms / 1000.0, 0, SyncLink(a.sync)
             self.m = max(1, round(0.1 / self.dt))         # steps per decision
@@ -342,6 +432,7 @@ class Manager:
         if not r.startswith("ok"):
             raise RuntimeError(f"scene load {name}: {r}")
         lap = dict(lap=k, scene=name, seed=seed, weather=[], checkpoints=[], returns=[], scene_meta=meta)
+        egot, objt = [], []                               # replay check: (tau, x, y, s) and the objects near the Ego
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
         self.weather(lap, seed, 0, 0.0)
@@ -360,6 +451,8 @@ class Manager:
         interrupted = False
         try:
             while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
+                if getattr(self, "stop", False):          # sync: Ctrl-C between ticks (one cut mid-Tick hung that world's
+                    raise KeyboardInterrupt               # Simulation service for good, 10/28)
                 t, w_ego = time.time(), time.perf_counter()
                 e = self.ego()
                 tau = clock.tau if self.a.sync else clock.step(t, e["x"], e["y"], e["v"])
@@ -370,6 +463,10 @@ class Manager:
                 rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
                 rows["collision"].append((ns, [(h, e["x"], e["y"]) for h in e["hit"]]))
                 rows["gps"].append((ns, shade))                  # the scorer's lane-exempt zone = the GPS shadow
+                egot.append((round(tau, 3), e["x"], e["y"], s))
+                if self.objects:
+                    objt.append((round(tau, 3), [[o[0], o[1], round(o[2], 2), round(o[3], 2), round(o[6], 2), round(o[7], 2), round(o[8], 2)]
+                                                 for o in self.objects() if math.hypot(o[2] - e["x"], o[3] - e["y"]) <= 80.0]))
                 if e["tl"]:
                     rows["signal"].append((ns, (e["tl"], e["color"])))
                 x0 = x0 or (e["x"], e["y"])
@@ -430,6 +527,10 @@ class Manager:
         msc("pause")
         lap.update(end=end, lap_s=round(lap_s, 2), wall_s=round(time.time() - w_play, 1), rho_end=round(clock.rho, 3))
         lap["scorer"] = self.judge(rows)
+        if self.objects:
+            lap["validation"] = validate(meta, egot, objt, self.ring, self.highway)
+            with gzip.open(self.out / f"lap{k:03d}.objects.json.gz", "wt") as f:
+                json.dump(dict(ego=egot, objects=objt), f)
         lap["return_penalty_s"] = RETURN_S * len(lap["returns"])
         lap["total_s"] = round(lap["lap_s"] + lap["scorer"].get("penalty_s", 0.0) + lap["return_penalty_s"], 2)
         with gzip.open(self.out / f"lap{k:03d}.rows.json.gz", "wt") as f:
@@ -536,6 +637,7 @@ def main():
     ap.add_argument("--host", help="simulator host over ssh, or local (default: bc-250, or winpc with EVAL_SIM=w1)")
     ap.add_argument("--grpc", help="the world's gRPC host:port (default HOST:7789)")
     ap.add_argument("--launcher", help="the world's MoraiLauncher_Lin_Data (MSC link file, scene folder)")
+    ap.add_argument("--objinfo-port", type=int, default=0, help="MORAI Object Info UDP port for the replay check (0: off)")
     ap.add_argument("--sync", type=int, help="MORAI synchronous mode: the stack's sync_clock_node port (see above)")
     ap.add_argument("--tick-ms", type=int, default=100, choices=(50, 100), help="--sync: simulator step (100: one per decision, 50: two)")
     ap.add_argument("--serial", action="store_true", help="--sync: each decision's reply before the tick (default: during it)")
@@ -548,6 +650,8 @@ def main():
     a.direct = a.direct or SIM == "w1" or not GRPC.endswith(":7789")   # the official programs only talk to 7789
     signal.signal(signal.SIGINT, signal.default_int_handler)   # background starts (eval3.sh) inherit SIGINT ignored
     mgr = Manager(a)
+    if a.sync:
+        signal.signal(signal.SIGINT, lambda *_: setattr(mgr, "stop", True))
     deploy(a)
     serve(mgr, a.port)
     print(f"viewer: http://localhost:{a.port}  records: {mgr.out}", flush=True)
