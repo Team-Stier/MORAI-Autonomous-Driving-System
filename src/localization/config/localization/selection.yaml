@@ -1,0 +1,29 @@
+estimate:
+  section_core_map:
+    "0": full_ekf.hpp
+    "1": full_ekf.hpp
+    "2": full_ekf.hpp
+    "3": full_ekf.hpp
+    "4": full_ekf.hpp
+    "5": full_ekf.hpp
+    "6": full_ekf.hpp
+    "7": full_ekf.hpp
+    "8": full_ekf.hpp
+    "9": full_ekf.hpp
+    "10": full_ekf.hpp
+    "11": full_ekf.hpp
+    "12": full_ekf.hpp
+    "13": full_ekf.hpp
+    "14": full_ekf.hpp
+    "15": tunnel_wall.hpp
+    "16": full_ekf.hpp
+  health_core_map:
+    - when: [{input: gps, issue: Missing}]
+      priority: 110
+      core: tunnel_wall.hpp
+    - when: [{input: gps, issue: Stale}]
+      priority: 100
+      core: tunnel_wall.hpp
+    - when: [{input: gps, issue: ReceiveTimeout}]
+      priority: 90
+      core: tunnel_wall.hpp

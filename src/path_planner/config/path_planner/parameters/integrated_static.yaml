@@ -1,0 +1,80 @@
+use_boundary_midpoint_centerline: false
+centerline_step_m: 0.25
+local_path_length_m: 100
+sample_step_m: 0.5
+wheelbase_m: 3.0
+steering_gain: 0.77
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+collision_margin_m: 0.25
+static_speed_mps: 0.3
+dynamic_speed_mps: 0.8
+dynamic_confirmation_sec: 0.3
+static_confirmation_sec: 0.5
+track_expiry_sec: 1.0
+dynamic_prediction_sec: 3.0
+avoidance_speed_mps: 5.555555555555555
+maximum_lateral_acceleration_mps2: 0.9
+avoidance_lead_m: 3.0
+transition_length_m: 20.0
+return_transition_length_m: 20.0
+maximum_curvature_per_m: 0.25
+maximum_lane_offset_m: 6.0
+maximum_join_gap_m: 1.5
+completion_lateral_m: 0.35
+completion_heading_rad: 0.2
+stop_buffer_m: 2.0
+stopping_deceleration_mps2: 2.0
+tracking_margin_m: 0.3
+dynamic_zone_enabled: true
+dynamic_zone_min_x_m: -75.0
+dynamic_zone_max_x_m: -40.0
+dynamic_zone_min_y_m: -100.0
+dynamic_zone_max_y_m: 85.0
+dynamic_zone_minimum_detection_m: 20.0
+dynamic_zone_reaction_sec: 0.3
+dynamic_zone_braking_mps2: 6.0
+dynamic_zone_clear_sec: 0.5
+physical_boundaries_file: models/static_corridor.csv
+reference_smoothing_enabled: true
+minimum_obstacle_extent_m: 1.5
+integrated_speed_beam_width: 64
+integrated_recovery_speed_beam_width: 128
+integrated_qp_iterations: 300
+integrated_reference_weight: 0.2
+integrated_previous_weight: 2.0
+integrated_corridor_half_width_m: 1.8
+integrated_horizon_sec: 5.0
+integrated_maximum_speed_mps: 16.666666666666668
+integrated_maximum_lateral_acceleration_mps2: 5.5
+integrated_preferred_lateral_acceleration_mps2: 2.6
+integrated_following_gap_m: 1.5
+integrated_following_headway_sec: 0.8
+# Match the existing control-side dynamic-zone cap in the planned trajectory.
+integrated_dynamic_zone_speed_mps: 6.944444444444445
+integrated_dynamic_zone_approach_m: 30.0
+integrated_interaction_speed_searches: 4
+
+# Replan only after nominal 5 m/s^2, 4 m/s^3 dynamics have no solution.
+integrated_recovery_deceleration_mps2: 8.0
+integrated_recovery_jerk_mps3: 8.0
+
+# Steering delay plus settling allowance; measured departures after nominal failure only.
+integrated_recovery_reentry_response_sec: 0.3
+integrated_recovery_lateral_acceleration_mps2: 6.0
+
+# Follow the existing reference curve with shorter C2 segments.
+integrated_reference_piece_m: 2.5
+
+# Publish the full optimized geometry separately from the timed trajectory.
+integrated_publish_lateral_reference: true
+# Source curvature preview sets a preferred speed; native v/a/time stays continuous.
+integrated_curve_preview_m: 45.0
+integrated_curve_spacing_m: 2.0
+integrated_curve_deceleration_mps2: 1.7
+integrated_minimum_curve_speed_mps: 4.166666666666667
+
+# Bound avoidance and return slopes and reserve tracking clearance.
+integrated_road_margin_m: 0.15
+integrated_maximum_lateral_slope: 0.35

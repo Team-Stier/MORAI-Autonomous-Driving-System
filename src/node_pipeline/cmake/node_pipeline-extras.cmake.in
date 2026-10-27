@@ -1,0 +1,9 @@
+# np_add_nodes()와 생성기·계약 검사·공통 main 경로를 실행 패키지에 제공한다.
+if(@DEVELSPACE@)
+  set(node_pipeline_SHARE_SOURCE_DIR "@CMAKE_CURRENT_SOURCE_DIR@")
+else()
+  set(node_pipeline_SHARE_SOURCE_DIR "${node_pipeline_DIR}/..")
+endif()
+set(node_pipeline_SCRIPTS_DIR "${node_pipeline_SHARE_SOURCE_DIR}/scripts")
+set(node_pipeline_MAIN_SOURCE "${node_pipeline_SHARE_SOURCE_DIR}/src/node_main.cpp")
+include("${node_pipeline_SHARE_SOURCE_DIR}/cmake/np_add_nodes.cmake")

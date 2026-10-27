@@ -1,0 +1,2 @@
+checkpoints_file: ../map/checkpoints.csv
+radius_m: 10.0

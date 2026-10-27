@@ -1,0 +1,12 @@
+model: models/traffic_light_yolo11m.onnx
+input_width: 1280
+input_height: 1280
+confidence:
+  go: 0.40
+  left_turn: 0.40
+  prepare_stop: 0.35
+  stop: 0.40
+nms_iou: 0.45
+ambiguity_margin: 0.05
+history_size: 5
+minimum_votes: 1

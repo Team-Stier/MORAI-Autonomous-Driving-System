@@ -1,0 +1,5 @@
+stage: estimate
+inputs: [gps, imu, competition]
+validator: gps_fix.hpp
+policy: remove_all.hpp
+bank: ekf_state.hpp

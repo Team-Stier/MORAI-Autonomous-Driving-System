@@ -1,0 +1,48 @@
+# Experimental map-coordinate envelope around the depicted dynamic-obstacle area.
+# These are local test bounds, not organizer-published mission boundaries.
+dynamic_zone_enabled: true
+dynamic_zone_min_x_m: -75.0
+dynamic_zone_max_x_m: -40.0
+dynamic_zone_min_y_m: -100.0
+dynamic_zone_max_y_m: 85.0
+dynamic_zone_minimum_detection_m: 20.0
+dynamic_zone_reaction_sec: 0.3
+dynamic_zone_braking_mps2: 6.0
+dynamic_zone_clear_sec: 0.5
+# Temporary centerline experiment. Set false and restart to restore the previous geometry.
+use_boundary_midpoint_centerline: false
+centerline_step_m: 0.25
+local_path_length_m: 55
+sample_step_m: 0.5
+wheelbase_m: 3.0
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+collision_margin_m: 0.25
+static_speed_mps: 0.3
+dynamic_speed_mps: 0.8
+dynamic_confirmation_sec: 0.3
+static_confirmation_sec: 0.5
+track_expiry_sec: 1.0
+dynamic_prediction_sec: 3.0
+avoidance_speed_mps: 6.0
+maximum_lateral_acceleration_mps2: 1.5
+avoidance_lead_m: 2.0
+transition_length_m: 10.0
+return_transition_length_m: 14.0
+maximum_curvature_per_m: 0.25
+maximum_lane_offset_m: 6.0
+maximum_join_gap_m: 1.5
+completion_lateral_m: 0.35
+completion_heading_rad: 0.2
+stop_buffer_m: 2.0
+stopping_deceleration_mps2: 2.0
+
+# Final-roundabout curvature is encoded in the Lanelet2 left virtual boundaries.
+refined_curve_lanelet_ids: [98417, 101861]
+refined_curve_right_bias_m: 0.0
+
+# Bounded, world-fixed centerline smoothing; false restores the raw reference.
+reference_smoothing_enabled: true
+
+entry_target_lane_id: 96937

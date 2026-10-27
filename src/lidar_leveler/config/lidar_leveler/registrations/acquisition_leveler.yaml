@@ -1,0 +1,6 @@
+stage: level
+inputs: [cloud, competition, tf_static]
+validator: motion_inputs.hpp
+policy: remove_invalid.hpp
+allowed_issues:
+  cloud: [Stale, ReceiveTimeout, Skew]

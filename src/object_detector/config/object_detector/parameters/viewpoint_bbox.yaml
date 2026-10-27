@@ -1,0 +1,11 @@
+# Sensor/vehicle calibration and parameter tuning: workspace maintainer.
+map_file: ../map/kcity_lanelet2_final_circle.osm
+vehicle_length_m: 5.0
+vehicle_width_m: 2.16
+vehicle_height_m: 1.65
+minimum_height_m: 0.1
+road_match_distance_m: 3.0
+lidar_position_m: [1.5, 0.0, 1.403]
+ring_lanelet_ids: [110223, 110285, 110289, 110309, 110153, 110157, 110180, 110846, 110850, 110866, 110203]
+
+require_road_center_for_completion: true

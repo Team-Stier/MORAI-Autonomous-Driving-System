@@ -1,0 +1,7 @@
+map_file: ../map/kcity_lanelet2_final_circle.osm
+dash_length_m: 3.0
+dash_gap_m: 3.0
+double_line_gap_m: 0.15
+line_width_m: 0.12
+flatten_z: true
+checkpoints_file: ../map/checkpoints.csv

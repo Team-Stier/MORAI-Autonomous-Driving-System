@@ -1,0 +1,20 @@
+recognize:
+  section_core_map:
+    "0": yolo_traffic_light.hpp
+    "1": yolo_traffic_light.hpp
+    "2": yolo_traffic_light.hpp
+    "3": yolo_traffic_light.hpp
+    "4": yolo_traffic_light.hpp
+    "5": yolo_traffic_light.hpp
+    "6": yolo_traffic_light.hpp
+    "7": yolo_traffic_light.hpp
+    "8": yolo_traffic_light.hpp
+    "9": yolo_traffic_light.hpp
+    "10": yolo_traffic_light.hpp
+    "11": yolo_traffic_light.hpp
+    "12": yolo_traffic_light.hpp
+    "13": yolo_traffic_light.hpp
+    "14": yolo_traffic_light.hpp
+    "15": yolo_traffic_light.hpp
+    "16": yolo_traffic_light.hpp
+  health_core_map: []

@@ -1,0 +1,13 @@
+map_file: ../map/kcity_lanelet2_final_circle.osm
+forward_distance_m: 55.0
+left_inflation_m: 0.0
+right_inflation_m: 0.0
+z_min_m: -2.0
+z_max_m: 3.0
+roundabout_center_x_m: -102.0
+roundabout_center_y_m: 343.0
+roundabout_activation_radius_m: 80.0
+roundabout_lane_radius_m: 34.0
+
+# Project road membership from the supplied TF to the scan reference time.
+pose_projection_limit_sec: 0.1

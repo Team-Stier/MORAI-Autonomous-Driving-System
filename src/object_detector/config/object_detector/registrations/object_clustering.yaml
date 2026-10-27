@@ -1,0 +1,4 @@
+stage: clustering
+inputs: [cloud, competition, tf]
+validator: timed_cloud_layout.hpp
+allowed_issues: {tf: [Stale]}

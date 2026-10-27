@@ -1,0 +1,20 @@
+limit:
+  section_core_map:
+    "0": speed_limit60.hpp
+    "1": speed_limit60.hpp
+    "2": speed_limit60.hpp
+    "3": speed_limit60.hpp
+    "4": speed_limit60.hpp
+    "5": dynamic_zone_filter.hpp
+    "6": dynamic_zone_filter.hpp
+    "7": speed_limit60.hpp
+    "8": speed_limit60.hpp
+    "9": speed_limit60.hpp
+    "10": speed_limit60.hpp
+    "11": no_speed_limit.hpp
+    "12": no_speed_limit.hpp
+    "13": speed_limit60.hpp
+    "14": speed_limit60.hpp
+    "15": speed_limit60.hpp
+    "16": speed_limit60.hpp
+  health_core_map: []

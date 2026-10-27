@@ -1,0 +1,100 @@
+roi:
+  section_core_map:
+    "0": road_roi.hpp
+    "1": road_roi.hpp
+    "2": road_roi.hpp
+    "3": road_roi.hpp
+    "4": road_roi.hpp
+    "5": road_roi.hpp
+    "6": road_roi.hpp
+    "7": road_roi.hpp
+    "8": roundabout_road_roi.hpp
+    "9": roundabout_road_roi.hpp
+    "10": roundabout_road_roi.hpp
+    "11": highway_road_roi.hpp
+    "12": highway_road_roi.hpp
+    "13": highway_road_roi.hpp
+    "14": road_roi.hpp
+    "15": road_roi.hpp
+    "16": road_roi.hpp
+  health_core_map: []
+clustering:
+  section_core_map:
+    "0": object_clustering.hpp
+    "1": object_clustering.hpp
+    "2": object_clustering.hpp
+    "3": object_clustering.hpp
+    "4": object_clustering.hpp
+    "5": object_clustering.hpp
+    "6": object_clustering.hpp
+    "7": object_clustering.hpp
+    "8": object_clustering.hpp
+    "9": object_clustering.hpp
+    "10": object_clustering.hpp
+    "11": object_clustering.hpp
+    "12": object_clustering.hpp
+    "13": object_clustering.hpp
+    "14": object_clustering.hpp
+    "15": object_clustering.hpp
+    "16": object_clustering.hpp
+  health_core_map: []
+tf:
+  section_core_map:
+    "0": cluster_tf.hpp
+    "1": cluster_tf.hpp
+    "2": cluster_tf.hpp
+    "3": cluster_tf.hpp
+    "4": cluster_tf.hpp
+    "5": cluster_tf.hpp
+    "6": cluster_tf.hpp
+    "7": cluster_tf.hpp
+    "8": cluster_tf.hpp
+    "9": cluster_tf.hpp
+    "10": cluster_tf.hpp
+    "11": acquisition_cluster_tf.hpp
+    "12": acquisition_cluster_tf.hpp
+    "13": acquisition_cluster_tf.hpp
+    "14": cluster_tf.hpp
+    "15": cluster_tf.hpp
+    "16": cluster_tf.hpp
+  health_core_map: []
+bbox_fitting:
+  section_core_map:
+    "0": obb.hpp
+    "1": obb.hpp
+    "2": obb.hpp
+    "3": obb.hpp
+    "4": obb.hpp
+    "5": obb.hpp
+    "6": obb.hpp
+    "7": empty_objects.hpp
+    "8": obb.hpp
+    "9": viewpoint_bbox.hpp
+    "10": obb.hpp
+    "11": acquisition_bbox.hpp
+    "12": acquisition_bbox.hpp
+    "13": acquisition_bbox.hpp
+    "14": obb.hpp
+    "15": obb.hpp
+    "16": obb.hpp
+  health_core_map: []
+track:
+  section_core_map:
+    "0": tracking.hpp
+    "1": tracking.hpp
+    "2": tracking.hpp
+    "3": tracking.hpp
+    "4": tracking.hpp
+    "5": tracking.hpp
+    "6": tracking.hpp
+    "7": tracking.hpp
+    "8": tracking.hpp
+    "9": tracking.hpp
+    "10": tracking.hpp
+    "11": tracking.hpp
+    "12": tracking.hpp
+    "13": tracking.hpp
+    "14": tracking.hpp
+    "15": tracking.hpp
+    "16": tracking.hpp
+  health_core_map: []

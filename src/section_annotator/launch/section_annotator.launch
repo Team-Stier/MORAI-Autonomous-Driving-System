@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="section_annotator" type="section_annotator_node" name="section_annotator_node" output="screen"/>
+</launch>

@@ -1,0 +1,4 @@
+stage: bbox_fitting
+inputs: [clusters, competition, tf]
+validator: viewpoint_tf.hpp
+allowed_issues: {tf: [Stale]}

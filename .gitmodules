@@ -1,0 +1,11 @@
+[submodule "src/MORAI-ROS_morai_msgs"]
+	path = src/MORAI-ROS_morai_msgs
+	url = https://github.com/MORAI-Autonomous/MORAI-ROS_morai_msgs.git
+	branch = beta_drive
+[submodule "src/MORAI-UDP-Bridge-Node"]
+	path = src/MORAI-UDP-Bridge-Node
+	url = https://github.com/Team-Stier/MORAI-UDP-Bridge-Node.git
+[submodule "src/velodyne"]
+	path = src/velodyne
+	url = https://github.com/ros-drivers/velodyne.git
+	branch = master

@@ -1,0 +1,20 @@
+annotate:
+  section_core_map:
+    "0": checkpoint_sections.hpp
+    "1": checkpoint_sections.hpp
+    "2": checkpoint_sections.hpp
+    "3": checkpoint_sections.hpp
+    "4": checkpoint_sections.hpp
+    "5": checkpoint_sections.hpp
+    "6": checkpoint_sections.hpp
+    "7": checkpoint_sections.hpp
+    "8": checkpoint_sections.hpp
+    "9": checkpoint_sections.hpp
+    "10": checkpoint_sections.hpp
+    "11": checkpoint_sections.hpp
+    "12": checkpoint_sections.hpp
+    "13": checkpoint_sections.hpp
+    "14": checkpoint_sections.hpp
+    "15": checkpoint_sections.hpp
+    "16": checkpoint_sections.hpp
+  health_core_map: []

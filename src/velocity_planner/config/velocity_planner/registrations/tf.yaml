@@ -1,0 +1,5 @@
+stage: transform
+inputs: [path, tf]
+validator: tf_inputs.hpp
+policy: remove_invalid.hpp
+allowed_issues: {path: [Stale, ReceiveTimeout, Skew], tf: [Stale, ReceiveTimeout, Skew]}

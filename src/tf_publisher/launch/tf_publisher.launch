@@ -1,0 +1,4 @@
+<launch>
+  <node pkg="tf_publisher" type="tf_publisher_node" name="tf_publisher_node" output="screen"/>
+  <node pkg="tf_publisher" type="static_tf_publisher_node" name="static_tf_publisher_node" output="screen"/>
+</launch>

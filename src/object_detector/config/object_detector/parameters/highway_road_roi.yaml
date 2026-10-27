@@ -1,0 +1,10 @@
+map_file: ../map/kcity_lanelet2_final_circle.osm
+forward_distance_m: 100
+backward_distance_m: 100
+lateral_distance_m: 15
+left_inflation_m: 0
+right_inflation_m: 0
+z_min_m: -2
+z_max_m: 3
+
+pose_projection_limit_sec: 0.1

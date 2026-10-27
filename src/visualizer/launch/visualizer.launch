@@ -1,0 +1,11 @@
+<launch>
+  <arg name="rviz" default="true"/>
+  <param name="/visualizer/robot_description"
+         textfile="$(find visualizer)/urdf/ioniq5.urdf"/>
+  <node pkg="visualizer" type="map_visualizer_node" name="map_visualizer_node" output="screen"/>
+  <node pkg="visualizer" type="local_path_visualizer_node" name="local_path_visualizer_node" output="screen"/>
+  <node pkg="visualizer" type="object_visualizer_node" name="object_visualizer_node" output="screen"/>
+  <node pkg="visualizer" type="traffic_light_visualizer_node" name="traffic_light_visualizer_node" output="screen"/>
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="visualizer_rviz"
+        args="-d $(find visualizer)/rviz/visualizer.rviz" output="screen"/>
+</launch>

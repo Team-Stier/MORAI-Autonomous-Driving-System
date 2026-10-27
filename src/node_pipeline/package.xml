@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>node_pipeline</name>
+  <version>0.2.0</version>
+  <description>Sealed common executor, code generator and contract checker for Core pipeline nodes.</description>
+  <maintainer email="stier@todo.todo">Team STIER</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <depend>interfaces</depend>
+  <depend>roscpp</depend>
+  <depend>roslib</depend>
+  <depend>yaml-cpp</depend>
+  <build_depend>libclang-dev</build_depend>
+  <build_export_depend>libclang-dev</build_export_depend>
+  <build_depend>python3-yaml</build_depend>
+  <build_export_depend>python3-yaml</build_export_depend>
+  <test_depend>python3-nose</test_depend>
+  <export/>
+</package>

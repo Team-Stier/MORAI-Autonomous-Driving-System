@@ -1,0 +1,5 @@
+cmake_minimum_required(VERSION 3.0.2)
+project(localization)
+find_package(catkin REQUIRED COMPONENTS node_pipeline geometry_msgs interfaces nav_msgs sensor_msgs)
+find_package(Eigen3 REQUIRED)
+np_add_nodes(INCLUDE_DIRS ${EIGEN3_INCLUDE_DIRS})

@@ -1,0 +1,20 @@
+mounts:
+  section_core_map:
+    "0": sensor_mounts.hpp
+    "1": sensor_mounts.hpp
+    "2": sensor_mounts.hpp
+    "3": sensor_mounts.hpp
+    "4": sensor_mounts.hpp
+    "5": sensor_mounts.hpp
+    "6": sensor_mounts.hpp
+    "7": sensor_mounts.hpp
+    "8": sensor_mounts.hpp
+    "9": sensor_mounts.hpp
+    "10": sensor_mounts.hpp
+    "11": sensor_mounts.hpp
+    "12": sensor_mounts.hpp
+    "13": sensor_mounts.hpp
+    "14": sensor_mounts.hpp
+    "15": sensor_mounts.hpp
+    "16": sensor_mounts.hpp
+  health_core_map: []

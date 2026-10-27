@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.0.2)
+project(traffic_light)
+find_package(catkin REQUIRED COMPONENTS node_pipeline interfaces sensor_msgs)
+find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs dnn)
+find_package(CURL REQUIRED)
+set(ONNXRUNTIME_ROOT "/opt/onnxruntime-gpu/1.19.2" CACHE PATH "ONNX Runtime installation")
+find_path(ONNXRUNTIME_INCLUDE_DIR onnxruntime_cxx_api.h
+  HINTS ${ONNXRUNTIME_ROOT} ENV ONNXRUNTIME_ROOT PATH_SUFFIXES include)
+find_library(ONNXRUNTIME_LIBRARY onnxruntime
+  HINTS ${ONNXRUNTIME_ROOT} ENV ONNXRUNTIME_ROOT PATH_SUFFIXES lib)
+if(NOT ONNXRUNTIME_INCLUDE_DIR OR NOT ONNXRUNTIME_LIBRARY)
+  message(FATAL_ERROR "Set ONNXRUNTIME_ROOT to an ONNX Runtime installation")
+endif()
+get_filename_component(ONNXRUNTIME_LIBRARY_DIR ${ONNXRUNTIME_LIBRARY} DIRECTORY)
+set(CMAKE_INSTALL_RPATH ${ONNXRUNTIME_LIBRARY_DIR})
+np_add_nodes(INCLUDE_DIRS ${OpenCV_INCLUDE_DIRS} ${ONNXRUNTIME_INCLUDE_DIR} ${CURL_INCLUDE_DIRS}
+  LIBRARIES ${OpenCV_LIBRARIES} ${ONNXRUNTIME_LIBRARY} ${CURL_LIBRARIES})

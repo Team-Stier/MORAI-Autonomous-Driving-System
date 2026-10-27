@@ -1,0 +1,219 @@
+{
+  "date": "2026-09-29",
+  "source_host": "winpc-win",
+  "source_asset": "C:/morai/simulator/MoraiLauncher_Win_Data/Bundle/v.S4.251001.MolitComp03/hyundai_ioniq5.vehicle",
+  "sha256": "96fe94edce6b530092c0a4b71945eeb20d7f3fb2ac2bef4890fda40092f5da3a",
+  "unity_min": {
+    "x": -1.080417275428772,
+    "y": -0.3684999644756317,
+    "z": -0.7899996042251587
+  },
+  "unity_max": {
+    "x": 1.0804176330566406,
+    "y": 1.2755463123321533,
+    "z": 3.845008373260498
+  },
+  "axis_conversion": "base_link (x,y,z) = Unity (z,-x,y)",
+  "base_link_min_m": [
+    -0.7899996042251587,
+    -1.0804176330566406,
+    -0.3684999644756317
+  ],
+  "base_link_max_m": [
+    3.845008373260498,
+    1.080417275428772,
+    1.2755463123321533
+  ],
+  "evidence": "BoxColl and BoxCollTrigger share vMin/vMax, m_Center/m_Size; their entire parent transform chains are identity. Rear wheel transforms have local y=z=0, front wheels z=3m. Serialized asset verification, not live runtime bounds.",
+  "runtime_verification": {
+    "status": "runtime_bbox_and_model_origin_crosschecked",
+    "date": "2026-09-29",
+    "build": "25.S4.MolitComp03",
+    "map": "R_KR_PR_K-city_2025",
+    "vehicle": "2023_Hyundai_Ioniq5",
+    "automatic_login": "Verified signed-in account after normal launcher close and reopen, without resubmitting credentials.",
+    "competition_status": {
+      "raw_y": 0,
+      "raw_x": 0,
+      "length": 181,
+      "yaw": 62.6148224,
+      "packet_base64": "I01vcmFpSW5mbySYAAAAAAAAAAAAAAAAAAAAD+K6akBznDcBBGlTqD6GAAAAAAAAAAAAAADsUZRADi3yP6jGG0DsUVg/AABAQHE9Sj8AAAAAAAAAAAAAAACoxbPDJStEPpR1ekJqU6g+AAAAAAAAAADrzJc7GtpmugrrjzsAAAAAAAAAAAAAAAAAAAAAQTIyNTZXMDAwMTcyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANCg==",
+      "pitch": 0.191570833,
+      "overhang": 0.845,
+      "rear_overhang": 0.79,
+      "roll": -359.5442,
+      "size_y": 1.892,
+      "raw_z": 0,
+      "size_z": 2.434,
+      "wheelbase": 3,
+      "size_x": 4.635
+    },
+    "comparison": {
+      "length_difference_m": -7.977485656951444e-06,
+      "width_difference_m": -0.2688349084854127,
+      "height_difference_m": 0.7899537231922151,
+      "wheelbase_and_overhang": "Match serialized axle/bounds geometry to packet precision.",
+      "conclusion": "Runtime gRPC bbox agrees with serialized asset within 1 mm. UDP size fields match gRPC VehicleSpec rather than collider bounds."
+    },
+    "pose_crosscheck": {
+      "paused_ego_position_m": [
+        -12.620505332946777,
+        -221.33616638183594,
+        28.821584701538086
+      ],
+      "saved_scenario_position_m": {
+        "x": -12.621000289916992,
+        "y": -221.33599853515625,
+        "z": 28.82200050354004,
+        "_x": "-12.621",
+        "_y": "-221.336",
+        "_z": "28.822"
+      },
+      "max_abs_difference_m": 0.0004949569702148438,
+      "ego_packet_base64": "I01vcmFpSW5mbyTIAAAAAAAAAAAAAAAAAAAAYOK6asCVqQUBBAAAAACGAAAAAAAAAAAAAADsUZRADi3yP6jGG0DsUVg/AABAQHE9Sj+X7UnBD1Zdw5uS5kEOw7PDEzc5PiwzeUL/hq89ACD5NnKUjTkAAACAAAAAAAAAAICZZK24hLwEOMWXLroAAACAQTIyNTZXMDAwMTcyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABhHA7ChS8SwhRDNcK/gMXBAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAANCg==",
+      "competition_position_fields": [
+        0,
+        0,
+        0
+      ],
+      "scope": "Normal Ego packet agrees with saved scenario pose within 1 mm. This does not independently measure the rear axle relative to the live mesh."
+    },
+    "remaining_limit": "The rear axle origin is the model reference axle, not the instantaneous midpoint of suspension-displaced wheel meshes.",
+    "cleanup": "Original network preset restored; simulator paused. XY restored within 0.001 mm, RPY within 0.00013 deg. Scenario/teleport re-grounding changed z by +8.104 mm and reset velocity to zero.",
+    "grpc": {
+      "service": "morai_sim_api.actor.Actor",
+      "read_methods": [
+        "GetActorState",
+        "GetAllActorsState",
+        "GetVehicleSpec"
+      ],
+      "state_before": {
+        "actor_info": {
+          "id": {
+            "value": "Ego"
+          },
+          "object_type": "OBJECT_TYPE_VEHICLE"
+        },
+        "bounding_box": {
+          "extent": {
+            "x": 1.0804173946380615,
+            "y": 2.3175039291381836,
+            "z": 0.8220231533050537
+          },
+          "location": {
+            "x": -11.874650955200195,
+            "y": -220.00099182128906,
+            "z": 29.270267486572266
+          },
+          "rotation": {
+            "x": 0.47613525390625,
+            "y": 0.18087415397167206,
+            "z": 62.29997253417969
+          }
+        },
+        "transform": {
+          "location": {
+            "x": -12.620505332946777,
+            "y": -221.33616638183594,
+            "z": 28.821584701538086
+          },
+          "rotation": {
+            "x": 0.47613525390625,
+            "y": 0.18087415397167206,
+            "z": 62.29997253417969
+          }
+        },
+        "velocity": {
+          "x": 0.08570670336484909,
+          "y": 7.424503564834595e-06,
+          "z": 0.0002700421609915793
+        },
+        "angular_velocity": {},
+        "acceleration": {
+          "x": -8.268020610557869e-05,
+          "y": 3.1646821298636496e-05,
+          "z": -0.000666018866468221
+        },
+        "vehicle_state": {
+          "gear_mode": "GEAR_MODE_D",
+          "current_link_info": {
+            "id": {
+              "value": "A2256W000172"
+            },
+            "waypoint_idx": 67
+          },
+          "remaining_distance": -1.0,
+          "is_pass_des_pos": true,
+          "tl_id": {
+            "value": "C1256W000045"
+          },
+          "tl_color": "TL_COLOR_R_WITH_Y"
+        },
+        "global_velocity": {
+          "x": 0.041608694940805435,
+          "y": 0.07492949068546295,
+          "z": -4.695175448432565e-07
+        }
+      },
+      "vehicle_spec": {
+        "sub_category": "VEHICLE_CLASS_SUV",
+        "length": 4.635,
+        "width": 1.892,
+        "height": 2.434,
+        "wheel_base": 3.0,
+        "front_overhang": 0.845,
+        "rear_overhang": 0.79,
+        "dynamics_level": [
+          {
+            "level": 1,
+            "ego": "done",
+            "npc": "done"
+          }
+        ],
+        "max_steering_angle": 40.0,
+        "wheel_radius": 0.36
+      },
+      "extent_order": "half width, half length, half height (confirmed Utils.GetBoudingBox IL RVA 0x1090644)",
+      "center_base_link_m": [
+        1.5279469356184858,
+        -9.00724189558744e-06,
+        0.4535242698844888
+      ],
+      "base_link_min_m": [
+        -0.7895569935196978,
+        -1.0804264018799572,
+        -0.3684988834205649
+      ],
+      "base_link_max_m": [
+        3.8454508647566694,
+        1.0804083873961658,
+        1.2755474231895425
+      ],
+      "max_corner_component_difference_from_asset_m": 0.00044261070546092185,
+      "tolerance_m": 0.001,
+      "yaw_input_output_offset_deg": 1.34701406955719,
+      "angle_conversion_evidence": "Installed rotation converter RVA 0x136c0ec adds a heading-offset static field. Offset observed with SetTransform yaw=0; Unity Euler angles reconstructed as (pitch,270-yaw+offset,-roll), Unity rotation order Y*X*Z. Position converter RVA 0x136868b is (-Unity.x,-Unity.z,Unity.y).",
+      "origin_evidence": "Utils.GetBasicActorState RVA 0x10907a4 publishes MoraiObjectBase.GetRealTransform.position. Initialize RVA 0x2e49c selects model child 0 as real transform. Asset rear wheel mounts have local y=z=0; runtime bbox center relative to this reported root agrees with asset within 1 mm. Confirms model reference axle origin, not live suspension-displaced wheel centers.",
+      "source_repository": "https://github.com/MORAI-Autonomous/MORAI-DriveExample_GRPC",
+      "source_commit": "6eafbeb662ce2ed8928cae21b413c0553aaf9cee"
+    },
+    "restored_transform": {
+      "location": {
+        "x": -12.620504379272461,
+        "y": -221.33616638183594,
+        "z": 28.829689025878906
+      },
+      "rotation": {
+        "x": 0.47601318359375,
+        "y": 0.18100059032440186,
+        "z": 62.299957275390625
+      }
+    }
+  },
+  "vehicle_parameters": {
+    "wheelbase_m": 3.0,
+    "maximum_steering_angle_deg": 40.0,
+    "maximum_steering_source": "MonoBehaviour path_id -594917449402117188, steering.maxSteerAngle",
+    "scope": "Wheelbase and maximum steering angle confirmed by runtime GetVehicleSpec; no steering-limit driving test."
+  }
+}

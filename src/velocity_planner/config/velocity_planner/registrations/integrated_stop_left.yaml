@@ -1,0 +1,6 @@
+stage: cutoff
+inputs: [path, light, competition, tf]
+bank: stop_line_state.hpp
+validator: stop_line_inputs.hpp
+policy: remove_invalid.hpp
+allowed_issues: {path: [Stale, ReceiveTimeout, Skew], light: [Skew], tf: [Stale, ReceiveTimeout, Skew]}

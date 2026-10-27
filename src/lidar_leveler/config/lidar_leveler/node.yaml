@@ -1,0 +1,26 @@
+execution: {mode: on_input, trigger_input: cloud, queue_capacity: 8, max_health_checks: 10}
+max_skew_sec: 0.1
+inputs:
+  cloud:
+    type: sensor_msgs/PointCloud2
+    topic: /velodyne_points
+    frame: velodyne
+    stale_after_sec: 0.3
+    receive_timeout_sec: 0.3
+  competition:
+    type: interfaces/CompetitionVehicleStatus
+    topic: /vehicle/competition_status
+    frame: base_link
+    stale_after_sec: 0.06
+    receive_timeout_sec: 0.06
+  tf_static:
+    type: tf2_msgs/TFMessage
+    topic: /tf_static
+    check_stamp: false
+    check_receive_timeout: false
+    check_skew: false
+stages:
+  - name: level
+    outputs:
+      - {name: cloud, from: cloud}
+output: {topic: /velodyne_points/leveled, frame_id: base_link_level}

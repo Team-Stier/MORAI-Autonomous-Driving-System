@@ -1,0 +1,20 @@
+track:
+  section_core_map:
+    '0': integrated_mpc.hpp
+    '1': integrated_mpc.hpp
+    '2': integrated_mpc.hpp
+    '3': integrated_mpc.hpp
+    '4': integrated_mpc.hpp
+    '5': integrated_mpc.hpp
+    '6': integrated_mpc.hpp
+    '7': integrated_mpc.hpp
+    '8': morai_mpc.hpp
+    '9': morai_mpc.hpp
+    '10': morai_mpc.hpp
+    '11': morai_mpc.hpp
+    '12': morai_mpc.hpp
+    '13': morai_mpc.hpp
+    '14': integrated_mpc.hpp
+    '15': integrated_mpc.hpp
+    '16': morai_mpc.hpp
+  health_core_map: []

@@ -1,0 +1,60 @@
+inject:
+  section_core_map:
+    "0": curvature_velocity60.hpp
+    "1": curvature_velocity60.hpp
+    "2": curvature_velocity60.hpp
+    "3": curvature_velocity60.hpp
+    "4": curvature_velocity60.hpp
+    "5": curvature_velocity60.hpp
+    "6": curvature_velocity60.hpp
+    "7": curvature_velocity60.hpp
+    "8": curvature_velocity60.hpp
+    "9": curvature_velocity60.hpp
+    "10": curvature_velocity60.hpp
+    "11": curvature_velocity100.hpp
+    "12": curvature_velocity100.hpp
+    "13": curvature_velocity60.hpp
+    "14": curvature_velocity60.hpp
+    "15": curvature_velocity60.hpp
+    "16": curvature_velocity60.hpp
+  health_core_map: []
+cutoff:
+  section_core_map:
+    "0": integrated_stop_pass.hpp
+    "1": integrated_stop_pass.hpp
+    "2": integrated_stop_pass.hpp
+    "3": integrated_stop_straight.hpp
+    "4": integrated_stop_straight.hpp
+    "5": integrated_stop_dynamic.hpp
+    "6": integrated_stop_pass.hpp
+    "7": integrated_stop_left.hpp
+    "8": stop_line_pass_through.hpp
+    "9": stop_line_pass_through.hpp
+    "10": stop_line_pass_through.hpp
+    "11": integrated_stop_pass.hpp
+    "12": integrated_stop_pass.hpp
+    "13": integrated_stop_pass.hpp
+    "14": integrated_stop_pass.hpp
+    "15": integrated_stop_pass.hpp
+    "16": stop_line_pass_through.hpp
+  health_core_map: []
+transform:
+  section_core_map:
+    "0": tf.hpp
+    "1": tf.hpp
+    "2": tf.hpp
+    "3": tf.hpp
+    "4": tf.hpp
+    "5": tf.hpp
+    "6": tf.hpp
+    "7": tf.hpp
+    "8": tf.hpp
+    "9": tf.hpp
+    "10": tf.hpp
+    "11": tf.hpp
+    "12": tf.hpp
+    "13": tf.hpp
+    "14": tf.hpp
+    "15": tf.hpp
+    "16": tf.hpp
+  health_core_map: []

@@ -1,0 +1,20 @@
+level:
+  section_core_map:
+    "0": motion_leveler.hpp
+    "1": motion_leveler.hpp
+    "2": motion_leveler.hpp
+    "3": motion_leveler.hpp
+    "4": motion_leveler.hpp
+    "5": motion_leveler.hpp
+    "6": motion_leveler.hpp
+    "7": motion_leveler.hpp
+    "8": motion_leveler.hpp
+    "9": motion_leveler.hpp
+    "10": motion_leveler.hpp
+    "11": acquisition_leveler.hpp
+    "12": acquisition_leveler.hpp
+    "13": acquisition_leveler.hpp
+    "14": motion_leveler.hpp
+    "15": motion_leveler.hpp
+    "16": motion_leveler.hpp
+  health_core_map: []

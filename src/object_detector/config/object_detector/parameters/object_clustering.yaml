@@ -1,0 +1,18 @@
+# Sensor/vehicle calibration and parameter tuning: workspace maintainer.
+voxel_leaf_size: 0.075
+dbscan_eps: 0.6
+dbscan_min_points: 3
+min_cluster_size: 6
+max_cluster_size: 5000
+minimum_cluster_height_m: 0.1
+sparse_cluster_clearance_m: 0.3
+ground_distance_m: 0.08
+ground_seed_max_z_m: 0.0
+ground_cell_m: 0.5
+ground_region_m: 5.0
+ground_support_radius_m: 12.0
+ground_max_tilt_rad: 0.35
+ground_min_support: 12
+ground_iterations: 128
+
+emit_acquisition_time: true

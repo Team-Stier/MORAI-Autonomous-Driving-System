@@ -1,0 +1,56 @@
+build/
+devel/
+install/
+logs/
+/rosbag/
+graphify-out/
+.catkin_workspace
+src/CMakeLists.txt
+__pycache__/
+*.pyc
+.DS_Store
+
+# Local archive of inactive implementations and generated output.
+/unused_local/
+/output/
+
+# Assets and helpers outside the selected driving stack.
+/src/map/2026_molit_comp_global_path.txt
+/src/map/2026_molit_comp_global_path_suhyeon.txt
+/src/map/kcity_lanelet2.osm.backup
+/src/map/kcity_lanelet2_suhyeon.boundary_refinement.json
+/src/map/kcity_lanelet2_suhyeon.dynamic_intersection_refinement.json
+/src/map/kcity_lanelet2_suhyeon.exit_physical_refinement.json
+/src/map/kcity_lanelet2_suhyeon.final_circle_refinement.json
+/src/map/kcity_lanelet2_suhyeon.meta.json
+/src/map/kcity_lanelet2_suhyeon.osm
+/src/map/kcity_lanelet2_suhyeon.route_boundary_refinement.json
+/src/object_detector/models/npc_models.bin
+/src/object_detector/models/npc_models.json
+/src/path_planner/models/npc_trajectory_1s.txt
+/src/traffic_light/models/camera7_frame_cpu/model.onnx
+/src/traffic_light/models/camera7_frame_cpu/provenance.json
+/src/traffic_light/scripts/mac_gpu_inference.py
+/src/map/kcity_lanelet2_suhyeon.repair.json
+
+# Keep development tests and recordings local in this runtime repository.
+**/test/
+**/tests/
+test_*
+*_test.cpp
+*_test.py
+*.test
+*.bag
+*.bag.active
+*.bag.*
+*.db3
+*.mcap
+*.pcap
+*.pcapng
+
+# Unused compiled detector assets and development notes.
+/src/object_detector/include/object_detector/models/
+/src/control/include/control/libraries/morai_mpc/vendor/qpoases/qpOASES/UnitTesting.hpp
+/src/map/kcity_lanelet2.osm
+/memo.md
+/INTEGRATED_BASELINE.json
