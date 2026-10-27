@@ -273,7 +273,7 @@ class FastEngine:
         grid, lidar = tokenized_data["image_grid_thw"], tokenized_data["image_is_lidar"].bool().tolist()
         px = tokenized_data["pixel_values"]                       # may stay on the CPU: only new images are copied over
         n_patch = (grid[:, 0] * grid[:, 1] * grid[:, 2]).tolist()
-        pxs = px.split(n_patch)
+        pxs = px if isinstance(px, list) else px.split(n_patch)          # a list: per image (assemble records)
         ck = [(lidar[i], k) for i, k in enumerate(keys)]
         new, main = 0, torch.cuda.current_stream()
         self.side.wait_stream(main)

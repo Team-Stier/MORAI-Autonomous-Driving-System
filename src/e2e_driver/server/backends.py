@@ -124,6 +124,8 @@ class EngineBackend(HFBackend):
                  want_xyz=False, sims=0, expert2=None, lora_watch=None):
         import engine
         from fast_engine import FastEngine, fingerprints, layout
+        import assemble
+        assemble.FAST = True                             # image records keep page-locked bf16 rows for the ViT copies
         t = time.perf_counter()
         self.model = engine.load(ckpt, vlm=vlm, device=device)
         self.fast, self.fingerprints, self.layout = FastEngine(self.model, num_steps=num_steps, pad_to=pad_to, batch=max(sims, 1)), fingerprints, layout
@@ -212,7 +214,8 @@ class EngineBackend(HFBackend):
 
     def pin(self, prepared):
         (b, keys, lay), timing = prepared
-        b["tokenized_data"]["pixel_values"] = b["tokenized_data"]["pixel_values"].pin_memory()   # async copies of new images
+        px = b["tokenized_data"]["pixel_values"]                       # async copies of new images
+        b["tokenized_data"]["pixel_values"] = [t if t.is_pinned() else t.pin_memory() for t in px] if isinstance(px, list) else px.pin_memory()
         return prepared
 
     def _dev(self, b):

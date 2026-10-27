@@ -22,13 +22,18 @@ def cpu_prepare(sample, config, image_token, merge):
     """-> ((batch, image keys, M-RoPE layout), timing): EngineBackend.prepare without the pinning."""
     from fast_engine import fingerprints, layout
     t = time.perf_counter()
-    b = tokenize(sample, config)
+    b, recs = tokenize(sample, config, fast=True)
     timing = dict(preprocess_ms=round(1e3 * (time.perf_counter() - t), 1), prefix_tokens=int(b["tokenized_data"]["input_ids"].shape[1]))
     t = time.perf_counter()
     td = b["tokenized_data"]
-    keys = fingerprints(td["pixel_values"], td["image_grid_thw"])
+    if recs:                                     # a live sample: per image from its records (a list, not one tensor)
+        assert len(recs) == len(td["image_grid_thw"]), (len(recs), td["image_grid_thw"].shape)
+        keys = [r.fast().key for r in recs]
+        td["pixel_values"] = [r.bf for r in recs]
+    else:
+        keys = fingerprints(td["pixel_values"], td["image_grid_thw"])
+        td["pixel_values"] = td["pixel_values"].to(torch.bfloat16)            # the ViT input dtype
     lay = layout(td["input_ids"], td["image_grid_thw"], image_token, merge)
-    td["pixel_values"] = td["pixel_values"].to(torch.bfloat16)                # the ViT input dtype
     return (b, keys, lay), dict(timing, fingerprint_ms=round(1e3 * (time.perf_counter() - t), 1))
 
 
