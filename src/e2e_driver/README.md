@@ -567,6 +567,11 @@ model_server.py --backend engine --ckpt <deliver> --sims 3 --rl-sigma 0.1 --expe
     - 교체할 때는 새 LoRA의 층과 이전 LoRA가 바꾼 층만 다시 쓴다. 그래서 LLM LoRA 다음에 expert만 있는 LoRA가 오면 LLM은 납품물로 돌아간다.
     - ViT 키는 거부한다(늘 얼림). `--expert2`로 두 벌이면 LLM을 같이 쓰므로 LLM 키가 든 LoRA를 거부한다.
     - ViT 캐시는 그대로 쓴다. LLM 프리필은 요청마다 새로 돌기 때문에 K/V를 버릴 필요가 없다.
+    - 5090 실측 (10/28, `test/lora_llm_check.py`, wowmayo_final, 무작위 r16, sims 1):
+      - 교체는 LLM 252층 + expert 252층에 0.31–0.45 s 걸린다. 기준 가중치는 11.0 GB(pinned)다.
+      - 되돌리면 비트가 일치하고, 새 양자화와 바이트가 같다(8/8). expert만 있는 LoRA 뒤에는 LLM이 납품물로 돌아온다.
+      - model_ms p50은 교체 전 81.7, 후 78.9 ms다. 100 ms를 넘은 스텝은 없다.
+      - BF16 기준과 비교한 결과: 이 무작위 LoRA는 효과(BF16 ADE 0.007 m)가 양자화 차이(0.019 m)보다 작다. 그래서 효과끼리의 cos 0.65는 양자화 잡음이 대부분이다. learner의 실제 LoRA로 다시 보면 더 정확하다.
 - **시험**: `test/test_rl_server.py`(Mac, 가짜 백엔드: 동시 접속·슬롯·logp 식), `test/rl_engine_check.py`(5080), `test/server_bench.py --clients 3`.
   - LLM LoRA: `test/test_lora_llm.py`(Mac CPU, 가짜 가중치: 이름, 거부, 버전, 되돌리기), `test/lora_llm_check.py`(GPU, 실제 납품물: 교체 시간, 비트 일치, 새 양자화, model_ms 전후, BF16 + LoRA 기준).
 - **5080 실측** (10/27, `test/rl_engine_check.py`, 실주행 요청 `dump_fh6`): 아래 표는 실제 와우마요 납품물(`wowmayo_final`, NVFP4 454층·FP8 146층)이고, 노이즈 샘플러 줄만 실제 크기 시험 납품물(`synthetic_475`)이다.
