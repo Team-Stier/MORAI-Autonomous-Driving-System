@@ -16,6 +16,11 @@
 #   (config.tar, V2AccountInfo.byte; never in B2). Then N = the most worlds this host takes (VRAM, CPU quota, RAM;
 #   README "sync") and the seeds run in waves of N, the parts kept up between them; REDRAW (1): scenes that failed the
 #   replay check are drawn anew once (new seeds, one more wave).
+#   PROVIDER=vast OFFER=<vastai offer id> (with BUNDLE): a vast instance instead (B2 keys from the vast account's env
+#   vars, ssh keys from the account; vastai CLI on the Mac). LAPS=K: K laps per world (seed S -> scenes S*1000+k);
+#   LAP_DELIVER=1: each lap's 1x phone video (< 24 MB) and one-line report go to B2 runs/eval_vps/NAME/lap_KK/ and, from
+#   the Mac, to the user's Discord DM (bot token in ~/.claude/channels/discord/.env, never printed; a failed attachment
+#   falls back to a 7-day B2 link).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
@@ -32,6 +37,10 @@ POD=
 bye() {
   [[ -z $POD ]] && return
   if [[ ${KEEP:-0} == 1 ]]; then log "KEEP=1: pod $POD left running ($(price) \$/h)"; return; fi
+  if [[ ${PROVIDER:-runpod} == vast ]]; then
+    vastai destroy instance "$POD" > /dev/null; log "vast instance $POD destroyed; credit \$$(vastai show user --raw | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["credit"], 2))')"
+    POD=; return
+  fi
   curl -s -X DELETE "https://rest.runpod.io/v1/pods/$POD" -H "Authorization: Bearer $KEY" > /dev/null
   log "pod $POD terminated (volume $VOLUME kept); balance \$$(gql '{"query":"query { myself { clientBalance } }"}' | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["data"]["myself"]["clientBalance"], 2))')"
   POD=
@@ -39,6 +48,8 @@ bye() {
 trap bye EXIT; trap 'exit 130' INT TERM
 
 [[ -n ${BUNDLE:-} ]] && VOLUMES=(none:any)
+hold=" sleep infinity"; [[ ${PROVIDER:-runpod} == vast ]] && hold=   # RunPod: the start command is the container's process
+wdprep=; [[ ${PROVIDER:-runpod} == vast ]] && wdprep="python3 -m pip install -q vastai > /dev/null 2>&1; "   # the watchdog's vast stop
 # BUNDLE: a stdlib-python bootstrap (the image has no curl) takes bundle.py from B2 and fetches the shards first
 boot=$(printf '%s' "import base64,json,os,urllib.request as u
 e=dict(l.split('=',1) for l in open('/proc/1/environ').read().split(chr(0)) if '=' in l); e.update(os.environ)
@@ -47,7 +58,21 @@ a=json.load(u.urlopen(u.Request('https://api.backblazeb2.com/b2api/v2/b2_authori
 open('/bundle.py','wb').write(u.urlopen(u.Request(a['downloadUrl']+'/file/morai2026-alpamayo/podimg/${BUNDLE:-}/bundle.py',headers={'Authorization':a['authorizationToken']})).read())" | base64 | tr -d '\n')
 start="${BUNDLE:+mkdir -p /workspace && python3 -c \"\$(echo $boot | base64 -d)\" && python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
 bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
-DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 & sleep infinity"
+${wdprep}DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 &$hold"
+if [[ ${PROVIDER:-runpod} == vast ]]; then   # one offer, chosen beforehand (vastai search offers); Vulkan needs graphics caps
+  r=$(vastai create instance "${OFFER:?OFFER=<vast offer id>}" --image ros:noetic-ros-base-focal --disk 150 --ssh --direct \
+      --env "-e NVIDIA_DRIVER_CAPABILITIES=all -e NVIDIA_VISIBLE_DEVICES=all" --label "wowmayo-eval-$NAME" --onstart-cmd "$start" --raw)
+  POD=$(echo "$r" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("new_contract") or "")' 2> /dev/null)
+  [[ -n $POD ]] || { log "vast create failed: $r"; exit 1; }
+  T0=$(date +%s.%N | cut -c1-14); log "vast create: instance $POD (offer $OFFER)"
+  price() { vastai show instance "$POD" --raw | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["dph_total"], 3))'; }
+  for i in $(seq 180); do
+    read -r ip port st < <(vastai show instance "$POD" --raw | python3 -c 'import json,sys; d=json.load(sys.stdin); p=(d.get("ports") or {}).get("22/tcp") or [{}]
+print(d.get("public_ipaddr") or "-", p[0].get("HostPort") or "-", d.get("actual_status"))')
+    [[ $ip != - && $port != - && $st == running ]] && break; sleep 5
+  done
+  log "vast instance $POD: $st, $(price) \$/h, ssh $ip:$port"
+else
 for try in $(seq $(( ${RETRY_MIN:-30} + 1 ))); do         # stock is Low: every GPU x volume, then again a minute later
 for vd in "${VOLUMES[@]}"; do VOLUME=${vd%%:*}; DC=${vd#*:}
 for g in "${GPUS[@]}"; do
@@ -80,6 +105,7 @@ for i in $(seq 120); do
     python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("publicIp") or "-", (d.get("portMappings") or {}).get("22", "-"))')
   [[ $ip != - && $port != - ]] && break; sleep 5
 done
+fi
 printf 'Host pod\n  HostName %s\n  Port %s\n  User root\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n  ServerAliveInterval 30\n' "$ip" "$port" > "$SSHC"
 P() { ssh -F "$SSHC" pod "$@"; }
 late() { (( $(date +%s) - ${T0%.*} > $1 )) && { log "$2: gave up"; exit 1; }; true; }   # the trap terminates the pod
@@ -102,6 +128,27 @@ P "grep -q 'setup.*done' /workspace/setup.\$(hostname).log" || { log "setup fail
 log "setup done"
 [[ ${CREATE_ONLY:-0} == 1 ]] && { KEEP=1; exit 0; }
 
+dm() {  # TEXT [FILE] -> HTTP code: a Discord DM to the user (memory discord-urgent-dm), the bot token never printed
+  local T j; T=$(sed -n 's/^DISCORD_BOT_TOKEN=//p' ~/.claude/channels/discord/.env)
+  j=$(python3 -c 'import json,sys; print(json.dumps({"content": sys.argv[1][:1900], "allowed_mentions": {"parse": []}}))' "$1")
+  if [[ -n ${2:-} ]]; then curl -sS -m 600 -o /dev/null -w '%{http_code}' -H "Authorization: Bot $T" -F "payload_json=$j" \
+    -F "files[0]=@$2" https://discord.com/api/v10/channels/1563731925322174534/messages
+  else curl -sS -m 60 -o /dev/null -w '%{http_code}' -H "Authorization: Bot $T" -H 'Content-Type: application/json' -d "$j" \
+    https://discord.com/api/v10/channels/1563731925322174534/messages; fi
+}
+deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and report to the user's DM
+  local R=/workspace/results/$1 f line url vid code
+  for f in $(P "ls $R/lap_*.ready 2> /dev/null"); do
+    [[ -e $LOCAL/$(basename "$f").sent ]] && continue
+    IFS=$'\t' read -r line url vid < <(P "cat $f")
+    mkdir -p "$LOCAL/laps"; scp -q -F "$SSHC" "pod:$vid" "$LOCAL/laps/" 2> /dev/null
+    code=$( [[ -s $LOCAL/laps/$(basename "$vid") ]] && dm "$line" "$LOCAL/laps/$(basename "$vid")" || echo none)
+    [[ $code == 200 ]] || code="$code, link: $(dm "$line
+영상(7일 링크): $url")"
+    echo "$code" > "$LOCAL/$(basename "$f").sent"; log "lap $(basename "$f" .ready) sent to Discord ($code)"
+  done
+}
+
 # worlds this host takes (sync_bench 10/28, 5090: N=7 used 29.2 GB VRAM, 23.5 cores, ~38 GB RAM): VRAM 3.13 N + 7.3 GB,
 # CPU 3.1 N + 2.5 cores of 90 % of the quota, RAM 4.8 N + 4.5 GB of 85 %; the seeds run in waves of N
 NMAX=$(P "python3 -c 'import subprocess as s; q=open(\"/sys/fs/cgroup/cpu.max\").read().split(); c=int(q[0])/int(q[1]) if q[0] != \"max\" else len(open(\"/proc/cpuinfo\").read().split(\"processor\"))-1; m=open(\"/sys/fs/cgroup/memory.max\").read().strip(); r=(int(m) if m != \"max\" else int(open(\"/proc/meminfo\").read().split()[1])*1024)/2**30; v=int(s.check_output([\"nvidia-smi\",\"--query-gpu=memory.total\",\"--format=csv,noheader,nounits\"]).split()[0])/1024; print(max(1, min(int((v-0.8-7.3)/3.13), int((0.9*c-2.5)/3.1), int((0.85*r-4.5)/4.8))), round(c,1), round(r), round(v,1))'")
@@ -112,11 +159,14 @@ redraw=${REDRAW:-1}; next=$(( $(printf '%s\n' "${SEEDS[@]}" | sort -n | tail -1)
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   wave=("${SEEDS[@]:w:N}"); WN=$NAME; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${NAME}_wave$((w / N + 1))
   P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$NAME/timeline.txt /workspace/results/$WN/ && \
-     (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
+     (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
       KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
   log "eval3 $WN (seeds ${wave[*]}) running: ssh -F $SSHC pod tail -f /workspace/results/$WN.log"
-  until P "test -e /workspace/results/$WN/DONE || ! pgrep -f '[e]val3.sh $WN' > /dev/null"; do late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; sleep 20; done
+  until P "test -e /workspace/results/$WN/DONE || ! pgrep -f '[e]val3.sh $WN' > /dev/null"; do
+    late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; [[ ${LAP_DELIVER:-0} == 1 ]] && deliver "$WN"; sleep 20
+  done
+  [[ ${LAP_DELIVER:-0} == 1 ]] && deliver "$WN"
   mkdir -p "$LOCAL/$WN"; rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4.raw' pod:/workspace/results/$WN/ pod:/workspace/results/$WN.log "$LOCAL/$WN/"
   P "test -e /workspace/results/$WN/DONE" && log "done: $LOCAL/$WN" || { log "eval3 stopped early: $LOCAL/$WN/$WN.log"; break; }
   cat "$LOCAL/$WN/summary.txt" 2> /dev/null

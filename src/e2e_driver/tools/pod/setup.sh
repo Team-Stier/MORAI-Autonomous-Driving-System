@@ -40,7 +40,7 @@ fi
 # ssh (GraphQL-deployed pods get the key only from the PUBLIC_KEY env that eval_pod.sh sets)
 mkdir -p ~/.ssh /run/sshd && chmod 700 ~/.ssh
 [[ -n ${PUBLIC_KEY:-} ]] && ! grep -qF "$PUBLIC_KEY" ~/.ssh/authorized_keys 2>/dev/null && echo "$PUBLIC_KEY" >> ~/.ssh/authorized_keys
-service ssh start > /dev/null
+service ssh start > /dev/null || true                              # vast runs its own sshd
 
 log MORAI
 [[ -e /home/stier ]] || ln -s /root /home/stier              # the bc-250 copy's prefs and SaveFile name /home/stier

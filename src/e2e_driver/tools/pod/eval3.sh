@@ -30,9 +30,9 @@ stamp "eval3 $NAME: $DELIVER, seeds ${SEEDS[*]}, SIM_FPS ${SIM_FPS:-60}, apply d
 
 # CPU sets: 12 per world (the Mono fix, worlds.sh), then 8 for the stacks and 8 for the engine; fewer visible CPUs
 # shrink the worlds' share
-T=$(nproc --all); PER=12; (( T < 12 * N + 16 )) && PER=$(( (T - 16) / N ))
+T=$(nproc --all); PER=12; S=8; (( T < 12 * N + 16 )) && { S=4; PER=$(( (T - 8) / N )); }   # 16 CPUs, 1 world: 8 + 4 + 4
 for n in $(seq "$N"); do export CPUS_$n=$(( (n - 1) * PER ))-$(( n * PER - 1 )); done
-export STACK_CPUS=$((PER * N))-$((PER * N + 7)) ENGINE_CPUS=$((PER * N + 8))-$((PER * N + 15))
+export STACK_CPUS=$((PER * N))-$((PER * N + S - 1)) ENGINE_CPUS=$((PER * N + S))-$((PER * N + 2 * S - 1))
 if [[ ${CPU_LAYOUT:-split} == shared ]]; then
   for n in $(seq "$N"); do export CPUS_$n=0-$((T - 9)); done
   export STACK_CPUS=0-$((T - 9)) ENGINE_CPUS=$((T - 8))-$((T - 1)) SKIP_PIN=1
@@ -91,12 +91,23 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/rec.pids
   inrosn "$n" "exec rostopic echo -p /sim_clock/state" > "$O/clk_w$n.csv" 2> /dev/null < /dev/null &
   echo $! >> /root/actor/rec.pids
-  (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --laps 1 --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
+  (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
     --port $((8094 + n)) --no-view --direct --host local --grpc 127.0.0.1:$((7788 + n)) --launcher "$(wdir "$n")/MoraiLauncher_Lin_Data" \
-    --objinfo-port $((7505 + 1000 * (n - 1))) ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
+    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
   echo $! >> /root/actor/managers.pids
 done
 stamp "drives started ($N managers)"
+# LAP_DELIVER=1: each lap as it ends -> video, report, B2 and OUT/lap_KK.ready (lap_deliver.sh), for eval_pod.sh to send
+[[ ${LAP_DELIVER:-0} == 1 ]] && (declare -A done_; while :; do
+  live=0; pgrep -f "[e]val_manager.py eval_map" > /dev/null && live=1
+  for n in $(seq "$N"); do
+    for ((k = ${done_[$n]:-0}; k < $(wc -l < "$OUT/w$n/eval_map/laps.jsonl" 2> /dev/null || echo 0); k++)); do
+      bash "$HERE/lap_deliver.sh" "$OUT" "$n" "$k" "$NAME" && stamp "lap $((k + 1)) of w$n delivered: $(cut -f1 "$OUT/lap_$(printf %02d $((k + 1))).ready" | cut -c1-160)"
+      done_[$n]=$((k + 1))
+    done
+  done
+  (( live )) || break; sleep 10
+done; touch "$OUT/LAPS_DELIVERED") &
 [[ ${SYNC:-0} == 1 ]] && (for i in $(seq 600); do   # the first simulator step of every world (sync: steps.jsonl)
   ok=1; for n in $(seq "$N"); do [[ -s $OUT/w$n/eval_map/steps.jsonl ]] || ok=0; done; (( ok )) && break; sleep 1; done
   stamp "first steps ($(cat "$OUT"/w*/eval_map/steps.jsonl 2> /dev/null | wc -l) so far)") &
@@ -111,6 +122,10 @@ mv /root/actor/managers.pids /root/actor/managers.pids.old; mv /root/actor/rec.p
 stamp "$([[ ${KEEP_UP:-0} == 1 ]] && echo "laps recorded, worlds, stacks and engine kept up" || echo "all down")"
 
 $PY "$HERE/eval3_summary.py" "$OUT" | tee "$OUT/summary.txt"
+if [[ ${LAP_DELIVER:-0} == 1 ]]; then    # videos and reports were made lap by lap
+  until [[ -e $OUT/LAPS_DELIVERED ]]; do sleep 5; done
+  cat "$OUT"/lap_*/report.txt > "$OUT/laps.txt" 2> /dev/null
+else
 for n in $(seq "$N"); do
   O=$OUT/w$n
   $PY $E2E/tools/lap_video.py make "$FR/w$n" "$O/eval_map/lap000.clock.json" "$FR/w$n.mp4" 30 > "$O/video.json" 2>&1 &&
@@ -118,7 +133,8 @@ for n in $(seq "$N"); do
   $PY $E2E/test/plan_overlay.py "$O" "w$n" "$SCORER" 0 > "$O/plans.log" 2>&1 &
 done
 wait
-stamp "videos and overlays: $(ls "$OUT"/w*/*.mp4 2> /dev/null | wc -l) videos, $(ls "$OUT"/w*/plans/*.png 2> /dev/null | wc -l) figures"
+fi
+stamp "videos and overlays: $(ls "$OUT"/w*/*.mp4 "$OUT"/lap_*/*.mp4 2> /dev/null | wc -l) videos, $(ls "$OUT"/w*/plans/*.png 2> /dev/null | wc -l) figures"
 (b2env; $V/venv-tools/bin/b2 sync --threads 16 --no-progress "$OUT/" "b2://morai2026-alpamayo/runs/eval_vps/$NAME/" > "$OUT/../b2_$NAME.log" 2>&1) &&
   stamp "B2 runs/eval_vps/$NAME" || stamp "B2 upload failed (see results/b2_$NAME.log)"
 touch "$OUT/DONE"
