@@ -115,7 +115,9 @@ class EngineBackend(HFBackend):
     expert2 (RL_PLAN 5 A): a second expert set in VRAM, the delivery's expert + that LoRA file (engine.read_lora; ''
     = a plain copy), picked per request by sample["expert"] (the node: by route position s). lora_watch: the learner's
     <out>/lora/latest.json {version, path} (Alpamayo-Cosmos train/rl/learner.py publish); poll_lora() merges each new
-    version into the last expert set in place (seconds; graphs stay). Version 0 = the delivered expert. sims >= 1: the RL actor (model_server --sims): run_batch over up to `sims` simulators, one ViT cache each,
+    version into the last expert set in place (seconds; graphs stay). Version 0 = the delivered expert. With one expert
+    set a LoRA may also hold LLM decoder linears (DAgger llm+expert): merged into the LLM the same way (the ViT and its
+    cache stay; the prefill reruns every request). sims >= 1: the RL actor (model_server --sims): run_batch over up to `sims` simulators, one ViT cache each,
     one expert graph per batch; warm-up compiles that path instead of the single one."""
 
     def __init__(self, ckpt, vlm="Qwen/Qwen3-VL-4B-Instruct", num_steps=10, seed=None, device="cuda:0", warmup=(), pad_to=1792,
@@ -127,9 +129,11 @@ class EngineBackend(HFBackend):
         self.fast, self.fingerprints, self.layout = FastEngine(self.model, num_steps=num_steps, pad_to=pad_to, batch=max(sims, 1)), fingerprints, layout
         self.device, self.num_steps, self.seed, self.n, self.want_xyz = device, num_steps, seed, 0, want_xyz
         self.sp_cpu = copy.deepcopy(self.model.action_space).cpu()          # output conversion off the GPU
-        self.lora_watch, self.lora_mtime, self.lora_version, self.base = lora_watch, None, 0, None
+        self.lora_watch, self.lora_mtime, self.lora_version, self.base, self.lora_names = lora_watch, None, 0, None, set()
         if expert2 is not None or lora_watch:            # LoRAs merge onto the delivery's BF16 expert (host memory)
             self.base = engine.expert_base(ckpt, self.fast.parts[0])
+            if lora_watch and expert2 is None:           # and the LLM's (one expert set; two would share the LLM)
+                self.base.update(engine.expert_base(ckpt, self.fast.lm.layers, prefix=engine.LLM))
         if expert2 is not None:
             self.fast.parts.append(copy.deepcopy(self.fast.parts[0]))
             if expert2:
@@ -172,11 +176,15 @@ class EngineBackend(HFBackend):
             self.fast.caches.pop(sim, None)
 
     def load_lora(self, path, version=None):
-        """merge a LoRA file into the last expert set (the section expert, or the only one) in place -> seconds taken."""
+        """merge a LoRA file into the last expert set (the section expert, or the only one; with only one also the LLM)
+        in place -> seconds taken."""
         import engine
         t = time.perf_counter()
         lora, scale, meta_version = engine.read_lora(path)
-        engine.apply_lora(self.fast.parts[-1], self.base, lora, scale)
+        if len(self.fast.parts) > 1 and any(n.startswith(engine.LLM) for n in lora):
+            raise ValueError("%s: LLM LoRA with --expert2 (both expert sets share the LLM)" % path)
+        root = self.fast.parts[-1] if len(self.fast.parts) > 1 else self.model     # one set: its modules are the model's
+        self.lora_names = engine.apply_lora(root, self.base, lora, scale, self.lora_names)
         v = meta_version if version is None else version
         self.lora_version = int(v) if str(v).isdigit() else v
         return time.perf_counter() - t
