@@ -17,13 +17,13 @@ SIMDIR=MoraiLauncher_Lin_Data/Project/Simulator/Simulator_v.S4.251001.MolitComp0
 dir() { [[ $1 == 1 ]] && echo $SRC || echo /root/inst/$1/morai; }
 M() { python3 /root/morai-eval-msc.py "$(dir "$1")/MoraiLauncher_Lin_Data/SaveFile/LinkConnection.txt" "${@:2}"; }
 
-grpc_pref() {  # port: set (or add) <pref name="gRPCPort" type="int"> in the Unity prefs file
-  python3 - "$PREFS" "$1" <<'PY'
+pref() {  # name value: set (or add) <pref name=NAME type="int"> in the Unity prefs file
+  python3 - "$PREFS" "$1" "$2" <<'PY'
 import re, sys
-p, port = sys.argv[1], sys.argv[2]
+p, name, value = sys.argv[1:4]
 s = open(p, encoding="utf-8").read()
-pref = f'<pref name="gRPCPort" type="int">{port}</pref>'
-s = re.sub(r'<pref name="gRPCPort" type="int">\d+</pref>', pref, s) if 'name="gRPCPort"' in s else s.replace("</unity_prefs>", f"\t{pref}\n</unity_prefs>")
+pref = f'<pref name="{name}" type="int">{value}</pref>'
+s = re.sub(rf'<pref name="{name}" type="int">\d+</pref>', pref, s) if f'name="{name}"' in s else s.replace("</unity_prefs>", f"\t{pref}\n</unity_prefs>")
 open(p, "w", encoding="utf-8").write(s)
 PY
 }
@@ -33,7 +33,7 @@ start1() {
   [[ $n == 1 || -e $d ]] || bash "$HERE/mk-clone.sh" "$n"
   local v=CPUS_$n; local cpus=${!v:-$(( (n - 1) * 12 ))-$(( n * 12 - 1 ))}
   local log=/root/inst/$n/Player.log; mkdir -p /root/inst/$n; rm -f "$log"
-  grpc_pref $((7788 + n))
+  pref gRPCPort $((7788 + n))
   pgrep -f "^Xvfb :$n " > /dev/null || { setsid Xvfb :$n -screen 0 1280x800x24 > /root/inst/$n/xvfb.log 2>&1 < /dev/null & sleep 1; }
   ( cd "$d/$SIMDIR" && exec env DISPLAY=:$n LANG=ko_KR.UTF-8 LC_ALL=ko_KR.UTF-8 setsid taskset -c "$cpus" ./Simulator.x86_64 -logFile "$log" > /dev/null 2>&1 < /dev/null ) &
   for i in $(seq 60); do grep -q 'Login success' "$log" 2>/dev/null && break; sleep 3; done
@@ -52,6 +52,9 @@ prep1() {
 
 case ${1:-} in
   up)
+    # SIM_FPS: Unity TargetFrameRate (prefs 60). MORAI steps ~0.06 s of simulator time per frame below ~17 fps, so the
+    # cap sets the RTF (~0.06 x fps) with the same physics step and camera rate per simulator second (10/27 pod)
+    pref TargetFrameRate "${SIM_FPS:-60}"
     pids=()
     for n in $(seq "${2:-3}"); do start1 "$n" || exit 1; prep1 "$n" & pids+=($!); done   # starts one at a time: the gRPC pref
     for p in "${pids[@]}"; do wait "$p" || exit 1; done

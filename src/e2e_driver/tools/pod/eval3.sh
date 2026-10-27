@@ -8,7 +8,8 @@
 # /sim_clock/state recorders in stack n, eval_manager.py --laps 1 (scene variant of the seed, returns and weather over
 # gRPC 7788+n). After the laps: everything down, eval3_summary.py (summary.json), 1x plain videos <= 30 MB, plan overlays
 # (test/plan_overlay.py), all of $V/results/NAME (frames stay on the container disk) to B2 runs/eval_pod/NAME.
-# Timeline: $V/results/NAME/timeline.txt (epoch, clock, step). Env: VIEW_FPS (10), VIEW_WIDTH (1280), APPLY_DELAY_S (0.1)
+# Timeline: $V/results/NAME/timeline.txt (epoch, clock, step). Env: VIEW_FPS (10), VIEW_WIDTH (1280), APPLY_DELAY_S (0.1),
+# SIM_FPS (60: uncapped; worlds.sh)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@"); (( ${#SEEDS[@]} )) || SEEDS=(7 8 9)
@@ -19,7 +20,7 @@ wdir() { [[ $1 == 1 ]] && echo /root/Workspaces/scratches/morai || echo /root/in
 inrosn() { local n=$1; shift; (cd "$WS" && ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=/root/stack/$n/ros \
   bash -c "source /opt/ros/noetic/setup.bash; source devel/setup.bash; $*"); }
 b2env() { eval "$(tr '\0' '\n' < /proc/1/environ | grep -E '^B2_APPLICATION_KEY(_ID)?=' | sed 's/^/export /')"; }
-stamp "eval3 $NAME: $DELIVER, seeds ${SEEDS[*]}, $(nvidia-smi --query-gpu=name --format=csv,noheader), $(nproc --all) CPUs visible, quota $(cat /sys/fs/cgroup/cpu.max)"
+stamp "eval3 $NAME: $DELIVER, seeds ${SEEDS[*]}, SIM_FPS ${SIM_FPS:-60}, apply delay ${APPLY_DELAY_S:-0.1} s, $(nvidia-smi --query-gpu=name --format=csv,noheader), $(nproc --all) CPUs visible, quota $(cat /sys/fs/cgroup/cpu.max)"
 
 # CPU sets: 12 per world (the Mono fix, worlds.sh), then 8 for the stacks and 8 for the engine; fewer visible CPUs
 # shrink the worlds' share

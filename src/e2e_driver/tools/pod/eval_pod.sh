@@ -7,7 +7,8 @@
 #   DELIVER: a dir on the volume (/workspace/models/wowmayo_final) or b2:<path> (runs/stageC/deliver)
 #   Env: RUNPOD_API_KEY (default: ~/.runpod/config.toml), VOLUME (1tra2qsxbl, EU-CZ-1), GPUS ("NVIDIA GeForce RTX 5090
 #   NVIDIA RTX PRO 6000 Blackwell Server Edition"), VCPU (32), MEM_GB (60), BUDGET_USD (watchdog cap per pod, 6),
-#   KEEP=1 leaves the pod running at the end (stop it yourself), CREATE_ONLY=1 stops after setup (first boot, tests).
+#   KEEP=1 leaves the pod running at the end (stop it yourself), CREATE_ONLY=1 stops after setup (first boot, tests),
+#   SIM_FPS / APPLY_DELAY_S pass through to eval3.sh (worlds.sh TargetFrameRate cap; tau delay of a plan, 0.1).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
@@ -32,7 +33,7 @@ trap bye EXIT; trap 'exit 130' INT TERM
 start="bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
 DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 & sleep infinity"
 for g in "${GPUS[@]}"; do
-  dph=$(case $g in *5090*) echo 1.19;; *) echo 2.49;; esac)
+  dph=2.49; [[ $g == *5090* ]] && dph=1.19                  # the watchdog's rate (Secure, 10/27)
   q=$(python3 - "$g" "$VOLUME" "$DC" "$start" "$(cat ~/.ssh/id_ed25519.pub)" "$dph" "wowmayo-eval-$NAME" <<'PY'
 import json, os, sys
 g, vol, dc, start, pub, dph, name = sys.argv[1:8]
@@ -73,7 +74,7 @@ log "setup done"
 [[ ${CREATE_ONLY:-0} == 1 ]] && { KEEP=1; exit 0; }
 
 P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt && \
-   (setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $NAME $DELIVER ${SEEDS[*]} \
+   (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $NAME $DELIVER ${SEEDS[*]} \
    > /workspace/results/$NAME.log 2>&1 < /dev/null &)"
 log "eval3 running: ssh -F $SSHC pod tail -f /workspace/results/$NAME.log"
 until P "test -e /workspace/results/$NAME/DONE || ! pgrep -f '[e]val3.sh $NAME' > /dev/null"; do sleep 20; done
