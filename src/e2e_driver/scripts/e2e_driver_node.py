@@ -47,6 +47,9 @@ class Node:
         self.ctrl = Controller(**{k: P("control/" + k, v) for k, v in DEFAULTS.items()})
         self.server = (P("server_host", "127.0.0.1"), int(P("server_port", 47011)))
         self.max_inflight = int(P("max_inflight", 2))
+        # eval below real time: a plan observed at t0 drives from t0 + apply_delay_s on tau, never earlier (the 1x one-step
+        # latency); a reply after that is applied on arrival and counted late. 0 (the competition): on arrival.
+        self.apply_delay, self.late = float(P("apply_delay_s", 0.0)), 0
         self.follow_m, self.pose = float(P("fake_follow_route_m", 0.0)), None    # > 0: route_kappa for the fake backend
         self.expert2_zone = [float(x) for x in P("expert2_zone", [])]              # [s0, s1): the server's 2nd expert set
         self.world = int(P("world", 0))                                               # RL actor: which simulator (dump dir)
@@ -158,6 +161,16 @@ class Node:
         if meta is None:
             return
         plan = Plan(meta["t0"], resp["accel"], resp["kappa"], resp["v0"])
+        t_apply = meta["t0"] + self.apply_delay
+        late = self.apply_delay > 0 and t_resp > t_apply
+        self.late += late
+        if self.apply_delay > 0 and not late:
+            rospy.Timer(rospy.Duration(max(t_apply - rospy.get_time(), 1e-3)),
+                        lambda _e: self.activate(resp, meta, plan, late), oneshot=True)
+        else:
+            self.activate(resp, meta, plan, late)
+
+    def activate(self, resp, meta, plan, late):
         with self.plan_lock:
             if resp["id"] < self.plan_id:
                 return                                  # an older request answered late: keep the newer plan
@@ -169,7 +182,7 @@ class Node:
             latency_ms=round(1e3 * (t_pub - meta["camera_newest"][0]), 1),
             camera_age_ms=[round(1e3 * (meta["t0"] - x), 1) for x in meta["camera_newest"]],
             assemble_ms=round(1e3 * (meta["w_req"] - meta["w0"]), 1), server_ms=round(1e3 * (time.perf_counter() - meta["w_req"]), 1),
-            server=resp.get("timing", {}), pick=meta["pick"], inflight=meta["inflight"], skipped=self.skipped, loc_rejected=self.guard.rejected, v=round(self.v, 3),
+            server=resp.get("timing", {}), pick=meta["pick"], inflight=meta["inflight"], skipped=self.skipped, late=late, late_total=self.late, loc_rejected=self.guard.rejected, v=round(self.v, 3),
             v0=round(float(resp["v0"]), 3), expert=resp.get("expert", 0), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info,
             plan_a=[round(float(x), 3) for x in plan.a], plan_k=[round(float(x), 5) for x in plan.k],   # the 64 steps, for path checks
             pose=[round(float(x), 3) for x in meta["pose"]] if meta["pose"] else None))))          # localization x, y, yaw at t0
