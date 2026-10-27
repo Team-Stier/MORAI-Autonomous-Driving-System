@@ -90,6 +90,9 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/managers.pids
 done
 stamp "drives started ($N managers)"
+[[ ${SYNC:-0} == 1 ]] && (for i in $(seq 600); do   # the first simulator step of every world (sync: steps.jsonl)
+  ok=1; for n in $(seq "$N"); do [[ -s $OUT/w$n/eval_map/steps.jsonl ]] || ok=0; done; (( ok )) && break; sleep 1; done
+  stamp "first steps ($(cat "$OUT"/w*/eval_map/steps.jsonl 2> /dev/null | wc -l) so far)") &
 (sleep 240; bash "$HERE/measure.sh" 120 > "$OUT/cpu.txt" 2>&1) &
 for p in $(cat /root/actor/managers.pids); do wait "$p"; done
 stamp "laps done"

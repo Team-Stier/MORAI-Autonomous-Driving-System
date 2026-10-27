@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # sync_bench.sh NAME DELIVER COMBO...: speed of the synchronous evaluation (README "sync") on this pod, per combination
 # COMBO = N:TICK_MS:MODE (worlds, simulator step 100 | 50 ms, o = the reply awaited during the next tick, s = before it),
-# e.g. 1:100:o 1:50:o 2:100:o 4:100:o 4:100:s ... in ascending N: worlds and stacks are added, never restarted, and one
-# engine (--sims of the largest N, --gather GATHER, --prep PREP) serves them all. DELIVER: a delivery dir on the volume.
+# e.g. 8:100:o 8:50:o 6:100:o 4:100:o 4:100:s ...: worlds and stacks up to N are started if missing (all at once), those
+# above N stopped (descending N needs no restarts); one engine (--sims of the largest N, --gather GATHER, --prep PREP)
+# serves them all. DELIVER: a delivery dir on the volume.
 # Per combination OUT/nN_tT_M/: N eval_manager laps (seeds 101..), MEAS_S (150) wall s after every world's first step,
 # then SIGINT (the lap so far is kept); wN/steps.jsonl (per step: tick, stack and wait times), dbg_wN.csv (model_ms),
 # gpu.csv, cpu.txt (measure.sh). Then sync_bench_summary.py OUT -> OUT/bench.json + table. Worlds, stacks and the
@@ -45,6 +46,10 @@ ENGINE=$(cat /root/actor/server.pids)
 for combo in "${COMBOS[@]}"; do
   IFS=: read -r N TICK MODE <<< "$combo"
   C=$OUT/n${N}_t${TICK}_$MODE; mkdir -p "$C"
+  for n in $(seq $((N + 1)) "$MAXN"); do
+    pkill -f "inst/$n/Player[.]log" && echo "$(date +%T) w$n stopped" >> "$OUT/worlds.log"
+    [[ -e /root/stack/$n/stack.pid ]] && { pkill -INT -s "$(cat /root/stack/$n/stack.pid)"; mv /root/stack/$n/stack.pid /root/stack/$n/stack.pid.old; }
+  done
   bash "$HERE/worlds.sh" up "$N" >> "$OUT/worlds.log" 2>&1 || { stamp "worlds failed (worlds.log)"; exit 1; }
   bash "$HERE/stacks.sh" up "$N" >> "$OUT/stacks.log" 2>&1
   for n in $(seq "$N"); do until inrosn "$n" "rosnode list 2> /dev/null" | grep -q e2e_driver; do sleep 2; done; done
