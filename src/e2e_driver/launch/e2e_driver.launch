@@ -7,6 +7,8 @@
     <param name="fake_follow_route_m" value="$(optenv E2E_FAKE_FOLLOW_ROUTE_M 0)"/>
     <!-- several stacks on one host (tools/pod/stacks.sh): a model server port per stack; unset = the yaml's -->
     <param if="$(eval optenv('E2E_SERVER_PORT', '') != '')" name="server_port" value="$(optenv E2E_SERVER_PORT 0)" type="int"/>
+    <!-- evaluation below real time (tools/pod/eval3.sh: 0.1): plans drive from t0 + this on tau; unset = the yaml's -->
+    <param if="$(eval optenv('E2E_APPLY_DELAY_S', '') != '')" name="apply_delay_s" value="$(optenv E2E_APPLY_DELAY_S 0)" type="double"/>
     <!-- the world number the node puts in its requests (RL episode managers pick their decisions from the engine dumps) -->
     <param name="world" value="$(optenv E2E_WORLD 0)" type="int"/>
   </node>

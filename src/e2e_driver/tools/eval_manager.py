@@ -38,10 +38,12 @@ lap status.
 """
 import argparse
 import base64
+import filecmp
 import gzip
 import json
 import math
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -59,7 +61,6 @@ from env_follow import combo, get as get_env, send as send_weather
 HERE = Path(__file__).resolve().parent
 MAP = HERE.parent.parent / "map"
 BC, HOST = "bc-250", "192.168.0.15"      # BC "local": commands run here (the simulator host itself)
-GRPC = HOST + ":7789"
 LAUNCHER = "~/Workspaces/scratches/morai/MoraiLauncher_Lin_Data"
 SCEN = LAUNCHER + "/SaveFile/Scenario/R_KR_PR_K-city_2025"
 ACTOR = "morai_sim_api.actor.Actor"
@@ -84,6 +85,7 @@ if SIM == "w1":
     BC, HOST, VIEW_URL = "winpc-wsl", "192.168.0.1", "http://127.0.0.1:8090/"
     W1_DATA = "C:/morai/multi-03-20261007/MoraiLauncher_Win_Data"
     SCEN = "/mnt/c/morai/multi-03-20261007/MoraiLauncher_Win_Data/SaveFile/Scenario/R_KR_PR_K-city_2025"
+GRPC = HOST + ":7789"                     # --host / --grpc / --launcher: one world of several on a host (tools/pod/eval3.sh)
 OFFICIAL = "~/morai-eval-official"      # on bc-250 (fetch_official_tools.sh)
 SPAWN_SHA = "5ecc827f5fcbd1cbe00aabb5b01aa01e6d1f87293345d61c20ba5d139210a2f6"    # morai-docs assets/catalog.json
 WTC_SHA = "8c47f48a8d54b79b657920a661f582bd587c9f9065b6b55c9e911d42a0369609"
@@ -417,9 +419,12 @@ def deploy(a):
             sys.exit(f"official programs missing or changed on {BC}:{OFFICIAL}: run tools/fetch_official_tools.sh (or --direct)")
     for src, dst in ((HERE / "scenario_variants.py", "morai-eval-scenario-variants.py"),
                      (MAP / "2026_molit_comp_global_path.txt", "morai-eval-global-path.txt"),
-                     (HERE / "viewer.py", "morai-eval-viewer.py")):
-        subprocess.run(["scp", "-q", str(src), f"{BC}:{dst}"], check=True)
-    subprocess.run(["scp", "-q", str(HERE / "wtc.py"), f"{BC}:morai-eval-wtc.py"], check=True)
+                     (HERE / "viewer.py", "morai-eval-viewer.py"), (HERE / "wtc.py", "morai-eval-wtc.py")):
+        if BC != "local":
+            subprocess.run(["scp", "-q", str(src), f"{BC}:{dst}"], check=True)
+        elif not (Path.home() / dst).exists() or not filecmp.cmp(src, Path.home() / dst, shallow=False):
+            tmp = Path.home() / f".{dst}.{os.getpid()}"       # managers of other worlds may be reading it: replace atomically
+            shutil.copy(src, tmp); os.replace(tmp, Path.home() / dst)
     if not a.direct:                                      # a fresh program connected to the running simulator
         ssh("python3 ~/morai-eval-wtc.py down")
         print(ssh(f"python3 ~/morai-eval-wtc.py up {OFFICIAL}/WeatherTimeChanger_Linux", 60).strip(), flush=True)
@@ -463,8 +468,15 @@ def main():
     ap.add_argument("--port", type=int, default=8091)
     ap.add_argument("--no-view", action="store_true")
     ap.add_argument("--direct", action="store_true", help="returns and weather over gRPC instead of the official programs")
+    ap.add_argument("--host", help="simulator host over ssh, or local (default: bc-250, or winpc with EVAL_SIM=w1)")
+    ap.add_argument("--grpc", help="the world's gRPC host:port (default HOST:7789)")
+    ap.add_argument("--launcher", help="the world's MoraiLauncher_Lin_Data (MSC link file, scene folder)")
     a = ap.parse_args()
-    a.direct = a.direct or SIM == "w1"
+    global BC, GRPC, LAUNCHER, SCEN
+    BC, GRPC = a.host or BC, a.grpc or GRPC
+    if a.launcher:
+        LAUNCHER, SCEN = a.launcher, a.launcher + "/SaveFile/Scenario/R_KR_PR_K-city_2025"
+    a.direct = a.direct or SIM == "w1" or not GRPC.endswith(":7789")   # the official programs only talk to 7789
     mgr = Manager(a)
     deploy(a)
     serve(mgr, a.port)
