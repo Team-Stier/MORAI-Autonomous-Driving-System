@@ -47,12 +47,12 @@ fi
 if [[ $DELIVER == b2:* ]]; then
   src=${DELIVER#b2:}; DELIVER=$V/models/$(basename "$src"); mkdir -p "$DELIVER"
   ( b2env; $V/venv-tools/bin/b2 sync --threads 32 --no-progress "b2://morai2026-alpamayo/${src%/}/" "$DELIVER/" > "$OUT/b2_deliver.log" 2>&1 ) &
-  SYNC=$!
+  DSYNC=$!
 fi
 bash "$HERE/worlds.sh" up "$N" > "$OUT/worlds.log" 2>&1 &
 WORLDS=$!
 E2E_APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} bash "$HERE/stacks.sh" up "$N" > "$OUT/stacks.log" 2>&1
-[[ -n ${SYNC:-} ]] && { wait $SYNC && stamp "delivery synced from B2 ($(du -sh "$DELIVER" | cut -f1))" || { stamp "B2 sync failed"; exit 1; }; }
+[[ -n ${DSYNC:-} ]] && { wait $DSYNC && stamp "delivery synced from B2 ($(du -sh "$DELIVER" | cut -f1))" || { stamp "B2 sync failed"; exit 1; }; }
 if [[ -e /root/actor/server.pids ]] && kill -0 "$(cat /root/actor/server.pids)" 2> /dev/null; then
   ENGINE=$(cat /root/actor/server.pids); ln -sf "$(readlink -f /proc/$ENGINE/fd/1)" "$OUT/server.log"
   stamp "engine already up (pid $ENGINE): $(tr '\0' ' ' < /proc/$ENGINE/cmdline | grep -o -- '--sims.*')"
