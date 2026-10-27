@@ -20,6 +20,7 @@ mkdir -p $V/apt/archives/partial $V/apt/lists/partial
 printf 'Dir::Cache::Archives "%s/apt/archives";\nDir::State::Lists "%s/apt/lists";\nAPT::Keep-Downloaded-Packages "true";\nBinary::apt::APT::Keep-Downloaded-Packages "true";\n' \
   "$V" "$V" > /etc/apt/apt.conf.d/99volume
 FIRST=0; [[ -s $V/rootfs/delta.tar ]] || FIRST=1
+MOUNTED='--exclude=etc/hostname --exclude=etc/hosts --exclude=etc/resolv.conf'   # docker's bind mounts: not files to replace
 if (( FIRST )); then
   apt-get update -qq
   # MORAI Linux: Vulkan loader (the NVIDIA ICD comes with the driver capabilities), X libs for Xvfb, ko_KR locale (the
@@ -30,7 +31,7 @@ if (( FIRST )); then
     python3-xlib python3-pil ffmpeg curl ca-certificates git > /dev/null
   locale-gen ko_KR.UTF-8 > /dev/null
 else
-  tar -xpf $V/rootfs/delta.tar -C /
+  tar -xpf $V/rootfs/delta.tar -C / $MOUNTED             # (10/27: these three stopped a boot before sshd)
 fi
 # ssh (GraphQL-deployed pods get the key only from the PUBLIC_KEY env that eval_pod.sh sets)
 mkdir -p ~/.ssh /run/sshd && chmod 700 ~/.ssh
@@ -78,7 +79,7 @@ fi
   && touch $V/venv-engine/.ok; }
 if (( FIRST )); then
   find / -xdev \( -path /proc -o -path /sys -o -path /dev -o -path /run -o -path /tmp -o -path /root -o -path /workspace \
-    -o -path /var/log -o -path /var/cache \) -prune -o -cnewer /tmp/setup.start -print | grep -E '^/(usr|etc|var/lib|opt|bin|sbin|lib)' > /tmp/delta.list
+    -o -path /var/log -o -path /var/cache \) -prune -o -cnewer /tmp/setup.start -print | grep -E '^/(usr|etc|var/lib|opt|bin|sbin|lib)' | grep -vxE '/etc/(hostname|hosts|resolv.conf)' > /tmp/delta.list
   mkdir -p $V/rootfs && tar -cf $V/rootfs/delta.tar.new --no-recursion -T /tmp/delta.list 2> /dev/null && mv $V/rootfs/delta.tar.new $V/rootfs/delta.tar
   log "delta for later boots: $(wc -l < /tmp/delta.list) files, $(du -h $V/rootfs/delta.tar | cut -f1)"
 fi

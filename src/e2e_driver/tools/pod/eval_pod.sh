@@ -8,7 +8,7 @@
 #   Env: RUNPOD_API_KEY (default: ~/.runpod/config.toml), VOLUME (1tra2qsxbl, EU-CZ-1), GPUS ("NVIDIA GeForce RTX 5090
 #   NVIDIA RTX PRO 6000 Blackwell Server Edition"), VCPU (32), MEM_GB (60), BUDGET_USD (watchdog cap per pod, 6),
 #   KEEP=1 leaves the pod running at the end (stop it yourself), CREATE_ONLY=1 stops after setup (first boot, tests),
-#   SIM_FPS / APPLY_DELAY_S pass through to eval3.sh (worlds.sh TargetFrameRate cap; tau delay of a plan, 0.1).
+#   EVAL_MAX_MIN (110): create to end of eval3 before giving up; SIM_FPS / APPLY_DELAY_S pass through to eval3.sh (worlds.sh TargetFrameRate cap; tau delay of a plan, 0.1).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
@@ -61,13 +61,14 @@ for i in $(seq 120); do
 done
 printf 'Host pod\n  HostName %s\n  Port %s\n  User root\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n  ServerAliveInterval 30\n' "$ip" "$port" > "$SSHC"
 P() { ssh -F "$SSHC" pod "$@"; }
-until P true 2> /dev/null; do sleep 3; done
+late() { (( $(date +%s) - ${T0%.*} > $1 )) && { log "$2: gave up"; exit 1; }; true; }   # the trap terminates the pod
+until P true 2> /dev/null; do late 900 "no ssh 15 min after create (setup.sh died before sshd? /workspace/setup.<host>.log)"; sleep 3; done
 log "ssh up ($ip:$port)"
 rsync -rlt --delete -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ --exclude '*.onnx' \
   --exclude object_detector/models --exclude traffic_light/models "$REPO/" pod:/workspace/MORAI-Autonomous-Driving-System/
 rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/
 log "code synced"
-until P "test -e /workspace/setup.\$(hostname).log && grep -q 'setup.*done\|rror' /workspace/setup.\$(hostname).log"; do sleep 3; done
+until P "test -e /workspace/setup.\$(hostname).log && grep -q 'setup.*done\|rror' /workspace/setup.\$(hostname).log"; do late 1500 "setup"; sleep 3; done
 P "tail -3 /workspace/setup.\$(hostname).log; nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; nproc --all" | tee -a "$LOCAL/eval_pod.log"
 P "grep -q 'setup.*done' /workspace/setup.\$(hostname).log" || { log "setup failed"; exit 1; }
 log "setup done"
@@ -77,7 +78,7 @@ P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod 
    (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $NAME $DELIVER ${SEEDS[*]} \
    > /workspace/results/$NAME.log 2>&1 < /dev/null &)"
 log "eval3 running: ssh -F $SSHC pod tail -f /workspace/results/$NAME.log"
-until P "test -e /workspace/results/$NAME/DONE || ! pgrep -f '[e]val3.sh $NAME' > /dev/null"; do sleep 20; done
+until P "test -e /workspace/results/$NAME/DONE || ! pgrep -f '[e]val3.sh $NAME' > /dev/null"; do late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; sleep 20; done
 rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4.raw' pod:/workspace/results/$NAME/ pod:/workspace/results/$NAME.log "$LOCAL/"
 P "test -e /workspace/results/$NAME/DONE" && log "done: $LOCAL" || log "eval3 stopped early: $LOCAL/$NAME.log"
 cat "$LOCAL/summary.txt" 2> /dev/null
