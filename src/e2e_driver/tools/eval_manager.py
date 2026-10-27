@@ -58,7 +58,8 @@ from env_follow import combo, get as get_env, send as send_weather
 
 HERE = Path(__file__).resolve().parent
 MAP = HERE.parent.parent / "map"
-BC, HOST = "bc-250", "192.168.0.15"
+BC, HOST = "bc-250", "192.168.0.15"      # BC "local": commands run here (the simulator host itself)
+GRPC = HOST + ":7789"
 LAUNCHER = "~/Workspaces/scratches/morai/MoraiLauncher_Lin_Data"
 SCEN = LAUNCHER + "/SaveFile/Scenario/R_KR_PR_K-city_2025"
 ACTOR = "morai_sim_api.actor.Actor"
@@ -183,7 +184,8 @@ def shade_test(area):
 
 
 def ssh(cmd, timeout=150):
-    return subprocess.run(["ssh", BC, cmd], capture_output=True, text=True, timeout=timeout).stdout
+    return subprocess.run(["bash", "-c", cmd] if BC == "local" else ["ssh", BC, cmd], capture_output=True, text=True,
+                          timeout=timeout).stdout
 
 
 def msc(action, option="", timeout=30):
@@ -213,7 +215,7 @@ def make_scene(seed):
 
 class Manager:
     def __init__(self, a):
-        self.a, self.sim, self.clock = a, Sim(f"{HOST}:7789"), Clock()
+        self.a, self.sim, self.clock = a, Sim(GRPC), Clock()
         sys.path.insert(0, a.scorer)
         from bag import episode_from_rows
         from scorer import KMap, load_config, score
@@ -240,14 +242,14 @@ class Manager:
             return
         how = "official"
         if self.a.direct or not self.official_weather(w, int(h)):
-            send_weather(f"{HOST}:7789", w, int(h))
+            send_weather(GRPC, w, int(h))
             how = "grpc"
         lap["weather"].append([section, w, int(h), round(t, 2), how])
 
     def official_weather(self, w, h):
         ssh(f"python3 ~/morai-eval-wtc.py set {w} {h}", 30)
         for _ in range(20):                               # the program sets them from a worker thread
-            if get_env(f"{HOST}:7789") == (w, h):
+            if get_env(GRPC) == (w, h):
                 return True
             time.sleep(0.1)
         print(f"official weather/time program did not set {w} {h}: gRPC instead", flush=True)
