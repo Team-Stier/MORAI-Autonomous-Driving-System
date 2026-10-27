@@ -477,6 +477,7 @@ def main():
     if a.launcher:
         LAUNCHER, SCEN = a.launcher, a.launcher + "/SaveFile/Scenario/R_KR_PR_K-city_2025"
     a.direct = a.direct or SIM == "w1" or not GRPC.endswith(":7789")   # the official programs only talk to 7789
+    signal.signal(signal.SIGINT, signal.default_int_handler)   # background starts (eval3.sh) inherit SIGINT ignored
     mgr = Manager(a)
     deploy(a)
     serve(mgr, a.port)
