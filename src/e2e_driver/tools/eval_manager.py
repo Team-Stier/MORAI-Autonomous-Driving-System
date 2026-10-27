@@ -33,6 +33,11 @@ Alpamayo-Cosmos tools/scorer (collision, signal, speed and lane penalties; check
 Clock: bc-250 runs below real time and gRPC gives only the host clock (GetTimestamp = host microseconds), so rows and
 lap times are on the simulator clock estimated from the Ego state: rho = sum |d pos| / sum |v| dt over the trailing
 5 s while moving (the stack's sim_clock idea with exact positions). Wall-clock lap times are recorded too.
+Sync (--sync PORT, tools/pod eval with SYNC=1): the world runs in MORAI's synchronous mode (tick period --tick-ms, set
+anew after each scene load) and this manager is its only clock. Per step: Ego state -> the checks above on the exact
+simulation time -> the stack's step through its sync_clock_node on 127.0.0.1:PORT (the command for this step latched,
+the request sent on the 0.1 s grid; --serial: its reply awaited before the tick) -> Tick(1). Each step's wall-time
+breakdown goes to OUT/NAME/steps.jsonl. --max-s ends a lap after that much driving (speed measurements).
 Viewer: http://localhost:8091 shows the simulator window (viewer.py on bc-250: MJPEG on 192.168.0.15:8090) and the
 lap status.
 """
@@ -64,6 +69,7 @@ BC, HOST = "bc-250", "192.168.0.15"      # BC "local": commands run here (the si
 LAUNCHER = "~/Workspaces/scratches/morai/MoraiLauncher_Lin_Data"
 SCEN = LAUNCHER + "/SaveFile/Scenario/R_KR_PR_K-city_2025"
 ACTOR = "morai_sim_api.actor.Actor"
+SIMU = "morai_sim_api.simulation.Simulation"
 EGO = {"id": {"value": "Ego"}, "object_type": "OBJECT_TYPE_VEHICLE", "client_key": ""}   # any key works on a launcher sim
 
 CP_R, LIMIT_S, START_S, START_FRAC, RETURN_S = 3.0, 900.0, 60.0, 0.05, 15.0    # rules §3-2
@@ -159,6 +165,30 @@ class Clock:
         return self.tau
 
 
+class SyncLink:
+    """the stack's sync_clock_node: one JSON line each way per simulator step."""
+
+    def __init__(self, port):
+        import socket
+        for _ in range(600):                              # the stack may still be starting
+            try:
+                self.sock = socket.create_connection(("127.0.0.1", port), timeout=5.0)
+                break
+            except OSError:
+                time.sleep(1.0)
+        else:
+            raise RuntimeError(f"no sync_clock_node on port {port}")
+        self.sock.settimeout(None)
+        self.f = self.sock.makefile("rw")
+
+    def step(self, dt, decide, serial):
+        self.f.write(json.dumps(dict(dt=dt, decide=decide, serial=serial)) + "\n"); self.f.flush()
+        line = self.f.readline()
+        if not line:
+            raise RuntimeError("sync_clock_node closed the connection")
+        return json.loads(line)
+
+
 class Track:
     """progress s along the global path (~0.5 m vertices): window search from the last vertex, global after a jump."""
 
@@ -232,6 +262,32 @@ class Manager:
         self.out = Path(a.out).expanduser() / a.name
         self.out.mkdir(parents=True, exist_ok=True)
         self.status, self.history = "starting", []
+        if a.sync:                                        # the simulator's clock: k steps of dt since the first lap
+            self.dt, self.k, self.link = a.tick_ms / 1000.0, 0, SyncLink(a.sync)
+            self.m = max(1, round(0.1 / self.dt))         # steps per decision
+            self.clock.rho = 1.0
+            self.steplog = open(self.out / "steps.jsonl", "a")
+
+    def set_sync(self, on):
+        req = {"type": 2, "tick_period": self.a.tick_ms} if on else {"type": 0}
+        self.sim.call("SetSynchronousMode", req, svc=SIMU, timeout=30)
+        return self.sim.call("GetSynchronousMode", {}, svc=SIMU)
+
+    def tick(self, w_ego):
+        """sync: the stack's step at this state (command latched, request sent on the decision grid), then one tick."""
+        decide = self.k % self.m == 0
+        w0 = time.perf_counter()
+        r = self.link.step(self.dt, decide, self.a.serial)
+        w1 = time.perf_counter()
+        ts = self.sim.call("Tick", {"value": 1}, svc=SIMU, timeout=60)
+        w2 = time.perf_counter()
+        ms = lambda a, b: round(1e3 * (b - a), 1)
+        self.steplog.write(json.dumps(dict(k=self.k, tau=round(self.k * self.dt, 3), wall=round(time.time(), 3), decide=decide,
+                                           ego_ms=ms(w_ego, w0), stack_ms=ms(w0, w1), tick_ms=ms(w1, w2), frame=ts.get("frame_count"),
+                                           elapsed=ts.get("elapsed_time"), **{k: r[k] for k in ("ack_ms", "tx_ms", "ack_timeout", "tx_timeout")},
+                                           ack=r.get("ack"))) + "\n")
+        self.k += 1
+        self.clock.tau = self.k * self.dt
 
     def off_road(self, x, y, yaw):
         c, s = math.cos(yaw), math.sin(yaw)
@@ -279,6 +335,8 @@ class Manager:
     def run_lap(self, k):
         seed = self.a.seed * 1000 + k
         name, shaded, meta = make_scene(seed)
+        if self.a.sync:
+            self.set_sync(False)                          # the tick period applies when sync mode is entered
         msc("pause")
         r = msc("load-scene", name + "/62", 90)
         if not r.startswith("ok"):
@@ -287,6 +345,8 @@ class Manager:
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
         self.weather(lap, seed, 0, 0.0)
+        if self.a.sync:
+            lap["sync"] = dict(mode=self.set_sync(True), tick_ms=self.a.tick_ms, serial=self.a.serial, k0=self.k)
         played = threading.Event()                      # MSC confirms play 1-15 s late (10/26): record from the paused START on
         threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
         tr, clock = self.track, self.clock
@@ -300,9 +360,9 @@ class Manager:
         interrupted = False
         try:
             while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
-                t = time.time()
+                t, w_ego = time.time(), time.perf_counter()
                 e = self.ego()
-                tau = clock.step(t, e["x"], e["y"], e["v"])
+                tau = clock.tau if self.a.sync else clock.step(t, e["x"], e["y"], e["v"])
                 clk.append((round(t, 3), round(tau, 3)))
                 s, lat = tr.update(e["x"], e["y"])
                 shade = shaded(e["x"], e["y"])
@@ -330,6 +390,8 @@ class Manager:
                         end = "time_limit"
                     elif t_play is not None and tau - t_play > START_S and best_s < START_FRAC * tr.s[-1]:
                         end = "start_fail"
+                    elif self.a.max_s and lt > self.a.max_s:
+                        end = "max_s"
                     t_end, lap_s = tau, lt
                 # drive failures -> return to the last checkpoint passed
                 if e["hit"]:
@@ -355,11 +417,14 @@ class Manager:
                     lap["returns"].append(dict(t=round(lt, 2), to=passed, reason=why, s=round(s, 1), how=how))
                     tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
                     grace, clock.last = tau + GRACE_S, None
-                self.status = (f"lap {k} {name}  t {lt:6.1f} s (wall {t - w_play:6.1f})  rho {clock.rho:.2f}\n"
+                self.status = (f"lap {k} {name}  t {lt:6.1f} s (wall {t - w_play:6.1f})  {'sync' if self.a.sync else 'rho'} {clock.rho:.2f}\n"
                                f"CP {passed}/14  s {s:7.1f} m  lat {lat:4.1f} m  v {e['v'] * 3.6:5.1f} km/h  {'shadow ' if shade else ''}"
                                f"{'/'.join(map(str, lap['weather'][-1][1:3])) if lap['weather'] else ''}\n"
                                f"returns {len(lap['returns'])}" + (f"  last: {lap['returns'][-1]}" if lap["returns"] else ""))
-                time.sleep(max(0.0, 1.0 / HZ - (time.time() - t)))
+                if self.a.sync:
+                    self.tick(w_ego)
+                else:
+                    time.sleep(max(0.0, 1.0 / HZ - (time.time() - t)))
         except KeyboardInterrupt:                         # Ctrl-C: keep the lap so far, then stop
             interrupted, lap_s, end = True, (lap_s if end else lt), end or "interrupted"
         msc("pause")
@@ -471,6 +536,10 @@ def main():
     ap.add_argument("--host", help="simulator host over ssh, or local (default: bc-250, or winpc with EVAL_SIM=w1)")
     ap.add_argument("--grpc", help="the world's gRPC host:port (default HOST:7789)")
     ap.add_argument("--launcher", help="the world's MoraiLauncher_Lin_Data (MSC link file, scene folder)")
+    ap.add_argument("--sync", type=int, help="MORAI synchronous mode: the stack's sync_clock_node port (see above)")
+    ap.add_argument("--tick-ms", type=int, default=100, choices=(50, 100), help="--sync: simulator step (100: one per decision, 50: two)")
+    ap.add_argument("--serial", action="store_true", help="--sync: each decision's reply before the tick (default: during it)")
+    ap.add_argument("--max-s", type=float, default=0.0, help="end a lap after this many seconds of driving (0: off)")
     a = ap.parse_args()
     global BC, GRPC, LAUNCHER, SCEN
     BC, GRPC = a.host or BC, a.grpc or GRPC
@@ -490,6 +559,9 @@ def main():
     finally:
         signal.signal(signal.SIGINT, signal.SIG_IGN)     # a second Ctrl-C must not cut the clean-up short
         msc("pause")
+        if a.sync:
+            mgr.steplog.close()
+            mgr.set_sync(False)
         if not a.direct:
             ssh("python3 ~/morai-eval-wtc.py down")
         if not a.no_view and SIM == "w1":

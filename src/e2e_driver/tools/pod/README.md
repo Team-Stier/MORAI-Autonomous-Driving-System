@@ -76,6 +76,23 @@ bash eval_pod.sh  r2c /workspace/models/wowmayo_final 7                    # 볼
 - 그래서 권장은 `eval_pods.sh`(GPU마다 시뮬 1대)다. 10/27 winpc 1대 평가(100 ms 초과 16.8 %)와 같은 조건이다.
 
 
+## sync: MORAI 동기 모드 평가 (`SYNC=1`, 10/28)
+- 시뮬은 tick 사이에 멈추고 world마다 `eval_manager.py --sync`가 유일한 시계다. 그래서 late는 구조상 0이다.
+  - 실제 대회(1배속, 5080에서 100 ms 넘는 스텝 16.8 %)보다 낙관적인 조건이다.
+- 한 스텝(TICK_MS 100 또는 50): Ego 상태와 판정 → 스택 단계 → `Tick(1)`.
+  - 스택 단계는 `sync_clock_node.py`(sim_clock 자리, 포트 47100+n)를 거친다.
+  - e2e 노드 `on_sync`가 τ의 센서를 기다리고, τ+0.1 몫의 계획을 적용하고, 명령을 낸다. 0.1 s 격자에서는 요청을 보낸다.
+  - 명령이 speed_filter와 브릿지(500 Hz, 명령 timeout 30 s)를 지나면 `/clock`을 τ+dt로 올린다. tick 동안 받은 센서는 tick이 끝나는 시각으로 찍힌다.
+- 1-step 지연 규칙은 그대로다. τ의 프레임으로 만든 계획은 τ+0.1부터 적용한다.
+  - overlap(기본): 답을 다음 tick 동안 기다린다.
+  - `SERIAL=1`: tick 전에 기다린다. 결과 주행은 같고 wall 시간만 다르다.
+- 엔진은 `--gather 0.1`로 최근 2 s 안에 요청한 world들의 요청을 한 묶음으로 모은다. 전처리는 `--prep process`다.
+- 속도 측정: `sync_bench.sh NAME DELIVER 1:100:o 1:50:o 2:100:o ...` → `bench.txt`(sim-s/s, $/sim-h, 결정당 wall 내역, model_ms, GPU, VRAM, CPU).
+  - worlds, 스택, 엔진은 그대로 남는다. `SYNC=1 TICK_MS=.. KEEP_UP=1 eval3.sh`가 그것을 다시 쓴다.
+- Mac 점검: 가짜 rospy, 가짜 시뮬, 가짜 서버로 실제 노드, sync_clock_node, SyncLink를 돌렸다.
+  - 100/50 ms × overlap/serial과 느린 서버(250 ms)에서 모두 통과했다: 계획은 정확히 t0+0.1에 적용됐고, 카메라 나이는 0, 노드 속도는 tick 뒤 값, 스텝당 명령은 1개였다.
+
+
 # RL actor pod (RunPod, RTX 5090 ×1)
 
 Alpamayo-Cosmos `RL_PLAN.md` 3.1의 actor 한 대: MORAI 리눅스 3대, ROS 폐루프 스택 3개, 묶음 추론 엔진 1개, world마다 에피소드 관리자 1개.

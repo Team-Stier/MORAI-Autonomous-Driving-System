@@ -52,13 +52,13 @@ def make_backend(a):
 
 
 class Poked(queue.Queue):
-    """a Queue(1) that sets a shared event on put (serve_batch waits for any simulator's request)."""
+    """a Queue(1) that sets a shared event on put (serve_batch waits for any simulator's request); t = the last put."""
 
     def __init__(self, poke):
-        super().__init__(1); self.poke = poke
+        super().__init__(1); self.poke, self.t = poke, -1e9
 
     def put(self, item, *a, **k):
-        super().put(item, *a, **k); self.poke.set()
+        super().put(item, *a, **k); self.t = time.monotonic(); self.poke.set()
 
 
 def client_threads(conn, backend, proc, dump, ready, lock=None):
@@ -159,7 +159,9 @@ def serve_batch(a, backend):
     every simulator has one ready. Exploration std: --rl-sigma, or a request's own "sigma" (0 for an evaluation lap).
     --lora-watch: a new LoRA version (latest.json) is merged in between batches. --dump DIR keeps DIR/worldW/req_ID.bin
     (the request) and out_ID.bin (the response: actions, chain, logp, expert, lora_version) per decision, W = the
-    request's "world" (the node's ~world, the episode manager's), or DIR/simK/ without one."""
+    request's "world" (the node's ~world, the episode manager's), or DIR/simK/ without one. --gather S (synchronous
+    evaluation, the worlds tick in step): after the first ready request, wait up to S s until every simulator that sent
+    one in the last 2 s has one, so they run as one batch (a world loading a scene, or an idle stack, is not waited for)."""
     sims = a.sims
     poke, lock = threading.Event(), threading.Lock()
     readies, slots = [Poked(poke) for _ in range(sims)], [None] * sims
@@ -201,6 +203,10 @@ def serve_batch(a, backend):
     n, t_poll, ms = 0, 0.0, lambda x: round(1e3 * x, 1)
     while True:
         poke.wait(); poke.clear()
+        end = time.monotonic() + a.gather
+        while a.gather and time.monotonic() < end and any(c is not None and rq.empty() and end - rq.t < 2.0 + a.gather
+                                                          for c, rq in zip(slots, readies)):
+            poke.wait(max(end - time.monotonic(), 0.0)); poke.clear()
         jobs = []
         for k, rq in enumerate(readies):
             try:
@@ -267,6 +273,8 @@ def main():
                          "with the run thread; prep_proc.py)")
     ap.add_argument("--sims", type=int, default=0,
                     help="RL actor: serve N simulators at once, batched (serve_batch); 0 = the deployment server (one client)")
+    ap.add_argument("--gather", type=float, default=0.0, help="--sims: wait up to this many s for every connected "
+                    "simulator's request before a batch (synchronous evaluation)")
     ap.add_argument("--rl-sigma", default="0", help="--sims: exploration std per Euler step (one value or one per step; "
                     "0 = deterministic); a request's own 'sigma' overrides it")
     ap.add_argument("--expert2", nargs="?", const="", default=None, metavar="LORA",

@@ -56,9 +56,12 @@ case ${1:-} in
     # cap sets the RTF (~0.06 x fps) with the same physics step and camera rate per simulator second (10/27 pod)
     pref TargetFrameRate "${SIM_FPS:-60}"
     pids=()
-    for n in $(seq "${2:-3}"); do start1 "$n" || exit 1; prep1 "$n" & pids+=($!); done   # starts one at a time: the gRPC pref
+    for n in $(seq "${2:-3}"); do   # starts one at a time (the gRPC pref); a world already up stays as it is
+      pgrep -f "inst/$n/Player[.]log" > /dev/null && { echo "w$n already up"; continue; }
+      start1 "$n" || exit 1; prep1 "$n" & pids+=($!)
+    done
     for p in "${pids[@]}"; do wait "$p" || exit 1; done
-    bash "$HERE/pin.sh" ;;
+    [[ ${SKIP_PIN:-0} == 1 ]] || bash "$HERE/pin.sh" ;;
   down) pkill -f "[S]imulator.real"; sleep 3; pkill -x Xvfb; true ;;
   status) for p in $(pgrep -f "[S]imulator.real"); do echo "$p $(readlink /proc/$p/cwd) $(taskset -pc $p | sed 's/.*: //')"; done ;;
   *) sed -n 2,12p "$0"; exit 1 ;;

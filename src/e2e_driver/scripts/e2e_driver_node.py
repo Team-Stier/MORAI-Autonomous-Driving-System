@@ -8,6 +8,8 @@ outstanding, so the server prepares the next request while its model runs the cu
 reply into a Plan (64 x (a, kappa)); /control_cmd is published once as soon as a plan arrives and then at control_rate_hz
 from the newest plan (control.Controller). /e2e_driver/debug (std_msgs/String, JSON) carries per-step timings:
 latency_ms = command publish time - receipt stamp of the newest front-camera frame used.
+Sync mode (~sync, tools/pod eval with MORAI synchronous mode): no loops; sync_clock_node.py sends each simulator step
+and the node answers it (on_sync) with the command for that step and, on the 0.1 s grid, the request of that step.
 """
 import json
 import math
@@ -53,7 +55,11 @@ class Node:
         self.follow_m, self.pose = float(P("fake_follow_route_m", 0.0)), None    # > 0: route_kappa for the fake backend
         self.expert2_zone = [float(x) for x in P("expert2_zone", [])]              # [s0, s1): the server's 2nd expert set
         self.world = int(P("world", 0))                                               # RL actor: which simulator (dump dir)
-        self.guard = PoseGuard()                                                     # localization guard (on_ego)
+        # synchronous evaluation (MORAI sync mode, sync_clock_node.py): no timers; each simulator step arrives on ~sync
+        # and is acked on ~sync_ack once its command is out (on_sync)
+        self.sync, self.sync_wait = bool(P("sync", False)), float(P("sync_wait_s", 0.5))
+        self.status_msg, self.n_status, self.ready, self.cv = None, 0, [], threading.Condition()
+        self.guard = PoseGuard()                                                  # localization guard (on_ego)
         self.teleport, self.restart_loc = TeleportDetector(), bool(P("restart_localization_on_teleport", True))
         self.teleport_pub = rospy.Publisher("~teleport", Header, queue_size=2)       # vlp16_bev, sim_clock reset on it
         self.sock, self.pending, self.next_id, self.skipped = None, {}, 0, 0
@@ -93,6 +99,12 @@ class Node:
             threading.Thread(target=rosnode.kill_nodes, args=(["/localization_node"],), daemon=True).start()
 
     def on_status(self, m):
+        if self.sync:                   # the step applies the newest: status flows at wall rate, some sent before the tick ended
+            self.status_msg, self.n_status = m, self.n_status + 1
+            return
+        self.apply_status(m)
+
+    def apply_status(self, m):
         t = m.header.stamp.to_sec()
         if self.teleport.status(t, m.yaw_rad, m.signed_velocity_mps):
             self.teleported(t, "heading jump")
@@ -155,12 +167,18 @@ class Node:
         if self.sock is sock:
             self.sock = None
             self.pending.clear()           # unanswered on a dead connection: else max_inflight blocks the reconnect (10/27)
+            with self.cv:
+                self.cv.notify_all()
 
     def on_reply(self, resp, t_resp):
         meta = self.pending.pop(resp.get("id"), None)
         if meta is None:
             return
         plan = Plan(meta["t0"], resp["accel"], resp["kappa"], resp["v0"])
+        if self.sync:                                   # on_sync activates it at t0 + apply_delay: never late
+            with self.cv:
+                self.ready.append((resp, meta, plan)); self.cv.notify_all()
+            return
         t_apply = meta["t0"] + self.apply_delay
         late = self.apply_delay > 0 and t_resp > t_apply
         self.late += late
@@ -170,13 +188,13 @@ class Node:
         else:
             self.activate(resp, meta, plan, late)
 
-    def activate(self, resp, meta, plan, late):
+    def activate(self, resp, meta, plan, late, t=None):
         with self.plan_lock:
             if resp["id"] < self.plan_id:
-                return                                  # an older request answered late: keep the newer plan
+                return False                            # an older request answered late: keep the newer plan
             self.plan, self.plan_id = plan, resp["id"]
-        info = self.publish(rospy.get_time())
-        t_pub = rospy.get_time()
+        info = self.publish(rospy.get_time() if t is None else t)
+        t_pub = rospy.get_time() if t is None else t
         self.debug.publish(String(data=json.dumps(dict(
             n=resp["id"], t0=meta["t0"], s=round(meta["s"], 2), nav=meta["nav"], problems=meta["problems"],
             latency_ms=round(1e3 * (t_pub - meta["camera_newest"][0]), 1),
@@ -186,6 +204,7 @@ class Node:
             v0=round(float(resp["v0"]), 3), expert=resp.get("expert", 0), a0=round(float(plan.a[0]), 3), kappa0=round(float(plan.k[0]), 5), cmd=info,
             plan_a=[round(float(x), 3) for x in plan.a], plan_k=[round(float(x), 5) for x in plan.k],   # the 64 steps, for path checks
             pose=[round(float(x), 3) for x in meta["pose"]] if meta["pose"] else None))))          # localization x, y, yaw at t0
+        return True
 
     def infer_loop(self):
         period = 1.0 / self.rate
@@ -195,46 +214,88 @@ class Node:
             if rest > 0:
                 rospy.sleep(rest)                               # on tau when /use_sim_time: 10 Hz of simulation time
             next_t = max(next_t + period, rospy.get_time() - period)        # do not burst after a stall
-            t0, w0, t_wall = rospy.get_time(), time.perf_counter(), time.time()   # t0 on tau (sim clock), w0 wall for timings
-            s = self.tracker.s_at(self.odo.at(t0))
-            if s is None:
-                rospy.logwarn_throttle(5.0, "e2e_driver: no route progress yet (waiting for /localization/ego)")
-                continue
-            if len(self.pending) >= self.max_inflight:
-                self.skipped += 1                       # the server is behind: skip this tick rather than queue up
-                continue
-            nav = self.route.nav_text(s)
-            req, problems = self.inputs.request(t0, nav, lidar=self.lidar)
-            if req is None:
-                rospy.logwarn_throttle(5.0, "e2e_driver: inputs not ready: %s", problems)
-                continue
-            if self.follow_m > 0 and self.pose is not None:
-                req["route_kappa"] = float(self.route.pursuit_kappa(s, *self.pose, self.follow_m))
-            req["t_wall"], req["world"] = t_wall, self.world   # host clock at t0 (rl_reward joins on it), simulator
-            if self.expert2_zone and self.expert2_zone[0] <= s < self.expert2_zone[1]:
-                req["expert"] = 1                       # RL_PLAN 5 A: the section expert (model_server --expert2)
-            try:
-                if self.sock is None:
-                    self.connect()
-                rid, self.next_id = self.next_id, self.next_id + 1
-                req["id"] = rid
-                pick = req.pop("pick", None)                    # frame selection stats: debug only, not sent
-                if self.reset_vit:
-                    req["reset"], self.reset_vit = True, False
-                self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"], pick=pick, pose=self.pose,
-                                         w0=w0, w_req=time.perf_counter(), inflight=len(self.pending))
-                wire.send(self.sock, req)
-            except Exception as e:
-                rospy.logerr_throttle(2.0, "e2e_driver: model server: %s", e)
-                self.sock = None
-                rospy.sleep(0.2)
+            self.request(rospy.get_time())
+
+    def request(self, t0):
+        """one model request on the inputs at t0 (tau) -> its id, or None (no route progress, server behind, inputs not
+        ready, server unreachable)."""
+        w0, t_wall = time.perf_counter(), time.time()                       # w0 wall for timings
+        s = self.tracker.s_at(self.odo.at(t0))
+        if s is None:
+            rospy.logwarn_throttle(5.0, "e2e_driver: no route progress yet (waiting for /localization/ego)")
+            return None
+        if len(self.pending) >= self.max_inflight:
+            self.skipped += 1                       # the server is behind: skip this tick rather than queue up
+            return None
+        nav = self.route.nav_text(s)
+        req, problems = self.inputs.request(t0, nav, lidar=self.lidar)
+        if req is None:
+            rospy.logwarn_throttle(5.0, "e2e_driver: inputs not ready: %s", problems)
+            return None
+        if self.follow_m > 0 and self.pose is not None:
+            req["route_kappa"] = float(self.route.pursuit_kappa(s, *self.pose, self.follow_m))
+        req["t_wall"], req["world"] = t_wall, self.world   # host clock at t0 (rl_reward joins on it), simulator
+        if self.expert2_zone and self.expert2_zone[0] <= s < self.expert2_zone[1]:
+            req["expert"] = 1                       # RL_PLAN 5 A: the section expert (model_server --expert2)
+        try:
+            if self.sock is None:
+                self.connect()
+            rid, self.next_id = self.next_id, self.next_id + 1
+            req["id"] = rid
+            pick = req.pop("pick", None)                    # frame selection stats: debug only, not sent
+            if self.reset_vit:
+                req["reset"], self.reset_vit = True, False
+            self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"], pick=pick, pose=self.pose,
+                                     w0=w0, w_req=time.perf_counter(), inflight=len(self.pending))
+            wire.send(self.sock, req)
+            return rid
+        except Exception as e:
+            rospy.logerr_throttle(2.0, "e2e_driver: model server: %s", e)
+            self.sock = None
+            (time.sleep if self.sync else rospy.sleep)(0.2)          # the sync clock stands still until the ack
+            return None
+
+    def on_sync(self, m):
+        """one simulator step at t = m.stamp (sync mode; frame_id hold, or decide | decide_serial on the 0.1 s grid). sync_clock_node set
+        /clock to t before the tick, so the bridge stamped the tick's sensors t. Wait (sync_wait_s at most) until every
+        camera that sends has a frame of t and a status arrived after the tick, apply that status, activate the plans due
+        by t (waiting for their replies: a plan observed at t0 drives from t0 + apply_delay_s, never late), publish the
+        command for t once, send the request of t when deciding (serial: and wait for its reply), then ack."""
+        t, n0, w0 = m.stamp.to_sec(), self.n_status, time.perf_counter()
+        while time.perf_counter() - w0 < self.sync_wait and (self.n_status == n0 or any(
+                self.inputs.latest(c) is not None and self.inputs.latest(c) < t - 1e-4 for c in CAMERAS)):
+            time.sleep(0.001)
+        w1 = time.perf_counter()
+        stale = [c for c in CAMERAS if self.inputs.latest(c) is not None and self.inputs.latest(c) < t - 1e-4] + (["status"] if self.n_status == n0 else [])
+        if self.status_msg is not None:
+            self.apply_status(self.status_msg)
+        due = lambda r: r["t0"] + self.apply_delay <= t + 1e-6
+        with self.cv:
+            waited = self.cv.wait_for(lambda: not any(due(r) for r in list(self.pending.values())), timeout=30.0)
+            ready, self.ready = [r for r in self.ready if due(r[1])], [r for r in self.ready if not due(r[1])]
+        w2 = time.perf_counter()
+        if not any([self.activate(resp, meta, plan, False, t) for resp, meta, plan in sorted(ready, key=lambda r: r[0]["id"])]):
+            self.publish(t)
+        rid = self.request(t) if m.frame_id.startswith("decide") else None
+        w3 = time.perf_counter()
+        if rid is not None and m.frame_id == "decide_serial":
+            with self.cv:
+                waited = self.cv.wait_for(lambda: rid not in self.pending, timeout=30.0) and waited
+        ms = lambda a, b: round(1e3 * (b - a), 1)
+        self.sync_ack.publish(String(data=json.dumps(dict(
+            t=t, rid=rid, plans=len(ready), stale=stale, timeout=not waited, sensors_ms=ms(w0, w1), plans_ms=ms(w1, w2),
+            request_ms=ms(w2, w3), reply_ms=ms(w3, time.perf_counter())))))
 
 
 def main():
     rospy.init_node("e2e_driver")
     node = Node()
-    rospy.Timer(rospy.Duration(1.0 / node.control_rate), node.control_loop)
-    threading.Thread(target=node.infer_loop, daemon=True).start()
+    if node.sync:
+        node.sync_ack = rospy.Publisher("~sync_ack", String, queue_size=5, tcp_nodelay=True)
+        rospy.Subscriber("~sync", Header, node.on_sync, queue_size=1, tcp_nodelay=True)
+    else:
+        rospy.Timer(rospy.Duration(1.0 / node.control_rate), node.control_loop)
+        threading.Thread(target=node.infer_loop, daemon=True).start()
     rospy.spin()
 
 

@@ -7,15 +7,20 @@
 # the VLP-16 port), model server port 47011 (one batched engine) or 47011+n-1 with ENGINE_PORT_STEP=1, CPU affinity
 # STACK_CPUS (all stacks share it), node param world = n (in its requests). Logs and pids: /root/stack/n/.
 # E2E_FAKE_FOLLOW_ROUTE_M passes through (fake backend).
+# SYNC=1 (MORAI synchronous mode, eval_manager.py --sync): sync_clock_node.py instead of sim_clock (manager port
+# 47100+n), the node in sync mode, and the bridge's command timeout off
+# (30 s: a step can take longer than 0.25 s of wall time) with sends at 500 Hz (the command reaches MORAI within 2 ms).
 set -uo pipefail
 V=${V:-/workspace}; WS=${WS:-$V/MORAI-Autonomous-Driving-System}; R=${STACK_ROOT:-/root/stack}
 
 config() {  # n -> $R/n/bridge.yaml: the same-PC bridge config with world n's ports
   local n=$1 d=$R/$1; mkdir -p "$d/ros" "$d/tmp"
-  python3 - "$WS/src/e2e_driver/config/bridge_same_pc.yaml" "$d/bridge.yaml" $(( (n - 1) * 1000 )) <<'PY'
+  python3 - "$WS/src/e2e_driver/config/bridge_same_pc.yaml" "$d/bridge.yaml" $(( (n - 1) * 1000 )) "${SYNC:-0}" <<'PY'
 import sys, yaml
-src, dst, off = sys.argv[1], sys.argv[2], int(sys.argv[3])
+src, dst, off, sync = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "1"
 c = yaml.safe_load(open(src))
+if sync:
+    c["control"].update(command_timeout_sec=30.0, send_rate_hz=500.0)
 for cam in c["cameras"].values():
     cam["port"] += off
 for k in ("gps", "imu", "status"):
@@ -32,12 +37,13 @@ up1() {
   # TMPDIR: the bridge writes its runtime config to $TMPDIR/morai-udp-bridge-<uid>.yaml, one name for every stack
   ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=$d/ros TMPDIR=$d/tmp MORAI_BRIDGE_CONFIG=$d/bridge.yaml \
   E2E_SERVER_PORT=$((47011 + (n - 1) * ${ENGINE_PORT_STEP:-0})) E2E_WORLD=$n OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
-  VLP_PORT=$((2368 + off)) MASTER_PORT=$((11310 + n)) \
+  VLP_PORT=$((2368 + off)) MASTER_PORT=$((11310 + n)) E2E_SYNC=${SYNC:-0} \
+  CLOCK="$([[ ${SYNC:-0} == 1 ]] && echo "sync_clock_node.py _port:=$((47100 + n))" || echo sim_clock_node.py)" \
   setsid taskset -c "${STACK_CPUS:-0-$(($(nproc) - 1))}" bash -c '
     source /opt/ros/noetic/setup.bash; source devel/setup.bash
     roscore -p $MASTER_PORT & for i in $(seq 100); do rosnode list > /dev/null 2>&1 && break; sleep 0.1; done
     rosparam set /use_sim_time true
-    rosrun e2e_driver sim_clock_node.py &
+    rosrun e2e_driver $CLOCK &
     bash src/MORAI-UDP-Bridge-Node/launch.sh &
     roslaunch velodyne_pointcloud VLP16_points.launch port:=$VLP_PORT &
     for p in vlp16_bev tf_publisher lidar_leveler localization section_annotator e2e_driver speed_filter; do bash src/$p/launch.sh & done
