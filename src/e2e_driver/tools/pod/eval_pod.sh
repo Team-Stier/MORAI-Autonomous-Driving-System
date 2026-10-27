@@ -17,7 +17,7 @@
 #   README "sync") and the seeds run in waves of N, the parts kept up between them; REDRAW (1): scenes that failed the
 #   replay check are drawn anew once (new seeds, one more wave).
 #   ATTACH=<pod/instance id> (ATTACH_T0 = its create epoch): run the eval on a box this script set up before.
-#   PROVIDER=vast OFFER=<vastai offer id> (with BUNDLE): a vast instance instead (B2 keys from the vast account's env
+#   PROVIDER=vast OFFER="<vastai offer id> ..." (with BUNDLE; the next offer when one is not running after LOAD_MIN, 6): a vast instance instead (B2 keys from the vast account's env
 #   vars, ssh keys from the account; vastai CLI on the Mac). LAPS=K: K laps per world (seed S -> scenes S*1000+k);
 #   LAP_DELIVER=1: each lap's 1x phone video (< 24 MB) and one-line report go to B2 runs/eval_vps/NAME/lap_KK/ and, from
 #   the Mac, to the user's Discord DM (bot token in ~/.claude/channels/discord/.env, never printed; a failed attachment
@@ -64,18 +64,23 @@ if [[ -n ${ATTACH:-} ]]; then   # a box this script started before (its eval3 di
   POD=$ATTACH; T0=${ATTACH_T0:-$T0}
   price() { vastai show instance "$POD" --raw | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["dph_total"], 3))'; }
   log "attached to $POD"
-elif [[ ${PROVIDER:-runpod} == vast ]]; then   # one offer, chosen beforehand (vastai search offers); Vulkan needs graphics caps
-  r=$(vastai create instance "${OFFER:?OFFER=<vast offer id>}" --image ros:noetic-ros-base-focal --disk 150 --ssh --direct \
-      --env "-e NVIDIA_DRIVER_CAPABILITIES=all -e NVIDIA_VISIBLE_DEVICES=all" --label "wowmayo-eval-$NAME" --onstart-cmd "$start" --raw)
-  POD=$(echo "$r" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("new_contract") or "")' 2> /dev/null)
-  [[ -n $POD ]] || { log "vast create failed: $r"; exit 1; }
-  T0=$(date +%s.%N | cut -c1-14); log "vast create: instance $POD (offer $OFFER)"
-  price() { vastai show instance "$POD" --raw | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["dph_total"], 3))'; }
-  for i in $(seq 180); do
-    read -r ip port st < <(vastai show instance "$POD" --raw | python3 -c 'import json,sys; d=json.load(sys.stdin); p=(d.get("ports") or {}).get("22/tcp") or [{}]
+elif [[ ${PROVIDER:-runpod} == vast ]]; then   # offers chosen beforehand (vastai search offers); Vulkan needs graphics caps
+  for off in ${OFFER:?OFFER=<vast offer id(s), tried in order>}; do   # a host may sit in 'loading' (image pull) for long
+    r=$(vastai create instance "$off" --image ros:noetic-ros-base-focal --disk 150 --ssh --direct \
+        --env "-e NVIDIA_DRIVER_CAPABILITIES=all -e NVIDIA_VISIBLE_DEVICES=all" --label "wowmayo-eval-$NAME" --onstart-cmd "$start" --raw)
+    POD=$(echo "$r" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("new_contract") or "")' 2> /dev/null)
+    [[ -n $POD ]] || { log "vast create $off failed: $r"; continue; }
+    T0=$(date +%s.%N | cut -c1-14); log "vast create: instance $POD (offer $off)"
+    for i in $(seq $(( ${LOAD_MIN:-6} * 12 ))); do
+      read -r ip port st < <(vastai show instance "$POD" --raw | python3 -c 'import json,sys; d=json.load(sys.stdin); p=(d.get("ports") or {}).get("22/tcp") or [{}]
 print(d.get("public_ipaddr") or "-", p[0].get("HostPort") or "-", d.get("actual_status"))')
-    [[ $ip != - && $port != - && $st == running ]] && break; sleep 5
+      [[ $ip != - && $port != - && $st == running ]] && break; sleep 5
+    done
+    [[ $st == running && $port != - ]] && break
+    log "instance $POD still '$st' after ${LOAD_MIN:-6} min: destroyed, next offer"; vastai destroy instance "$POD" -y > /dev/null; POD=
   done
+  [[ -n $POD ]] || { log "no vast offer came up"; exit 1; }
+  price() { vastai show instance "$POD" --raw | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["dph_total"], 3))'; }
   log "vast instance $POD: $st, $(price) \$/h, ssh $ip:$port"
 else
 for try in $(seq $(( ${RETRY_MIN:-30} + 1 ))); do         # stock is Low: every GPU x volume, then again a minute later

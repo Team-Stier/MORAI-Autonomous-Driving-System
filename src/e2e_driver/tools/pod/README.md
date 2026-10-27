@@ -1,5 +1,81 @@
 # 폐루프 평가 pod (RunPod, `eval_pod.sh` / `eval_pods.sh`)
 
+## 빠른 사용법: 새 5090에서 무작위 장면 주행 영상 받기 (10/28)
+
+### 준비 (Mac, 한 번만)
+- `vastai` CLI에 로그인한다.
+  - vast 계정 환경 변수에 `B2_APPLICATION_KEY_ID`, `B2_APPLICATION_KEY`가 있어야 한다(`vastai show env-vars`).
+  - Mac의 ssh 키가 vast 계정에 등록돼 있어야 한다.
+- `~/.morai-secrets/`에 `config.tar`와 `V2AccountInfo.byte`를 둔다(권한 600, 대회 계정). B2에는 올리지 않는다.
+- `~/.claude/channels/discord/.env`에 `DISCORD_BOT_TOKEN`을 둔다. 영상과 요약을 디스코드 DM으로 보낼 때 쓴다.
+- B2 기동 묶음은 `podimg/v1`(27.1 GB)이다. 코드나 납품본이 바뀌면 볼륨 pod에서 `bundle.py pack v2`를 돌린다.
+
+### 1. 상자 고르기 (바퀴당 비용 = 시간당 요금 × 한 바퀴 wall. 실시간 RTF는 CPU 단일 스레드에 좌우된다)
+```bash
+vastai search offers 'gpu_name=RTX_5090 num_gpus=1 rentable=true verified=true cpu_ghz>=4.5 inet_down>=900 reliability>0.98 cpu_ram>=30 cpu_cores_effective>=16' -o 'dph+'
+```
+- 최소 사양: RTX 5090 1장, vCPU 16 이상(cgroup quota 15 이상), RAM 30 GB 이상, 디스크 150 GB 이상.
+  - 회선이 1 Gbps 이상이어야 10분 안에 뜬다. 598 Mbps에서는 묶음 받기만 6분이다.
+- RunPod: `PROVIDER`를 빼고 `BUNDLE=v1`만 주면 Secure 5090($1.19/h)을 아무 데이터센터에서나 빌린다. B2 키는 RunPod secret에서 온다.
+- Brev: 10/28 기준 5090이 없다.
+
+### 2. 명령 한 줄
+```bash
+cd src/e2e_driver/tools/pod
+PROVIDER=vast OFFER="<offer id 1> <offer id 2> <offer id 3>" BUNDLE=v1 LAPS=8 LAP_DELIVER=1 VIEW_FPS=15 EVAL_MAX_MIN=300 \
+  bash eval_pod.sh <이름, 예: 20261028-rt8> /workspace/models/wowmayo_final <시드, 예: 28>
+```
+- `OFFER`에는 후보를 여러 개 준다. 6분(`LOAD_MIN`) 안에 running이 안 되면 그 상자를 지우고 다음 후보로 넘어간다.
+  - 10/28 프랑스 호스트는 이미지 내려받기에서 19분 동안 멈춰 있었다.
+- 순서: 상자 생성 → B2 묶음 받기(32 MB 구간 48개씩 동시에) → 계정 파일과 코드 → setup → 시뮬·스택·엔진 → 바퀴마다 무작위 장면 → 주행.
+  - 바퀴가 끝날 때마다 다음이 나온다:
+    - 1배속 폰 영상(20 MB 이하. DM 첨부가 21.3 MB에서 실패했다)
+    - 한 줄 요약: 완주·감점·복귀, late, model_ms, 날씨, 터널, 동적 물체, NPC, 재생 확인
+    - B2 `runs/eval_vps/<이름>/lap_KK/`와 디스코드 DM. 첨부가 실패하면 B2 7일 링크를 보낸다.
+- 옵션:
+  - `LAPS`: 바퀴 수(같은 world에서 이어서 돈다).
+  - 시드 S: 바퀴 k의 장면은 S·1000+k다. 실시간 평가는 GPU 1장에 world 1대라서 시드를 하나만 준다.
+  - `VIEW_FPS`: 영상용 화면 캡처 fps.
+  - `EVAL_MAX_MIN`: 생성부터 이만큼 지나면 포기하고 지운다.
+  - `REDRAW`(1): 재생 확인에 실패한 장면을 다시 뽑는다.
+  - `SYNC=1`: 동기 모드, 아래 "sync". 이때 world 수는 호스트 크기로 자동으로 정한다.
+- **자동 삭제:** 마지막 바퀴의 전달과 결과 회수(`~/morai-eval/pod/<이름>/`)가 끝나면 상자를 지운다. 오류, Ctrl-C, 시간 초과 때도 지운다.
+  - vast는 `destroy -y`, RunPod은 DELETE를 쓴다.
+  - 남기려면 `KEEP=1`이다.
+  - 상자 안의 idle watchdog도 GPU가 15분 놀면 상자를 멈춘다.
+- 이미 띄운 상자에 다시 붙이기: `ATTACH=<instance id> ATTACH_T0=<생성 epoch> PROVIDER=vast …`
+
+### 새 상자 기동 실측 (10/28, vast 58001997: 노르웨이 Ryzen 9 7900X 5.74 GHz, 24 vCPU, 60 GB, 929 Mbps, $0.695/h, `LAPS=1`)
+| 단계 | 생성 후 |
+|---|---|
+| running(이미지 받기) | 0:52 |
+| ssh | 0:59 |
+| 묶음 27.1 GB 받기 끝(252 s, 108 MB/s. 회선이 한계다) | 5:28 |
+| setup 끝 | 5:46 |
+| eval3 시작 | 5:56 |
+| world 로그인·지도·프리셋과 엔진 준비(가중치 5 s, 캐시 워밍업. 그동안 world는 멈춘다) | 7:14 |
+| **첫 주행 step** | **7:15** |
+| 1바퀴 끝(시뮬 757 s, wall 15.2분, RTF 0.83) | 22:29 |
+| 영상(15 fps 캡처 → 1배속 540p 20 MB 이하)·요약·B2 | 27:21 |
+| **디스코드 DM 도착** | **27:27** |
+| 결과를 Mac으로 회수하고 상자 삭제 | 28:20 |
+
+- 비용: 1바퀴 상자 약 $0.33.
+- 10분이 넘는 경우:
+  - 회선이 느린 경우: 598 Mbps 상자는 묶음 받기에 358 s가 걸렸다.
+  - 호스트의 이미지 받기가 멈춘 경우: `LOAD_MIN` 뒤 다음 후보로 넘어간다.
+- 바퀴가 끝난 뒤 영상까지 약 4.5분이 걸린다(프레임 모으기와 인코딩 두 번). 줄이려면 `VIEW_FPS`를 10으로 내린다.
+
+### 비용 예 (10/28 실측)
+| 상자 | 요금 | 한 바퀴 | 비고 |
+|---|---|---|---|
+| vast 48989799 (7800X3D 5.05 GHz, 16 vCPU, 598 Mbps) | $0.563/h | wall 12.6분(RTF 0.84) → 약 $0.12 | 8바퀴에 약 $1.2 |
+| vast 58001997 (7900X 5.74 GHz, 24 vCPU, 929 Mbps) | $0.695/h | wall 15.2분(RTF 0.83) | 기동부터 첫 영상까지 $0.33 |
+
+- 주의: 실시간 평가의 late는 RTF에 따라 달라진다.
+  - RTF 0.83–0.84에서는 τ 100 ms가 벽시계 약 120 ms다. 엔진 왕복(p50 약 126 ms: 전처리 28 ms + 모델 78–85 ms)이 그 예산을 넘는 일이 잦아, late가 바퀴에 따라 9–73 %였다.
+  - 스택의 시뮬 시계 추정(ρ)이 빗나간 구간은 100 %였다.
+
 WoWmayo 납품본 하나를 MORAI 리눅스 시나리오 여러 개로 동시에 평가한다. 실행은 Mac에서 명령 하나다.
 
 ```bash
@@ -139,6 +215,29 @@ bash eval_pod.sh  r2c /workspace/models/wowmayo_final 7                    # 볼
 - `eval_pod.sh`(Mac): `SYNC=1 BUNDLE=v1 VOLUMES= bash eval_pod.sh NAME /workspace/models/wowmayo_final 1 2 3 …`
   - 데이터센터 제한이 없다. 계정 파일을 넣고, 코드를 동기화하고, 호스트 크기로 N을 정한다.
   - 시드를 N개씩 묶어 파도로 돌린다. 재생 확인에 실패한 장면은 새 시드로 한 번 더 뽑는다.
+
+### 실시간 1:1 평가 + 바퀴별 전달 (10/28)
+- GPU 1장에 world 1대, free-run 모드다. 10/27 평가와 같은 조건이다: 10 Hz, 계획은 τ+0.1부터 적용하고 늦은 답은 late로 센다. 조향은 e009536이다.
+- 같은 world에서 `LAPS`바퀴를 돈다. 시드 S로 장면 S·1000+k를 공급하고, GT 재생 확인을 한다.
+- `LAP_DELIVER=1`: 바퀴가 끝날 때마다 pod의 `lap_deliver.sh`가 다음을 한다.
+  - 1배속 폰 영상을 24 MB 아래로 만든다.
+  - `lap_report.py`로 한 줄 요약을 만든다: 완주·감점·복귀, late %, model_ms p50/p95, 날씨, 터널, 동적 물체, NPC, 재생 확인.
+  - B2 `runs/eval_vps/NAME/lap_KK/`에 올리고, 영상의 7일 링크와 함께 `lap_KK.ready`를 남긴다.
+  - Mac의 `eval_pod.sh`가 그 영상과 요약을 디스코드 DM으로 보낸다. 첨부가 실패하면 링크를 보낸다.
+- 명령(Mac): `PROVIDER=vast OFFER=<id> BUNDLE=v1 LAPS=8 LAP_DELIVER=1 VIEW_FPS=15 EVAL_MAX_MIN=300 bash eval_pod.sh NAME /workspace/models/wowmayo_final 28`
+- 제공자 선택(10/28):
+  - 실시간 RTF는 CPU 단일 스레드 속도에 좌우된다.
+  - vast의 5 GHz대 Ryzen 5090이 $0.50–0.77/h이고, RunPod 5090(EPYC, $1.19)보다 바퀴당 싸다.
+  - Brev에는 5090이 없었다.
+- vast 첫 기동 실측: 48989799, 한국, 7800X3D, 16 vCPU, 30 GB, 598 Mbps
+  | 단계 | 시각 |
+  |---|---|
+  | 생성 → ssh | 2분 22초 |
+  | 묶음 27.1 GB | 358 s(76 MB/s, 회선 한계) |
+  | setup | 8 s |
+  | 엔진 | 71 s(가중치 31 s, 볼륨 pod의 148 s보다 빠름) |
+  - 그날 실제로는 eval3 변수 충돌(`SYNC`) 때문에 12분을 더 썼다. 고친 뒤 기준으로 생성부터 첫 step까지 약 10분이다.
+  - 회선이 1 Gbps 이상이면 약 7–8분이다.
 
 ### 시나리오 공급·재생 (`scenario_variants.py`, `eval_manager.py --objinfo-port`)
 - 흐름: 시드 S, 바퀴 k마다 S·1000+k → 장면 생성(clcol 기준, 위치 규칙은 생성기 주석) → MSC load(일시정지) → sync on → 재생.

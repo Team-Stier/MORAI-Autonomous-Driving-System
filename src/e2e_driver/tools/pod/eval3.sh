@@ -108,9 +108,11 @@ stamp "drives started ($N managers)"
   done
   (( live )) || break; sleep 10
 done; touch "$OUT/LAPS_DELIVERED") &
-[[ ${SYNC:-0} == 1 ]] && (for i in $(seq 600); do   # the first simulator step of every world (sync: steps.jsonl)
-  ok=1; for n in $(seq "$N"); do [[ -s $OUT/w$n/eval_map/steps.jsonl ]] || ok=0; done; (( ok )) && break; sleep 1; done
-  stamp "first steps ($(cat "$OUT"/w*/eval_map/steps.jsonl 2> /dev/null | wc -l) so far)") &
+(for i in $(seq 900); do   # every world's first model step (sync: steps.jsonl; real time: a /e2e_driver/debug row)
+  ok=1; for n in $(seq "$N"); do
+    if [[ ${SYNC:-0} == 1 ]]; then [[ -s $OUT/w$n/eval_map/steps.jsonl ]] || ok=0; else (( $(wc -l < "$OUT/w$n/dbg_w$n.csv") > 1 )) || ok=0; fi
+  done; (( ok )) && break; sleep 1; done
+  stamp "first steps") &
 (sleep 240; bash "$HERE/measure.sh" 120 > "$OUT/cpu.txt" 2>&1) &
 for p in $(cat /root/actor/managers.pids); do wait "$p"; done
 stamp "laps done"
