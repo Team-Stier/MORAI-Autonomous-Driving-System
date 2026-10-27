@@ -493,6 +493,11 @@ def label_episode(ep, rec_dir, lane, gt, conv, chk, actual=False, jobs=1):
     tf = ts[:, None] + DT * np.arange(1, N_FUT + 1)[None]
     ok_hist = th[:, 0] >= G[0, 0] - 0.05
     ok_act = ok_hist & (tf[:, -1] <= G[-1, 0])
+    back = np.array([st.get("since_return_s", np.inf) for st in steps], float)   # rl_episode --returns: a checkpoint jump
+    jumps = np.unique(np.round((ts - back)[np.isfinite(back)], 2))
+    for tj in jumps:                                  # history across a jump: no label; a driven future across it: not compared
+        ok_hist &= ~((ts >= tj) & (ts < tj + DT * (N_HIST - 1) + 1e-6))
+        ok_act &= ~((ts < tj) & (ts + DT * N_FUT >= tj))
     for j in np.flatnonzero(ok_hist):
         V[j, :N_HIST], YAW[j, :N_HIST] = np.interp(th[j], G[:, 0], G[:, 4]), np.interp(th[j], G[:, 0], G[:, 3])
         Va[j], YAWa[j] = V[j], YAW[j]

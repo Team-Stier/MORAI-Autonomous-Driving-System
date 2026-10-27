@@ -38,13 +38,14 @@ case ${1:-} in
     for n in $(seq "$N"); do
       d=$([[ $n == 1 ]] && echo /root/Workspaces/scratches/morai || echo /root/inst/$n/morai)
       sh_restart=; objport=$((7505 + 1000 * (n - 1)))
-      [[ ${SHADOW:-0} == 1 ]] && { sh_restart="; bash $HERE/shadow.sh restart $n"; objport=$((27505 + 1000 * (n - 1))); }
+      hook=(); [[ ${SHADOW:-0} == 1 ]] && { sh_restart="; bash $HERE/shadow.sh restart $n"; objport=$((27505 + 1000 * (n - 1)))
+        hook=(--return-hook "bash $HERE/shadow.sh restart $n"); }   # a checkpoint return (--returns) is a jump too
       SCORER=$V/Alpamayo-Cosmos/tools/scorer setsid $V/venv-rl/bin/python -u $E2E/tools/rl_episode.py "${NAME}_w$n" \
         --scorer $V/Alpamayo-Cosmos/tools/scorer --out $V/spool --host local --direct --grpc 127.0.0.1:$((7788 + n)) \
         --world $n --dump-dir $V/dump --objinfo-port $objport --lora-latest $V/out/lora/latest.json \
         --launcher $d/MoraiLauncher_Lin_Data --port $((8091 + n)) --seed $n \
         --loc-restart "source /opt/ros/noetic/setup.bash; ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode kill /localization_node$sh_restart" \
-        ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
+        "${hook[@]}" ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
       echo $! >> $R/managers.pids
       sleep 5                                             # managers deploy the same scene tools to ~ in turn
     done

@@ -28,6 +28,13 @@ Records = the learner's spool (Alpamayo-Cosmos train/rl/episodes.py): OUT is the
                            carrying t_wall and world), moved into epK/ as K.req.bin / K.out.bin. Without --dump-dir the decisions are a
                            10 Hz grid of simulator time from play (baseline drives for the critic warm start).
   OUT/NAME/epK/done.json   {terminated, truncated, end}, written last
+  OUT/NAME/epK/objects.json.gz   every 20 Hz frame: [tau, t_wall, Object Info records (id, type, x, y, z, heading deg,
+                           length, width, height, as decode_objects gives them)] (the PPO critic's offline inputs)
+--returns (the DAgger actor, user 10/28): a failure does not end the episode: as eval_manager's laps, off road
+  (OFF_ROAD_S), stuck (STUCK_S, red time excluded; CRASH_STUCK_S after a collision) or a skipped checkpoint (SKIP_M)
+  spawns the car at the last checkpoint passed and the lap goes on (GRACE_S before the next check); --return-hook runs
+  after each. The episode records the returns (t, tau, t_wall, to, reason, s, how); steps.jsonl rows carry
+  since_return_s (simulator s since the last return) once one happened: their 1.5 s history may cross the jump.
   OUT/NAME/epK/rows.json.gz, timeline.json   the 20 Hz Ego states the scorer read and the reward timeline (rl_reward.py
                            re-joins other decision times with it)
 Hosts: --host bc-250 (ssh from the Mac, the two-PC eval set-up) or local (on the simulator host, e.g. the cloud pod). On
@@ -112,7 +119,7 @@ class Episodes(em.Manager):
         t_play = t_move = x0 = None
         prog_s, prog_t, crash_t, off_t, grace = 0.0, math.inf, -math.inf, None, math.inf
         end = t_end = None
-        waits, rng, ep["red_cap"] = {}, np.random.default_rng(seed), []
+        waits, rng, ep["red_cap"], ep["returns"], objt, tau_prev = {}, np.random.default_rng(seed), [], [], [], None
         w0 = time.time()
         while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
             t = time.time()
@@ -121,7 +128,9 @@ class Episodes(em.Manager):
             clk.append((round(t, 3), round(tau, 3)))
             s, lat = tr.update(e["x"], e["y"])
             shade = shaded(e["x"], e["y"])
-            self.critic.step(tau, e["x"], e["y"], e["yaw"], e["v"], s, tr.i, self.objects(), shade)
+            objs = self.objects()
+            self.critic.step(tau, e["x"], e["y"], e["yaw"], e["v"], s, tr.i, objs, shade)
+            objt.append([round(tau, 3), round(t, 3), [[o[0], o[1], *(round(float(v), 3) for v in o[2:])] for o in objs]])
             ns = int(tau * 1e9)
             rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
             rows["collision"].append((ns, [(h, e["x"], e["y"]) for h in e["hit"]]))
@@ -156,18 +165,38 @@ class Episodes(em.Manager):
                 crash_t = tau
             if s > prog_s + em.PROGRESS_M:
                 prog_s, prog_t = s, tau
+            elif self.a.returns and tau_prev is not None and e["tl"] and e["color"] & 1 and not e["color"] & 16:
+                prog_t += tau - tau_prev                  # as eval_manager: red time does not count as stuck
+            tau_prev = tau
             off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
             off_t = (off_t if off_t is not None else tau) if off else None
+            why = None                                    # --returns: eval_manager's return rules, then on from the last CP
+            if self.a.returns and end is None and t_play is not None and tau >= grace:
+                if off_t is not None and tau - off_t >= em.OFF_ROAD_S:
+                    why = "off_road"
+                elif tau - prog_t >= em.STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= em.CRASH_STUCK_S):
+                    why = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
+                elif passed < 14 and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + em.SKIP_M:
+                    why = f"missed_cp{passed + 1}"
+            if why:
+                how = self.spawn(passed)
+                ep["returns"].append(dict(t=round(tau - t_play, 2), tau=round(tau, 3), t_wall=round(t, 3), to=passed,
+                                          reason=why, s=round(s, 1), how=how))
+                tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
+                grace, clock.last = tau + em.GRACE_S, None
+                if self.a.return_hook:                    # e.g. the shadow's planners must not see the jump
+                    threading.Thread(target=lambda: subprocess.run(["bash", "-c", self.a.return_hook], capture_output=True,
+                                                                   timeout=120), daemon=True).start()
             if end is None and t_play is not None:
                 if passed >= self.a.end_cp and lat < 15.0 and s >= self.s_goal:
                     end = "goal"
                 elif passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
                     end = "slow"
-                elif tau >= grace and off_t is not None and tau - off_t >= self.min_off:
+                elif not self.a.returns and tau >= grace and off_t is not None and tau - off_t >= self.min_off:
                     end = "off_road"
-                elif tau >= grace and (tau - prog_t >= em.STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= em.CRASH_STUCK_S)):
+                elif not self.a.returns and tau >= grace and (tau - prog_t >= em.STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= em.CRASH_STUCK_S)):
                     end = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
-                elif passed < self.a.end_cp and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + em.SKIP_M:
+                elif not self.a.returns and passed < self.a.end_cp and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + em.SKIP_M:
                     end = f"missed_cp{passed + 1}"
                 elif tau - t_play > self.limit_s:
                     end = "time_limit"
@@ -176,11 +205,15 @@ class Episodes(em.Manager):
                            f"s {s:7.1f}/{self.s_goal:.0f} m  v {e['v'] * 3.6:5.1f} km/h  {end or ''}")
             time.sleep(max(0.0, 1.0 / em.HZ - (time.time() - t)))
         em.msc("pause")
-        self.finish(ep, rows, clk, end, t_play, t_end, time.time() - w0)
+        self.finish(ep, rows, clk, end, t_play, t_end, time.time() - w0, objt)
 
-    def finish(self, ep, rows, clk, end, t_play, t_end, wall_s):
+    def finish(self, ep, rows, clk, end, t_play, t_end, wall_s, objt=()):
         k = ep["episode"]
         d = self.out / f"ep{k:05d}"
+        with gzip.open(d / "objects.json.gz", "wt") as f:   # every 20 Hz frame: Object Info as decode_objects gives it
+            json.dump(dict(fields=["tau", "t_wall", "objects"],
+                           object_fields=["id", "type", "x", "y", "z", "heading_deg", "length", "width", "height"],
+                           frames=objt), f)
         labels, sm = self.score(self.episode_from_rows(rows, self.cfg, "rl_episode"), self.kmap, self.cfg)
         t0 = rows["ego_status"][0][0] / 1e9               # scorer frame t = 0
         tl = rl_reward.timeline(labels, sm, self.cfg, t0, end, t_end, self.s_goal, clk)
@@ -200,6 +233,9 @@ class Episodes(em.Manager):
         with open(d / "steps.jsonl", "w") as f:
             for j, (r, o) in enumerate(zip(recs, obs)):
                 step = dict(r, episode=tl["episode"], critic_obs=o)
+                back = [r["t_sim"] - x["tau"] for x in ep.get("returns", []) if x["tau"] <= r["t_sim"]]
+                if back:                                  # history crosses a return's jump for 1.5 s (labels: none)
+                    step["since_return_s"] = round(min(back), 3)
                 if dec:                                   # this world's engine dumps move into the episode
                     for kind, src in (("req", dec[j][1]), ("out", dec[j][2])):
                         step[kind] = f"{j:05d}.{kind}.bin"
@@ -214,7 +250,8 @@ class Episodes(em.Manager):
                   | dict(events=[ev for ev in sm["events"] if ev["type"] != "checkpoint"]))
         with open(self.out / "episodes.jsonl", "a") as f:
             f.write(json.dumps(ep, ensure_ascii=False) + "\n")
-        self.history.append(f"episode {k} {ep['scene']}: {end} {ep['t_sim']:.1f} s, penalties {sm['penalty_s']:.0f}, "
+        self.history.append(f"episode {k} {ep['scene']}: {end} {ep['t_sim']:.1f} s, returns {len(ep.get('returns', []))} "
+                            f"{[x['reason'] for x in ep.get('returns', [])]}, penalties {sm['penalty_s']:.0f}, "
                             f"return {parts['r']:.1f}, {len(recs)} decisions {sm['counts']}")
         print(self.history[-1], flush=True)
 
@@ -327,6 +364,9 @@ def main():
     ap.add_argument("--port", type=int, default=8092)
     ap.add_argument("--direct", action="store_true", help="Spawn and weather over gRPC instead of the official programs")
     ap.add_argument("--red-cap", type=float, nargs=2, metavar=("LO", "HI"), help="red waits end after a time drawn from [LO, HI] s")
+    ap.add_argument("--returns", action="store_true", help="a failure returns to the last checkpoint passed (eval_manager's "
+                    "rules) and the lap goes on; the episode ends at the goal or --limit-s")
+    ap.add_argument("--return-hook", help="shell command run (in the background) after each return")
     ap.set_defaults(sync=None, tick_ms=100, serial=False)   # eval_manager.Manager's sync-mode arguments: free-running here
     a = ap.parse_args()
     assert 0 <= a.start_cp < a.end_cp <= 14, (a.start_cp, a.end_cp)

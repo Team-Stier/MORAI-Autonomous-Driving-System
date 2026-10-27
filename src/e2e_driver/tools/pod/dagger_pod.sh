@@ -6,7 +6,7 @@
 # destroy once B2 holds the results (else after pulling them here); also on error, Ctrl-C or MAX_MIN (150) after create.
 #   Env: OFFER (vast offer ids, tried in order; eval_pod.sh), KEEP=1 leaves the box up (stop it yourself),
 #   ATTACH=<instance id> ATTACH_NAME=<its first run's name>: run again on that box (e2e_driver code synced anew).
-#   RANGE: rl_episode sections for dagger_box.sh (default the full lap).
+#   RANGE: rl_episode sections for dagger_box.sh (default the full lap); LATE_SEED: then one eval3 lap of that seed (late).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd)
 FORK=$REPO/../MORAI-Autonomous-Driving-System-collect; GT=$HOME/.claude/skills/morai-parallel-collect/scripts/wsl
@@ -48,7 +48,7 @@ trap bye EXIT; trap 'exit 130' INT TERM
 log "instance $ID up; $(vastai show instance "$ID" --raw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["dph_total"], "$/h", d.get("cpu_name"), d.get("geolocation"))')"
 P "mkdir -p /workspace/shadow/gt /workspace/results/$NAME" && scp -q -F "$SSHC" "$LOCAL/shadow_src.tar" pod:/workspace/shadow/ &&
   rsync -rlt -e "ssh -F $SSHC" --include '*.py' --exclude '*' "$GT/" pod:/workspace/shadow/gt/ || { log "push failed"; exit 1; }
-P "${RANGE:+RANGE='$RANGE' }setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/dagger_box.sh $NAME $K $D $SEED > /workspace/results/$NAME.log 2>&1 < /dev/null &"
+P "${RANGE:+RANGE='$RANGE' }${LATE_SEED:+LATE_SEED=$LATE_SEED }setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/dagger_box.sh $NAME $K $D $SEED > /workspace/results/$NAME.log 2>&1 < /dev/null &"
 for i in $(seq 30); do P "test -s /workspace/results/$NAME/timeline.txt" && break; sleep 2; done
 log "dagger_box running: ssh -F $SSHC pod tail -f /workspace/results/$NAME/timeline.txt"
 seen=0

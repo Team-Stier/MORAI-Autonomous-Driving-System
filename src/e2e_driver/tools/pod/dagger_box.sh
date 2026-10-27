@@ -14,7 +14,8 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
 NAME=$1; K=${2:-2}; D=${3:-1}; SEED=${4:-28}; OUT=$V/results/$NAME; mkdir -p "$OUT" /root/actor
-RANGE=${RANGE:---start-cp 0 --end-cp 14 --past-m 100}  # episode sections (rl_episode); e.g. "--start-cp 10 --end-cp 12" for the highway
+RANGE=${RANGE:---start-cp 0 --end-cp 14 --past-m 100 --returns --limit-s 900}   # full laps, failures return to the last CP
+# (as the video laps), 15 min; e.g. "--start-cp 10 --end-cp 12" for the highway only
 stamp() { echo "$(date +%s.%N | cut -c1-14) $(date +%T) $*" | tee -a "$OUT/timeline.txt"; }
 inrosn() { local n=$1; shift; (cd "$WS" && ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 bash -c "source /opt/ros/noetic/setup.bash; source devel/setup.bash; $*"); }
 b2env() { eval "$(tr '\0' '\n' < /proc/1/environ | grep -E '^B2_APPLICATION_KEY(_ID)?=' | sed 's/^/export /')"; }
@@ -30,7 +31,7 @@ SHADOW_CPUS=0-$((T - 1)) bash "$HERE/shadow.sh" build > "$OUT/shadow_build.log" 
 BUILD=$!
 DELIVER=$V/models/wowmayo_final
 SHADOW=1 ENGINE_ARGS="--backend engine --ckpt $DELIVER --vlm Qwen/Qwen3-VL-4B-Instruct --sims 1" \
-  RL_ARGS="$RANGE --limit-s 1100 --episodes $K --seed $SEED --red-cap $RED_CAP" \
+  RL_ARGS="--limit-s 1100 $RANGE --episodes $K --seed $SEED --red-cap $RED_CAP" \
   bash "$HERE/actor.sh" up "$NAME" 1 > "$OUT/actor.log" 2>&1
 wait $BUILD; [[ -e $V/shadow/BUILT ]] && stamp "shadow built" || { stamp "shadow build failed"; tail -30 $V/shadow/build.log; }
 grep -q "listening on" /root/actor/server0.log && stamp "engine ready: $(grep -o 'loaded in.*' /root/actor/server0.log | cut -c1-100)" || stamp "engine failed"
@@ -47,7 +48,15 @@ mv /root/actor/managers.pids /root/actor/managers.pids.old
 kill $(cat /root/actor/server.pids) 2> /dev/null; mv /root/actor/server.pids /root/actor/server.pids.old
 bash "$HERE/stacks.sh" down > /dev/null; bash "$HERE/shadow.sh" down > /dev/null
 
-if [[ ${LORA_CHECK:-1} == 1 ]]; then                  # dagger-engine: LLM LoRA swap check on this 5090 while the engine is down
+if [[ ${FRAME_CHECK:-1} == 1 ]]; then                 # dagger-engine 2e4a2bb: frames prepared ahead, engine output identity
+  mkdir -p /tmp/fs_reqs; i=0
+  for f in $V/spool/${NAME}_w1/ep*/[0-9]*.req.bin; do ln -sf "$f" /tmp/fs_reqs/req_$(printf %06d $i).bin; i=$((i + 1)); done
+  (cd $E2E && DELIVER=$DELIVER HF_HUB_OFFLINE=1 HF_HOME=$V/models/hf MORAI_VLA_PYLIB=$V/morai-student/pylib TORCHINDUCTOR_CACHE_DIR=$V/cache/inductor \
+   TRITON_CACHE_DIR=$V/cache/triton timeout 1800 taskset -c "$ENGINE_CPUS" $V/venv-engine/bin/python test/test_frame_stream.py "$DELIVER/final" /tmp/fs_reqs \
+   > "$OUT/frame_stream_check.log" 2>&1; stamp "test_frame_stream exit $?: $(grep -E 'engine ok|frame stream ok' "$OUT/frame_stream_check.log" | tr '\n' ' ' | cut -c1-200)") &
+  FSC=$!
+fi
+if [[ ${LORA_CHECK:-0} == 1 ]]; then                  # dagger-engine: LLM LoRA swap check on this 5090 while the engine is down
   mkdir -p /tmp/lora_reqs; i=0
   for f in $V/spool/${NAME}_w1/ep*/[0-9]*.req.bin; do ln -sf "$f" /tmp/lora_reqs/req_$(printf %06d $i).bin; i=$((i + 1)); done
   (cd $E2E/server && HF_HUB_OFFLINE=1 HF_HOME=$V/models/hf MORAI_VLA_PYLIB=$V/morai-student/pylib TORCHINDUCTOR_CACHE_DIR=$V/cache/inductor \
@@ -63,7 +72,8 @@ if (( D > 0 )); then                                  # the collection driver dr
   SCORER=$V/Alpamayo-Cosmos/tools/scorer setsid $V/venv-rl/bin/python -u $E2E/tools/rl_episode.py "${NAME}_drive_w1" \
     --scorer $V/Alpamayo-Cosmos/tools/scorer --out $V/spool --host local --direct --grpc 127.0.0.1:7789 --world 1 \
     --objinfo-port 27505 --launcher $d/MoraiLauncher_Lin_Data --port 8092 --seed $((SEED + 500)) \
-    --loc-restart "bash $HERE/shadow.sh restart 1" $RANGE --limit-s 1100 --episodes "$D" --red-cap $RED_CAP \
+    --loc-restart "bash $HERE/shadow.sh restart 1" --return-hook "bash $HERE/shadow.sh restart 1" --limit-s 1100 $RANGE \
+    --episodes "$D" --red-cap $RED_CAP \
     > /root/actor/drive_w1.log 2>&1 < /dev/null &
   MGR=$!; stamp "expert drive started"
   while kill -0 $MGR 2> /dev/null; do sleep 10; done
@@ -73,6 +83,7 @@ if (( D > 0 )); then                                  # the collection driver dr
 fi
 bash "$HERE/worlds.sh" down > /dev/null
 [[ -n ${LORA:-} ]] && wait $LORA
+[[ -n ${FSC:-} ]] && wait $FSC
 
 cfg=$(find "$DELIVER" -maxdepth 2 -name config.json | head -1)
 LBL="$V/venv-engine/bin/python -u $E2E/tools/dagger_label.py --rec $V/shadow/rec_w1 --gt $V/shadow/gt --config $cfg --jobs $((T - 2))"
@@ -84,4 +95,11 @@ gzip -k $V/shadow/rec_w1/*.jsonl 2> /dev/null
  $B sync --threads 16 --no-progress --exclude-regex '.*\.jsonl$' $V/shadow/rec_w1/ $P/$NAME/rec_w1/ > "$OUT/b2_rec.log" 2>&1 &&
  cp $V/shadow/build.log "$OUT/" && stamp "B2 spool and records" &&
  $B sync --threads 16 --no-progress "$OUT/" $P/$NAME/results/ > "$OUT/b2_results.log" 2>&1) && echo B2_OK > "$OUT/B2_OK" || stamp "B2 upload failed (results/$NAME/b2_*.log)"
+if [[ -n ${LATE_SEED:-} ]]; then                      # late with frames prepared ahead: eval3, one world, one lap (boot2's set-up)
+  stamp "eval3 ${NAME}_late (seed $LATE_SEED) for late"
+  LAPS=1 LAP_DELIVER=0 VIEW_FPS=${VIEW_FPS:-15} bash "$HERE/eval3.sh" "${NAME}_late" "$DELIVER" "$LATE_SEED" > "$V/results/${NAME}_late.log" 2>&1
+  stamp "eval3 late: $(head -3 $V/results/${NAME}_late/summary.txt 2> /dev/null | tr '\n' ' ' | cut -c1-300)"
+  rsync -a --exclude '*.mp4' "$V/results/${NAME}_late/" "$OUT/late_eval3/" 2> /dev/null
+  (b2env; $V/venv-tools/bin/b2 sync --threads 16 --no-progress "$OUT/late_eval3/" b2://morai2026-alpamayo/runs/dagger/shadow_debug/$NAME/late_eval3/ > /dev/null 2>&1)
+fi
 touch "$OUT/DONE"
