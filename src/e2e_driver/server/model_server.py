@@ -62,19 +62,35 @@ class Poked(queue.Queue):
 
 
 def client_threads(conn, backend, proc, dump, ready, lock=None):
-    """receive + prepare threads of one client: prepared jobs (req, sample, prepared, t_in, t, t1, t2) into `ready` (one
-    request prepared ahead of the GPU thread), then None when the client is gone. dump: req -> the directory to keep it
-    in (None: no dump). lock: serializes the in-thread preparation of several clients (tokenize's per-image cache queue
-    is shared)."""
-    inbox = queue.Queue(4)
+    """receive + warm + prepare threads of one client: prepared jobs (req, sample, prepared, t_in, t, t1, t2) into `ready`
+    (one request prepared ahead of the GPU thread), then None when the client is gone. Frames the node streams ahead of
+    its requests go to the client's FrameStore, and the warm thread makes their image records meanwhile (assemble.warm;
+    behind, it drops jobs and the request makes them). dump: req -> the directory to keep it in (None: no dump; the full
+    request, as the node used to send it). lock: serializes the in-thread preparation of several clients (tokenize's
+    per-image call queue is shared)."""
+    from assemble import FrameStore, warm
+    inbox, store, warmq = queue.Queue(4), FrameStore(), queue.Queue(32)
+    config = getattr(backend, "config", None) or getattr(getattr(backend, "model", None), "config", None)
 
     def receive():
         try:
             while True:
-                inbox.put((wire.recv(conn), time.perf_counter()))
+                m = wire.recv(conn)
+                if "frame" not in m:
+                    inbox.put((m, time.perf_counter())); continue
+                job = store.add(m)
+                if job is not None and config is not None:
+                    with contextlib.suppress(queue.Full): warmq.put_nowait(job)
         except (ConnectionError, OSError) as e:
             log.info("client gone: %s", e)
-        inbox.put(None)
+        inbox.put(None); warmq.put(None)
+
+    def warmer():
+        while (job := warmq.get()) is not None:
+            try:
+                warm(config, job)
+            except Exception as e:                         # the request makes the record itself
+                log.warning("warm %s: %s", job.get("frame", "bev"), e)
 
     def prepare():
         while True:
@@ -83,6 +99,11 @@ def client_threads(conn, backend, proc, dump, ready, lock=None):
                 ready.put(None); return
             req, t_in = job
             t = time.perf_counter()
+            try:
+                req = store.resolve(req)
+            except KeyError as e:                          # a frame the node never streamed: drop the client, it reconnects
+                log.error("request %s names frame %s it did not stream", req.get("id"), e)
+                conn.close(); ready.put(None); return
             if dump: (dump(req) / f"req_{int(req.get('id', 0)):06d}.bin").write_bytes(wire.pack(req))
             if proc is not None:                   # --prep process: build + tokenize in the worker, pin here
                 prepared, timing, assemble_s = proc(req, f"live/{req.get('id', 0)}")
@@ -96,6 +117,7 @@ def client_threads(conn, backend, proc, dump, ready, lock=None):
             ready.put((req, sample, prepared, t_in, t, t1, time.perf_counter()))
 
     threading.Thread(target=receive, daemon=True).start()
+    threading.Thread(target=warmer, daemon=True).start()
     threading.Thread(target=prepare, daemon=True).start()
 
 

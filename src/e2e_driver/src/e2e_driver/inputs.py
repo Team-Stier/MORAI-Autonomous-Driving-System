@@ -48,8 +48,10 @@ class Inputs:
     def __init__(self, horizon=2.5, prefetch=False, reuse=True):
         """prefetch: re-encode every arriving camera frame in a worker thread per camera (cv2 releases the GIL), so a
         request only reads finished step-0 JPEGs; a frame the worker has not reached yet is encoded on the spot.
-        reuse: history slots from the earlier steps' current frames (live); False: every slot as the training sample."""
-        self.horizon, self.reuse = horizon, reuse
+        reuse: history slots from the earlier steps' current frames (live); False: every slot as the training sample.
+        on_encoded(camera, t, jpeg): called by the prefetch workers with each step-0 JPEG (the node streams it to the
+        server ahead of the request)."""
+        self.horizon, self.reuse, self.on_encoded = horizon, reuse, None
         self.used = {c: deque() for c in CAMERAS}       # (t, step-0 JPEG) of the frame each request used as current
         self.cams = {c: deque() for c in CAMERAS}        # (t, raw JPEG)
         self.cache = {}                                    # (camera, t) -> step-0 JPEG
@@ -73,7 +75,9 @@ class Inputs:
     def _encode_loop(self, cam):
         while True:
             t, data = self.work[cam].get()
-            self._encode(cam, t, data)
+            jpeg = self._encode(cam, t, data)
+            if jpeg is not None and self.on_encoded is not None:
+                self.on_encoded(cam, t, jpeg)
 
     def reset(self):
         """drop everything buffered (a teleport): requests wait until the horizon has filled again."""
@@ -101,10 +105,12 @@ class Inputs:
                 pass                                          # behind: request() encodes what it picks
 
     def add_scan(self, t, height, density, pose, epoch=0):
+        """-> True if kept (newer than the last scan)."""
         with self.lock:
             if self.scans and t <= self.scans[-1][0]:
-                return
+                return False
             self.scans.append((t, height, density, np.asarray(pose, np.float64), epoch)); self._trim(self.scans, t)
+            return True
 
     def add_status(self, t, v, yaw):
         with self.lock:
@@ -131,7 +137,7 @@ class Inputs:
         lo = min(q[0][0] for q in cams.values() if q) if any(cams.values()) else t0
         with self.cache_lock:
             self.cache = {k: v for k, v in self.cache.items() if k[1] >= lo}
-        jpegs, times, newest, reused = [], [], [], 0
+        jpegs, times, stamps, newest, reused = [], [], [], [], 0
         for c in CAMERAS:
             if len(cams[c]) < N_FRAMES:
                 return None, ["camera %s: %d frames" % (c, len(cams[c]))]
@@ -165,8 +171,8 @@ class Inputs:
                     u = self.used[c]
                     if not u or u[-1][0] < tp[-1]:
                         u.append((float(tp[-1]), out[-1])); self._trim(u, t0)
-            jpegs.append(out); times.append(tp - t0); newest.append(float(tp[-1]))
-        req = dict(t0=float(t0), camera_jpegs=jpegs, camera_times=np.stack(times), camera_newest=newest, nav_text=nav_text,
+            jpegs.append(out); times.append(tp - t0); stamps.append([float(x) for x in tp]); newest.append(float(tp[-1]))
+        req = dict(t0=float(t0), camera_jpegs=jpegs, camera_times=np.stack(times), camera_stamps=stamps, camera_newest=newest, nav_text=nav_text,
                    pick=dict(reused=reused, err_ms=np.round(1e3 * (np.stack(times) - (tgt - t0)), 1).tolist()))
         if lidar:
             if len(scans) < N_FRAMES:
@@ -178,7 +184,7 @@ class Inputs:
             if len({scans[j][4] for j in k}) > 1:
                 problems.append("lidar: odometry restarted inside the 4 scans")
             req.update(scan_height=np.stack([scans[j][1] for j in k]), scan_density=np.stack([scans[j][2] for j in k]),
-                       scan_pose=np.stack([scans[j][3] for j in k]), bev_times=tau[k[[1, 3]]] - t0)
+                       scan_pose=np.stack([scans[j][3] for j in k]), bev_times=tau[k[[1, 3]]] - t0, scan_stamps=[float(tau[j]) for j in k])
         grid = t0 - DT * np.arange(N_HIST - 1, -1, -1)
         if len(ego) < 2 or ego[0][0] > grid[0] + DT:
             return None, ["ego: %.2f s of competition_status" % ((ego[-1][0] - ego[0][0]) if ego else 0.0)]

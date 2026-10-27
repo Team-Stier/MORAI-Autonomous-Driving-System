@@ -4,7 +4,9 @@ which speed_filter limits and forwards to the bridge (/morai_udp_bridge/control_
 
 Inference loop (every 1/rate_hz s): t0 = now -> inputs.Inputs.request (training-identical picks, step-0 JPEGs, re-encoded
 by per-camera worker threads as frames arrive) -> model server (TCP, e2e_driver.wire), up to max_inflight requests
-outstanding, so the server prepares the next request while its model runs the current one. A receive thread turns each
+outstanding, so the server prepares the next request while its model runs the current one. Each step-0 JPEG and LiDAR
+scan is streamed to the server as soon as the node has it, and a request names its frames by stamp (one not streamed
+yet goes right before it), so the server prepares the images ahead of the request (assemble.FrameStore). A receive thread turns each
 reply into a Plan (64 x (a, kappa)); /control_cmd is published once as soon as a plan arrives and then at control_rate_hz
 from the newest plan (control.Controller). /e2e_driver/debug (std_msgs/String, JSON) carries per-step timings:
 latency_ms = command publish time - receipt stamp of the newest front-camera frame used.
@@ -16,7 +18,7 @@ import math
 import socket
 import threading
 import time
-from collections import deque
+from collections import OrderedDict, deque
 
 import rosnode
 import rospy
@@ -63,6 +65,8 @@ class Node:
         self.teleport, self.restart_loc = TeleportDetector(), bool(P("restart_localization_on_teleport", True))
         self.teleport_pub = rospy.Publisher("~teleport", Header, queue_size=2)       # vlp16_bev, sim_clock reset on it
         self.sock, self.pending, self.next_id, self.skipped = None, {}, 0, 0
+        self.send_lock, self.sent = threading.Lock(), OrderedDict()     # frames streamed on this connection (stream())
+        self.inputs.on_encoded = self.on_encoded
         self.reset_vit = False                      # the next request tells the server to drop its ViT cache
         self.plan, self.plan_id, self.v, self.plan_lock = None, -1, 0.0, threading.Lock()
         self.applied = deque(maxlen=200)                # (t, accel, brake, steer deg left +) from competition_status (mlp mode)
@@ -82,7 +86,32 @@ class Node:
     def on_scan(self, m):
         h = np.frombuffer(m.height, np.uint8).reshape(m.rows, m.cols)
         d = np.frombuffer(m.density, np.uint8).reshape(m.rows, m.cols)
-        self.inputs.add_scan(m.header.stamp.to_sec(), h, d, (m.pose_x, m.pose_y, m.pose_yaw), m.odom_epoch)
+        t, pose = m.header.stamp.to_sec(), np.asarray((m.pose_x, m.pose_y, m.pose_yaw), np.float64)
+        if self.inputs.add_scan(t, h, d, pose, m.odom_epoch):
+            self.stream_async(("s", t), dict(frame="scan", t=t, height=h, density=d, pose=pose))
+
+    def on_encoded(self, cam, t, jpeg):
+        i = CAMERAS.index(cam)
+        self.stream_async(("c", i, t), dict(frame="cam", cam=i, t=t, jpeg=jpeg))
+
+    def stream(self, key, msg, sock):
+        """send a frame for this connection's requests to name by stamp: once per connection (again after a teleport)."""
+        with self.send_lock:
+            if key in self.sent or sock is not self.sock:
+                return
+            wire.send(sock, msg)
+            self.sent[key] = None
+            while len(self.sent) > 4096:                    # forgotten: sent again if a request still names it
+                self.sent.popitem(last=False)
+
+    def stream_async(self, key, msg):
+        """stream() from a sensor or encoder thread: no connection, or it failed: the request path handles it."""
+        sock = self.sock
+        if sock is not None:
+            try:
+                self.stream(key, msg, sock)
+            except Exception:
+                pass
 
     def teleported(self, t, why):
         """a checkpoint return or scene reload seen in the inputs (the stack is not told): start over from standstill.
@@ -91,6 +120,8 @@ class Node:
         rospy.logwarn("e2e_driver: teleport (%s): inputs, route progress and plan reset", why)
         self.inputs.reset()
         self.reset_vit = True
+        with self.send_lock:
+            self.sent.clear()                               # a stamp seen again after the reset is sent again
         self.tracker, self.odo, self.guard = RouteTracker(self.route), Odometer(), PoseGuard()
         with self.plan_lock:
             self.plan, self.plan_id = None, self.next_id                       # replies to earlier requests are dropped
@@ -156,7 +187,9 @@ class Node:
         s.settimeout(None)
         self.pending.clear()
         threading.Thread(target=self.receive_loop, args=(s,), daemon=True).start()
-        self.sock = s
+        with self.send_lock:
+            self.sent.clear()                               # a new connection: the server has none of them
+            self.sock = s
 
     def receive_loop(self, sock):
         try:
@@ -245,9 +278,17 @@ class Node:
             pick = req.pop("pick", None)                    # frame selection stats: debug only, not sent
             if self.reset_vit:
                 req["reset"], self.reset_vit = True, False
+            sock = self.sock
+            for i, (ts, jpegs) in enumerate(zip(req["camera_stamps"], req.pop("camera_jpegs"))):   # by stamp from here on
+                for t, jpeg in zip(ts, jpegs):
+                    self.stream(("c", i, t), dict(frame="cam", cam=i, t=t, jpeg=jpeg), sock)
+            if "scan_stamps" in req:
+                for t, h, d, p in zip(req["scan_stamps"], req.pop("scan_height"), req.pop("scan_density"), req.pop("scan_pose")):
+                    self.stream(("s", t), dict(frame="scan", t=t, height=h, density=d, pose=p), sock)
             self.pending[rid] = dict(t0=t0, s=s, nav=nav, problems=problems, camera_newest=req["camera_newest"], pick=pick, pose=self.pose,
                                      w0=w0, w_req=time.perf_counter(), inflight=len(self.pending))
-            wire.send(self.sock, req)
+            with self.send_lock:
+                wire.send(sock, req)
             return rid
         except Exception as e:
             rospy.logerr_throttle(2.0, "e2e_driver: model server: %s", e)
