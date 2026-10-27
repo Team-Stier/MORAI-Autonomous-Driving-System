@@ -9,6 +9,7 @@ parts() {  # "name pid..." per line
   for f in /root/stack/*/stack.pid; do [[ -e $f ]] && echo "stack:$(basename "$(dirname "$f")") $(pgrep -s "$(cat "$f")" | tr '\n' ' ')"; done
   [[ -e /root/actor/server.pids ]] && for p in $(cat /root/actor/server.pids); do echo "engine:$p $p $(pgrep -P "$p" | tr '\n' ' ')"; done
   [[ -e /root/actor/managers.pids ]] && echo "managers $(cat /root/actor/managers.pids | tr '\n' ' ')"
+  for f in /root/shadow/*/nodes.pid; do [[ -e $f ]] && echo "shadow:$(basename "$(dirname "$f")") $(pgrep -s "$(cat "$f")" | tr '\n' ' ') $(cat "$(dirname "$f")"/{rec,tee,relay_out,roscore}.pid 2> /dev/null | tr '\n' ' ')"; done
 }
 jiffies() { local s=0; for p in "$@"; do s=$((s + $(awk '{print $14+$15}' /proc/$p/stat 2>/dev/null || echo 0))); done; echo $s; }
 declare -A j0 members

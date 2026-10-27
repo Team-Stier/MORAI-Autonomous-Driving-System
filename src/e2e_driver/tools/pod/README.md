@@ -331,3 +331,77 @@ Alpamayo-Cosmos `RL_PLAN.md` 3.1의 actor 한 대: MORAI 리눅스 3대, ROS 폐
   - 판정: cgroup 합계가 quota의 85%를 넘거나 시뮬레이터 RTF가 단독 대비 20% 넘게 떨어지면, N을 줄이거나 다음 pod의 `minVcpuCount`를 올린다.
   - RTF는 `rl_episode` 상태의 rho다.
 - 측정 결과: (채울 것)
+
+# DAgger 쉐도 (`SHADOW=1`, `shadow.sh`, `dagger_label.py`, 10/28)
+
+와우마요가 운전하는 동안 R2 수집 주행기가 옆에서 계획만 한다. 판단(10 Hz)마다 전문가 라벨 64×(a, κ)를 만든다.
+
+## 구성
+- **전문가:** 수집 포크 `MORAI-Autonomous-Driving-System-collect` e2cd63a(R2 이미지 `morai-stack:e2cd63a`)에 수집 설정 `stop_timeout_sec 600`을 얹는다. 여기에 morai-parallel-collect의 GT·R2 노드를 붙인다: Ego status, GT 위치, Object Info 필터, GT AEB, GT yield, TL GT.
+  - 포크에서는 계획에 필요한 패키지만 빌드하고 띄운다: tf_publisher, section_annotator, path_planner, velocity_planner, control.
+  - `dagger_pod.sh`가 포크 스냅숏(약 65 MB tar)과 GT 노드를 상자에 넣는다. `shadow.sh build`가 상자에서 rosdep(lanelet2. 묶음에 없음)과 빌드를 한다(약 2–3분).
+- **안전:** 쉐도는 자기 ROS master(11320+n)에서 벽시계로 돈다(수집 스택과 같다).
+  - 그 master에는 브릿지가 없다.
+  - 명령은 모두 `/shadow/*`로 돌린다: control `/control_cmd` → `/shadow/control_cmd`, AEB·yield `/morai_udp_bridge/control_cmd` → `/shadow/aeb_cmd`·`/shadow/yield_cmd`.
+  - `shadow.sh check n`이 두 master의 실제 명령 토픽 발행자를 적는다.
+  - 10/28 실측: 스택 master의 `/control_cmd`는 `/e2e_driver`, `/morai_udp_bridge/control_cmd`는 `/speed_filter_node`뿐이었다. 쉐도 master의 두 토픽은 발행자 0이었다.
+- **입력:**
+  - Ego status 9095와 TL GT 7509: world에서 바로 받는다(다른 곳에서 쓰지 않는다).
+  - Object Info 7505: `udp_tee.py`가 17505(쉐도)와 27505(rl_episode)로 복사한다. 한 포트를 소켓 둘이 받으면 패킷이 나뉜다.
+  - `/vehicle/competition_status`, `/sensors/imu/data`: 스택 master에서 `shadow_relay.py`로 옮긴다. 받은 시각(벽시계)으로 다시 찍는다.
+- **기록:** `shadow_rec.py` → `$V/shadow/rec_wN/rec_*.jsonl`(벽시계, 시간당 약 0.45 GB, B2에는 gz로 올린다).
+  - 계획 `/local_path/velocity_injected`(map으로 되돌림), `/local_path`
+  - 명령(control·yield·AEB)
+  - GT 자차, GT 물체, 신호, 구간, competition status
+- **에피소드 시작:** rl_episode의 `--loc-restart`가 `shadow.sh restart n`도 부른다. 스폰은 순간이동이라 계획기를 새로 띄운다(`/local_path`까지 약 6 s, 일시정지 중).
+
+## 라벨 (`dagger_label.py`, 에피소드마다 `epK/dagger_labels.npz`)
+- 형식(러너와 약속): `step` int32 (N,) = steps.jsonl 줄 번호, `ak` float32 (N,64,2) a m/s²·κ 1/m(0.1 s), `valid` bool (N,64), `source` int8 (N,) 0 계획기 / 1 공식 차로.
+- 경로:
+  - 기본은 계획기 경로다(source 0). 단, 0.5 s 안의 계획이 차에서 5 m·0.5 rad 안에서 시작해야 한다(path_planner의 `max_initial_*`와 같다).
+  - 계획이 없거나 그 범위를 벗어나면 공식 차로 중심선(`assets/route.json`)을 쓴다(source 1).
+  - 차가 공식 차로에서 4.5 m 넘게 떨어진 경우와, 차와 30 m 앞 계획이 모두 2 m 넘게 떨어진 경우(계획기가 엉뚱한 차로를 따라감)에도 source 1이다.
+    - 예외 1: 공식 차로 위에 선 물체가 있으면 장애물 우회로 보고 계획기를 쓴다(10/28 우회 중 3–4 m).
+    - 예외 2: 고주로(구간 11–12)는 frenet_path가 차로를 고르므로 이 기준을 쓰지 않는다(전문가도 route.json 차로에서 6 m까지 떨어져 달렸다).
+  - 다음 경우에는 라벨을 비운다: 2 s 안에 계획이 없을 때, 역주행(90° 넘음), 차로에서 15 m 넘게 떨어졌을 때, 시작 1.5 s(이력 없음).
+- 굴리기: 차의 GT 자세·속도·조향에서 0.05 s씩 6.4 s.
+  - control pp 코어(pp.hpp·pp.yaml 그대로): 룩어헤드 clamp(0.6 v, 2, 15) m, 휠베이스 3.0, 조향 속도 1.047 rad/s, PI 속도 루프. 적분은 정속 상태 값에서 시작한다.
+  - speed_filter: 구간 11–12 밖에서 60 km/h를 넘으면 전제동.
+  - yield·AEB: 수집 노드 코드(`conflict`/`brake_for`, `danger`)를 그대로 불러 등속으로 옮긴 GT 물체에 적용한다. Object Info 속도는 물체 좌표라 지도 좌표로 돌린다(아래 "알려진 문제").
+  - 차량: 운동학 자전거 모델이다. 응답은 수집 주행기의 실제 주행으로 맞췄다: a = 3.56·accel − 14.1·brake − 0.15 − 0.029·v, 0.05 s 지연. pp.yaml 이득(5.74, 18.76)을 쓰면 6.4 s에 +2.5 m/s 빨랐다.
+  - **다시 계획:** velocity_planner는 시간 필터를 거친 목표 속도 하나를 경로 모든 점에 넣는다. 계획 길이도 약 50 m뿐이라, t0 계획만으로는 앞의 곡선·정지선·신호 변화를 못 본다.
+    - 그래서 굴리는 동안 0.1 s마다 그 시각의 기록된 계획으로 갈아탄다. 단, 그 계획이 굴린 차에서 3 m·0.5 rad 안에서 시작할 때만이다. `--no-replan`은 t0 계획만 쓴다.
+    - 계획이 끝나는 곳부터는 공식 차로에 velocity_planner의 곡률 속도(횡가속 2.6, 접근 감속 1.7)를 적용한다.
+- (a, κ): GT 이력 16점(시뮬 시간)에 굴린 속도·헤딩을 이어 `morai_vla.data.ego_trajectory` + `traj_to_action`에 넣는다(학습과 같다). 납품본 config.json의 action_space_cfg를 쓴다.
+- 디버그: `epK/dagger_debug.npz`(굴린 궤적, 이유, 플래그). 그림·오차표는 `dagger_eval.py RUN_DIR`(Mac)로 만든다.
+- Mac 실행: `uv run --no-project --with torch,numpy,pandas,pillow,hydra-core,einops,scipy,colorlog,pyyaml python dagger_label.py EP… --rec REC --gt <스킬 scripts/wsl> --config <납품본 config.json> --alpamayo <alpamayo f3198c2 src> --jobs 9`.
+- 시험: `dagger_label.py --selftest`, `test/dagger_label_check.py`(실제 경로 위 합성 에피소드).
+
+## 실행
+```bash
+cd src/e2e_driver/tools/pod
+OFFER="<vast offer id> ..." bash dagger_pod.sh <이름> 2 1 28     # 정책 에피소드 2, 전문가 직접 주행 1, 시드 28
+RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이름> bash dagger_pod.sh <이름> 1 1 29   # 같은 상자, 고주로만
+```
+- 상자에서 도는 순서(`dagger_box.sh`):
+  1. 쉐도 빌드와 actor 기동(world 1, 엔진 `--dump`, 스택)
+  2. 정책 에피소드(`SHADOW=1`)
+  3. 전문가가 직접 달리는 에피소드(`shadow.sh up 1 drive`, 포크 자체 브릿지·speed_filter)
+  4. 라벨 → B2
+- 에피소드는 rl_episode 규칙대로 끝난다(stuck, 충돌 뒤 stuck, 시간). 정책이 멈추면 그 랩은 거기서 끝난다.
+- B2: spool은 `runs/dagger/shadow_debug/spool/`, 기록·결과는 `runs/dagger/shadow_debug/<이름>/`에 둔다.
+- 결과는 `~/morai-eval/dagger/<이름>/`로 가져오고(엔진 덤프 제외), 끝나면 상자를 지운다.
+
+## 10/28 디버그 실행 (vast i9-12900K 5090, $0.775/h)
+- 기록: 정책 에피소드 3개(4,698판단)와 전문가 직접 주행 2개(2,476판단).
+  - 정책: 전체 랩 2개(둘 다 CP7·CP9에서 stuck), 고주로 1개.
+  - 전문가: 전체 랩 1개(CP8 회전교차로 진입에서 NPC와 충돌), 고주로 1개.
+- 라벨 오차(전문가 직접 주행, 실제로 달린 6.4 s와 비교): 이후 계획 사용 시 ADE 평균 1.45 m(중앙 0.54), 횡 0.13 m, 종 1.41 m. t0 계획만 쓰면 ADE 3.84 m(종 3.70 m). 결과: `~/morai-eval/dagger/shadow-20261028c-hw/report/`.
+- 정책 주행 타이밍(쉐도 붙임): 엔진 왕복 p50 120 ms, 모델 p50 78 ms다. 쉐도가 없던 기준과 같다.
+  - CPU는 23코어 중 6.3코어를 썼다(쉐도 1.0).
+  - late는 63–99 %다. 이 상자는 RTF가 약 1.0이라 τ 100 ms가 벽시계 100 ms이기 때문이다. 쉐도와는 상관없다.
+
+## 알려진 문제
+- **Object Info 차량 속도는 물체 좌표다.** 수집 노드(gt-yield·gt-aeb)는 이를 지도 좌표로 읽는다. 그래서 남북으로 달리는 앞차를 가로지르는 차로 보고 세운다. R2 수집 때도 그랬을 것이다. 라벨은 지도 좌표로 돌려 쓴다. 수집 노드 코드는 그대로 두었다.
+- yield가 켜진 판단(앞차 따라가기, 보행자)의 라벨 오차가 가장 크다. 등속 예측과 노드의 켜짐·꺼짐 반복 때문이다.
+- 정지 상태에서 녹색으로 바뀌는 순간: 다시 계획이 기록으로 메운다. t0 계획만 쓰면 6.4 s 정지로 남는다.

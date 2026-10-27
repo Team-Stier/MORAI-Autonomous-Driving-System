@@ -297,6 +297,7 @@ def main():
     ap.add_argument("--out", default="~/morai-eval/rl", help="the learner spool (NAME = actor)")
     ap.add_argument("--port", type=int, default=8092)
     ap.add_argument("--direct", action="store_true", help="Spawn and weather over gRPC instead of the official programs")
+    ap.set_defaults(sync=None, tick_ms=100, serial=False)   # eval_manager.Manager's sync-mode arguments: free-running here
     a = ap.parse_args()
     assert 0 <= a.start_cp < a.end_cp <= 14, (a.start_cp, a.end_cp)
     em.BC, em.GRPC, em.HOST = a.host, a.grpc, a.grpc.rsplit(":", 1)[0]

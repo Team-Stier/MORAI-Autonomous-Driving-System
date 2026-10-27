@@ -8,6 +8,8 @@
 #                 --fake-speed 9" for a plumbing test without a GPU model)
 #   CPUS_n / STACK_CPUS / ENGINE_CPUS   CPU affinities (worlds.sh; stacks and engine default to the CPUs after the worlds)
 #   RL_ARGS       extra rl_episode.py arguments (e.g. --episodes 20 --start-cp 9 --end-cp 12)
+#   SHADOW=1      the R2 collection driver as a DAgger shadow beside each world (shadow.sh, README "DAgger 쉐도"): up after
+#                 the stacks, restarted at every episode start with the localization, Object Info through its tee (27505)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
@@ -19,7 +21,7 @@ engine() {  # n server(s): one batched engine on 47011, or one per stack with EN
   local k
   for k in $(seq 0 $(( ${ENGINE_PORT_STEP:-0} ? N - 1 : 0 ))); do
     OMP_NUM_THREADS=4 MALLOC_MMAP_MAX_=0 MALLOC_TRIM_THRESHOLD_=1073741824 HF_HUB_OFFLINE=1 HF_HOME=$V/models/hf \
-    MORAI_VLA_PYLIB=$V/morai-student/pylib setsid taskset -c "$ENGINE_CPUS" $V/venv-engine/bin/python -u $E2E/server/model_server.py \
+    TORCHINDUCTOR_CACHE_DIR=$V/cache/inductor TRITON_CACHE_DIR=$V/cache/triton MORAI_VLA_PYLIB=$V/morai-student/pylib setsid taskset -c "$ENGINE_CPUS" $V/venv-engine/bin/python -u $E2E/server/model_server.py \
       $ENGINE_ARGS --port $((47011 + k)) --dump $V/dump > $R/server$k.log 2>&1 < /dev/null &
     echo $! >> $R/server.pids
   done
@@ -31,13 +33,17 @@ case ${1:-} in
     engine
     bash "$HERE/stacks.sh" up "$N"
     sleep 20                                              # nodes up, engine warm-up running
+    until grep -q "listening on" $R/server0.log || ! pgrep -f "[m]odel_server.py" > /dev/null; do sleep 2; done   # a manager before the engine drives nothing
+    [[ ${SHADOW:-0} == 1 ]] && for n in $(seq "$N"); do bash "$HERE/shadow.sh" up "$n" || exit 1; done
     for n in $(seq "$N"); do
       d=$([[ $n == 1 ]] && echo /root/Workspaces/scratches/morai || echo /root/inst/$n/morai)
+      sh_restart=; objport=$((7505 + 1000 * (n - 1)))
+      [[ ${SHADOW:-0} == 1 ]] && { sh_restart="; bash $HERE/shadow.sh restart $n"; objport=$((27505 + 1000 * (n - 1))); }
       SCORER=$V/Alpamayo-Cosmos/tools/scorer setsid $V/venv-rl/bin/python -u $E2E/tools/rl_episode.py "${NAME}_w$n" \
         --scorer $V/Alpamayo-Cosmos/tools/scorer --out $V/spool --host local --direct --grpc 127.0.0.1:$((7788 + n)) \
-        --world $n --dump-dir $V/dump --objinfo-port $((7505 + 1000 * (n - 1))) --lora-latest $V/out/lora/latest.json \
+        --world $n --dump-dir $V/dump --objinfo-port $objport --lora-latest $V/out/lora/latest.json \
         --launcher $d/MoraiLauncher_Lin_Data --port $((8091 + n)) --seed $n \
-        --loc-restart "source /opt/ros/noetic/setup.bash; ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode kill /localization_node" \
+        --loc-restart "source /opt/ros/noetic/setup.bash; ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode kill /localization_node$sh_restart" \
         ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
       echo $! >> $R/managers.pids
       sleep 5                                             # managers deploy the same scene tools to ~ in turn
@@ -45,6 +51,7 @@ case ${1:-} in
     echo "status: curl localhost:$((8092))/status (world n: 8091+n); logs $R" ;;
   down)
     for f in managers server; do [[ -e $R/$f.pids ]] && { kill $(cat $R/$f.pids) 2>/dev/null; mv $R/$f.pids $R/$f.pids.old; }; done
+    [[ -d /root/shadow ]] && bash "$HERE/shadow.sh" down
     bash "$HERE/stacks.sh" down; bash "$HERE/worlds.sh" down ;;
-  *) sed -n 2,8p "$0"; exit 1 ;;
+  *) sed -n 2,10p "$0"; exit 1 ;;
 esac
