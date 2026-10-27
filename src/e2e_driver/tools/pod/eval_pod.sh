@@ -14,7 +14,8 @@
 #   BUNDLE=TAG: no network volume, any data centre: the start command fetches the B2 bundle (bundle.py fetch TAG, ~1 GB
 #   shards in parallel) to /workspace and runs setup.sh; the competition account comes from the Mac's ~/.morai-secrets
 #   (config.tar, V2AccountInfo.byte; never in B2). Then N = the most worlds this host takes (VRAM, CPU quota, RAM;
-#   README "sync") and the seeds run in waves of N (KEEP_UP between them).
+#   README "sync") and the seeds run in waves of N, the parts kept up between them; REDRAW (1): scenes that failed the
+#   replay check are drawn anew once (new seeds, one more wave).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
@@ -41,7 +42,7 @@ trap bye EXIT; trap 'exit 130' INT TERM
 # BUNDLE: a stdlib-python bootstrap (the image has no curl) takes bundle.py from B2 and fetches the shards first
 boot=$(printf '%s' "import base64,json,os,urllib.request as u
 e=dict(l.split('=',1) for l in open('/proc/1/environ').read().split(chr(0)) if '=' in l); e.update(os.environ)
-h={'Authorization':'Basic '+base64.b64encode((e['B2_APPLICATION_KEY_ID']+':'+e['B2_APPLICATION_KEY']).encode()).decode()}
+h={'Authorization':'Basic '+base64.b64encode((e['B2_APPLICATION_KEY_ID'].strip()+':'+e['B2_APPLICATION_KEY'].strip()).encode()).decode()}
 a=json.load(u.urlopen(u.Request('https://api.backblazeb2.com/b2api/v2/b2_authorize_account',headers=h)))
 open('/bundle.py','wb').write(u.urlopen(u.Request(a['downloadUrl']+'/file/morai2026-alpamayo/podimg/${BUNDLE:-}/bundle.py',headers={'Authorization':a['authorizationToken']})).read())" | base64 | tr -d '\n')
 start="${BUNDLE:+mkdir -p /workspace && python3 -c \"\$(echo $boot | base64 -d)\" && python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
@@ -107,15 +108,22 @@ NMAX=$(P "python3 -c 'import subprocess as s; q=open(\"/sys/fs/cgroup/cpu.max\")
 read -r N CPUQ RAMG VRAMG <<< "$NMAX"; [[ ${SYNC:-0} == 1 ]] || N=${#SEEDS[@]}
 log "host: CPU quota $CPUQ cores, RAM $RAMG GiB, VRAM $VRAMG GiB -> $N worlds at once; ${#SEEDS[@]} seeds"
 P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt"
+redraw=${REDRAW:-1}; next=$(( $(printf '%s\n' "${SEEDS[@]}" | sort -n | tail -1) + 1 ))
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
-  wave=("${SEEDS[@]:w:N}"); WN=$NAME; (( ${#SEEDS[@]} > N )) && WN=${NAME}_wave$((w / N + 1))
+  wave=("${SEEDS[@]:w:N}"); WN=$NAME; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${NAME}_wave$((w / N + 1))
   P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$NAME/timeline.txt /workspace/results/$WN/ && \
      (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
-      KEEP_UP=$(( w + N < ${#SEEDS[@]} )) CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
+      KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
   log "eval3 $WN (seeds ${wave[*]}) running: ssh -F $SSHC pod tail -f /workspace/results/$WN.log"
   until P "test -e /workspace/results/$WN/DONE || ! pgrep -f '[e]val3.sh $WN' > /dev/null"; do late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; sleep 20; done
   mkdir -p "$LOCAL/$WN"; rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4.raw' pod:/workspace/results/$WN/ pod:/workspace/results/$WN.log "$LOCAL/$WN/"
   P "test -e /workspace/results/$WN/DONE" && log "done: $LOCAL/$WN" || { log "eval3 stopped early: $LOCAL/$WN/$WN.log"; break; }
   cat "$LOCAL/$WN/summary.txt" 2> /dev/null
+  # scenes that did not play as generated (GT replay check failed): drawn anew once, as one more wave
+  bad=$(python3 -c 'import json,sys; print(sum(d.get("replay_ok") is False for d in json.load(open(sys.argv[1]))["drives"]))' "$LOCAL/$WN/summary.json" 2> /dev/null || echo 0)
+  if (( redraw && bad > 0 )); then
+    log "$bad scene(s) failed the replay check: seeds $next.. drawn anew"; redraw=0
+    for ((i = 0; i < bad; i++)); do SEEDS+=($((next + i))); done
+  fi
 done

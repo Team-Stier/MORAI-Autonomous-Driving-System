@@ -7,8 +7,8 @@ pack  (on a pod booted from the network volume, setup.sh done): ROOTS -> regular
       MANIFEST (file bytes), then b2 sync. Left out: the competition account (MORAI Version/V2AccountInfo.byte and the
       login prefs morai/config.tar: eval_pod.sh copies them from the Mac's ~/.morai-secrets at each boot), the base VLM's
       weights (the engine reads config + tokenizer from it, every weight from the delivery), results, apt, logs.
-fetch (a fresh host's start command, eval_pod.sh BUNDLE=TAG): every shard of MANIFEST streamed into tar -x under /,
-      SHARDS_AT_ONCE (16) at a time, links.tgz last; B2 keys from the environment or PID 1's (the image has no curl).
+fetch (a fresh host's start command, eval_pod.sh BUNDLE=TAG): every shard of MANIFEST into tar -x under / (FETCH_ROOT),
+      32 MB ranges, STREAMS (48) at a time, links.tgz last; B2 keys from the environment or PID 1's (the image has no curl).
 """
 import base64, json, os, subprocess, sys, threading, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor
@@ -78,47 +78,53 @@ def keys():
         k.update(l.split("=", 1) for l in open("/proc/1/environ", "rb").read().decode().split("\0") if l.startswith("B2_APPLICATION_KEY"))
     except OSError:
         pass
-    return k
+    return {n: v.strip() for n, v in k.items()}       # the RunPod secret's value ends in a newline (B2 said bad_auth_token)
 
 
 def fetch(tag):
+    """B2 gives ~17 MB/s per connection (10/28, RunPod EUR-IS-1; 16 at once 274 MB/s): every shard is read as 32 MB ranges,
+    STREAMS (48) at a time over all shards, and fed to its tar in order (12 ranges read ahead per shard: at 4 the last four 5 GB shards held 27 GB to 144 s)."""
     k = keys()
     auth = base64.b64encode(f"{k['B2_APPLICATION_KEY_ID']}:{k['B2_APPLICATION_KEY']}".encode()).decode()
     a = json.load(urllib.request.urlopen(urllib.request.Request(
         "https://api.backblazeb2.com/b2api/v2/b2_authorize_account", headers={"Authorization": "Basic " + auth}), timeout=30))
-    url, tok = f"{a['downloadUrl']}/file/{BUCKET}/podimg/{tag}", a["authorizationToken"]
+    url, tok, root, CH = f"{a['downloadUrl']}/file/{BUCKET}/podimg/{tag}", a["authorizationToken"], os.environ.get("FETCH_ROOT", "/"), 32 << 20
 
-    def get(name):
-        for n in range(5):
+    def get(name, lo=None, hi=None):
+        h = {"Authorization": tok, **({"Range": f"bytes={lo}-{hi}"} if lo is not None else {})}
+        for n in range(6):
             try:
-                return urllib.request.urlopen(urllib.request.Request(f"{url}/{name}", headers={"Authorization": tok}), timeout=60)
+                return urllib.request.urlopen(urllib.request.Request(f"{url}/{name}", headers=h), timeout=60).read()
             except OSError as e:
                 err = e; time.sleep(2 + 3 * n)
         raise err
     t0, failed = time.time(), []
-    manifest = [l.split() for l in get("MANIFEST").read().decode().splitlines() if l.strip()]
+    manifest = [l.split() for l in get("MANIFEST").decode().splitlines() if l.strip()]
+    os.makedirs(root, exist_ok=True)
+    pool = ThreadPoolExecutor(int(os.environ.get("STREAMS", 48)))
 
     def one(m):
-        name, t = m[0], time.time()
-        for attempt in range(3):
-            tar = subprocess.Popen(["tar", "-xzf" if name.endswith(".tgz") else "-xf", "-", "-C", "/"], stdin=subprocess.PIPE)
-            try:
-                r = get(name)
-                while b := r.read(1 << 22):
-                    tar.stdin.write(b)
-                tar.stdin.close()
-                if tar.wait() == 0:
-                    return int(m[1]) / 1e6 / (time.time() - t)
-            except OSError as e:
-                print(f"[fetch] {name}: {e}", flush=True)
-                tar.kill()
-        failed.append(name)
-    with ThreadPoolExecutor(int(os.environ.get("SHARDS_AT_ONCE", 16))) as ex:
-        rates = list(ex.map(one, [m for m in manifest if m[0] != "links.tgz"]))
+        name, size, t = m[0], int(m[1]), time.time()
+        tar = subprocess.Popen(["tar", "-xzf" if name.endswith(".tgz") else "-xf", "-", "-C", root], stdin=subprocess.PIPE)
+        try:
+            ahead, pos = [], 0
+            while pos < size or ahead:
+                while pos < size and len(ahead) < 12:
+                    ahead.append(pool.submit(get, name, pos, min(pos + CH, size) - 1)); pos += CH
+                tar.stdin.write(ahead.pop(0).result())
+            tar.stdin.close()
+            ok = tar.wait() == 0
+        except OSError as e:
+            print(f"[fetch] {name}: {e}", flush=True); tar.kill(); ok = False
+        if not ok:
+            failed.append(name)
+        print(f"[fetch +{time.time() - t0:.0f}s] {name} {size / 1e9:.2f} GB in {time.time() - t:.0f} s{'' if ok else ' FAILED'}", flush=True)
+    with ThreadPoolExecutor(len(manifest)) as ex:
+        list(ex.map(one, [m for m in manifest if m[0] != "links.tgz"]))
     one(next(m for m in manifest if m[0] == "links.tgz"))
-    total, ok = sum(int(m[1]) for m in manifest), sorted(r for r in rates if r) or [0]
-    print(f"[fetch] {len(manifest)} shards, {total / 1e9:.1f} GB in {time.time() - t0:.0f} s ({total / 1e6 / (time.time() - t0):.0f} MB/s"
-          f", one stream ~{ok[len(ok) // 2]:.0f} MB/s)" + (f" FAILED {failed}" if failed else ""), flush=True)
+    total = sum(int(m[1]) for m in manifest)
+    print(f"[fetch] {len(manifest)} shards, {total / 1e9:.1f} GB in {time.time() - t0:.0f} s ({total / 1e6 / (time.time() - t0):.0f} MB/s)"
+          + (f" FAILED {failed}" if failed else ""), flush=True)
     sys.exit(1 if failed else 0)
 
 

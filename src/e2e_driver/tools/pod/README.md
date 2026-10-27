@@ -77,7 +77,9 @@ bash eval_pod.sh  r2c /workspace/models/wowmayo_final 7                    # 볼
 
 
 ## sync: MORAI 동기 모드 평가 (`SYNC=1`, 10/28)
-- 시뮬은 tick 사이에 멈추고 world마다 `eval_manager.py --sync`가 유일한 시계다. 그래서 late는 구조상 0이다.
+
+### 동작
+- 시뮬은 tick 사이에 멈추고, world마다 `eval_manager.py --sync`가 유일한 시계다. 그래서 late는 구조상 0이다.
   - 실제 대회(1배속, 5080에서 100 ms 넘는 스텝 16.8 %)보다 낙관적인 조건이다.
 - 한 스텝(TICK_MS 100 또는 50): Ego 상태와 판정 → 스택 단계 → `Tick(1)`.
   - 스택 단계는 `sync_clock_node.py`(sim_clock 자리, 포트 47100+n)를 거친다.
@@ -87,10 +89,71 @@ bash eval_pod.sh  r2c /workspace/models/wowmayo_final 7                    # 볼
   - overlap(기본): 답을 다음 tick 동안 기다린다.
   - `SERIAL=1`: tick 전에 기다린다. 결과 주행은 같고 wall 시간만 다르다.
 - 엔진은 `--gather 0.1`로 최근 2 s 안에 요청한 world들의 요청을 한 묶음으로 모은다. 전처리는 `--prep process`다.
-- 속도 측정: `sync_bench.sh NAME DELIVER 1:100:o 1:50:o 2:100:o ...` → `bench.txt`(sim-s/s, $/sim-h, 결정당 wall 내역, model_ms, GPU, VRAM, CPU).
-  - worlds, 스택, 엔진은 그대로 남는다. `SYNC=1 TICK_MS=.. KEEP_UP=1 eval3.sh`가 그것을 다시 쓴다.
-- Mac 점검: 가짜 rospy, 가짜 시뮬, 가짜 서버로 실제 노드, sync_clock_node, SyncLink를 돌렸다.
-  - 100/50 ms × overlap/serial과 느린 서버(250 ms)에서 모두 통과했다: 계획은 정확히 t0+0.1에 적용됐고, 카메라 나이는 0, 노드 속도는 tick 뒤 값, 스텝당 명령은 1개였다.
+- CPU 배치(`CPU_LAYOUT=shared`, SYNC 기본): world와 스택이 엔진용 8 CPU를 뺀 전부를 같이 쓴다.
+  - 모든 world의 카메라 대기 스레드는 CPU 4개에 모은다(`pin.sh SPIN_CPUS`). 그대로 두면 world마다 약 4코어를 태워 pod의 CPU quota를 다 쓴다.
+- 엔진이 뜨는 동안에는 world를 SIGSTOP으로 멈춘다. 멈춰 둔 world도 렌더 루프로 대당 약 3.8코어를 쓰기 때문이다.
+- Ctrl-C는 tick 사이에서만 받는다. Tick 도중에 끊으면 그 world의 Simulation gRPC 서비스가 영영 멈췄다.
+- 조향은 e009536 설정이다. `steer_lookahead_s` 0.3, 속도별 게인이고, 실행 중인 스택 파라미터로도 확인했다.
+
+### 측정 (`sync_bench.sh`, 10/28, RunPod 5090 EUR-IS-1, CPU quota 27.2코어, RAM 61 GB, 와우마요 4.749 bits)
+| N × tick | 합계 sim-s/s | $/sim-h (1.19) | world RTF | tick wall | model_ms | VRAM | CPU(cgroup) |
+|---|---|---|---|---|---|---|---|
+| 1 × 100 | 0.14 | 8.56 | 0.14 | 667 ms | 71 | 13.0 GB | 13.4 |
+| 2 × 100 | 0.27 | 4.42 | 0.13 | 717 ms | 77 | 16.2 GB | 15.5 |
+| 4 × 100 | 0.52 | 2.28 | 0.13 | 737 ms | 118 | 22.2 GB | 19.4 |
+| 4 × 100 serial | 0.41 | 2.94 | 0.10 | 683 + 262 ms 대기 | 94 | 22.3 GB | 19.9 |
+| 6 × 100 | 0.76 | 1.57 | 0.13 | 756 ms | 175 | 25.7 GB | 21.4 |
+| 6 × 100, spinner 고정 없음 | 0.52 | 2.30 | 0.09 | 1101 ms | 145 | 25.7 GB | quota 포화 |
+| 6 × 50 | 0.70 | 1.70 | 0.12 | 2 × 372 ms | 136 | 27.2 GB | 22.5 |
+| **7 × 100** | **0.85** | **1.40** | 0.12 | 792 ms | 189 | 29.2 GB | 23.5 |
+| 7 × 50 | 0.77 | 1.55 | 0.11 | 2 × 387 ms | 149 | 29.7 GB | 23.4 |
+| 8 × 100 | 엔진 OOM | | | | | 8 × 2.5 GB + 엔진 11 GB > 31.4 GB | |
+
+- 병목은 시뮬레이터 tick이다(world 하나에 시뮬 1 s당 wall 약 5.6–7 s, 100 ms든 50 ms든 같다). 추론은 overlap에서 tick 안에 끝난다(plans 대기 0.1 ms).
+- world 수에 거의 비례해 늘고, VRAM이 N을 7로 묶는다. 추천: **N=7, 100 ms, overlap.** 50 ms(제어 20 Hz)는 약 10 % 비싸다.
+- 호스트별 N(`eval_pod.sh`가 자동으로 정한다): min(⌊(VRAM−8.1)/3.13⌋, ⌊(0.9·quota−2.5)/3.1⌋, ⌊(0.85·RAM−4.5)/4.8⌋) (GiB, 코어).
+  - 5090 + quota 27 + 61 GB → 7. 5090 + vCPU 16 pod(quota 약 13) → 3.
+  - 최소 사양: 5090(32 GB), CPU quota 24코어 이상, RAM 48 GB 이상, 회선 1 Gbps 이상(10분 기동).
+
+### 어느 5090이든 10분 안에 주행: B2 묶음 기동 (`BUNDLE=TAG`)
+- `bundle.py pack v1`: 볼륨 pod의 파일을 약 1 GB 묶음 23개(27.1 GB, 원본 34.9 GB)로 `b2://morai2026-alpamayo/podimg/v1/`에 올린다.
+  - 들어가는 것: rootfs delta, 저장소+catkin, venv, sm120 컴파일 캐시, 납품본, VLM 설정·토크나이저, MORAI.
+  - 빠지는 것: 대회 계정(`Version/V2AccountInfo.byte`, 로그인 prefs `config.tar`)은 B2에 두지 않는다. 기동 때마다 Mac의 `~/.morai-secrets`에서 ssh로 넣는다. VLM 기본 가중치 8.3 GB도 뺀다(엔진은 납품본에서 모든 가중치를 읽는다).
+- 시작 명령: 표준 python 부트스트랩이 B2 키(RunPod secret, 끝의 줄바꿈 제거)로 `bundle.py`를 받는다. 그다음 묶음을 32 MB 구간으로 48개씩 동시에 받아 순서대로 tar에 풀고 `setup.sh`를 돈다.
+- 실측(10/28, RunPod EUR-IS-1 5090 pod 안에서 `FETCH_ROOT`로 시험):
+  - B2는 연결 하나에 약 17 MB/s다. 16개를 동시에 열면 274 MB/s다.
+  - 묶음 받기·풀기는 27.1 GB에 80 s(338 MB/s)였다. 묶음당 미리 읽기를 4로 두면 144 s다.
+  - venv 파일 목록이 원본과 같고, 계정 파일은 빠져 있었다.
+- 예상 시간표(새 호스트, 아직 처음부터 끝까지 재 보지 않았다):
+
+  | 단계 | 시간 |
+  |---|---|
+  | pod 생성 → 시작 명령 | 약 1분 |
+  | 묶음 받기 | 1.3–2.5분 |
+  | setup(delta, sshd) | 약 0.3분 |
+  | 계정 파일·코드 | 약 0.2분 |
+  | world 7대 병렬(측정 2분)과 엔진 적재 148 s + 캐시 워밍업(측정 5.2분, 그동안 world는 멈춤) | 5분 안팎 |
+  | 장면 load·첫 step | 약 0.5분 |
+  | **합계** | **약 8–9.5분** |
+
+- `eval_pod.sh`(Mac): `SYNC=1 BUNDLE=v1 VOLUMES= bash eval_pod.sh NAME /workspace/models/wowmayo_final 1 2 3 …`
+  - 데이터센터 제한이 없다. 계정 파일을 넣고, 코드를 동기화하고, 호스트 크기로 N을 정한다.
+  - 시드를 N개씩 묶어 파도로 돌린다. 재생 확인에 실패한 장면은 새 시드로 한 번 더 뽑는다.
+
+### 시나리오 공급·재생 (`scenario_variants.py`, `eval_manager.py --objinfo-port`)
+- 흐름: 시드 S, 바퀴 k마다 S·1000+k → 장면 생성(clcol 기준, 위치 규칙은 생성기 주석) → MSC load(일시정지) → sync on → 재생.
+  - 매 step Object Info(Ego 80 m 안)를 기록한다.
+  - 바퀴가 끝나면 재생 확인을 `laps.jsonl` `validation`에 쓰고, 요약(`replay`)에 보인다.
+- 무작위화 축과 근거: 생성기 docstring(DATA_PLAN §6, DATA_PLAN_R2 §4 A/B, 대회 §2-7-2 날씨·시간).
+- 재생 확인(GT):
+  - 동적 물체: Ego가 발동 거리+2 m 안에 들어왔으면 min(2 m, 이동 거리의 30 %) 이상 움직였어야 한다.
+  - 정적 물체: 놓은 자리 3 m 안에 있어야 한다.
+  - NPC: 로터리(CP8–CP9 ±20 m, 35 m 안)와 고주로(s 1118.7–1741.7, 80 m 안)에 NPC 차량이 있어야 한다. 본 차량 치수 목록도 남긴다.
+  - ID 재사용: MORAI가 장면을 다시 불러도 물체 ID를 재사용한다. 그래서 차량은 35 m/s, 보행자·소품은 10 m/s를 넘는 점프에서 궤적을 끊는다.
+- Mac 점검:
+  - 가짜 rospy, 가짜 시뮬, 가짜 서버로 실제 노드, sync_clock_node, SyncLink를 돌렸다(100/50 ms × overlap/serial, 느린 서버).
+  - 생성기 40장면의 분포를 확인했다.
+  - 재생 확인기에 가짜 데이터 시험을 했다(움직임, 정지, 미도달, 존재, 누락, ID 재사용 점프, 빈 고주로).
 
 
 # RL actor pod (RunPod, RTX 5090 ×1)
