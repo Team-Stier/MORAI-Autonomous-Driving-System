@@ -174,6 +174,42 @@ def figure(path, d, j, rec, lane, title):
     fig.tight_layout(); fig.savefig(path, dpi=110); plt.close(fig)
 
 
+def lane_profile(runs, lane, out):
+    """the expert's own drives (NAME_drive_w1): lateral offset from the official route lane vs route s, one line per
+    run, lane changes (> 2.5 m within 6 s while moving) marked -> {run: [s of each change]}. Compares shadow builds
+    (early lane changes, shadow_patches/early_lane_change.patch) on the same map."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(15, 4.5))
+    found = {}
+    for run in runs:
+        for ep in episodes(run, "drive_"):
+            d = np.load(ep / "dagger_debug.npz")
+            rec = dl.Rec(dl.load_rec(run / "rec_w1", d["t_wall"].min() - 2, d["t_wall"].max() + 2))
+            S, D, V, s_prev = [], [], [], None
+            for (x, y, yaw, v) in rec.ego[::10]:
+                s_, d_, _ = lane.project(x, y, s_prev) if s_prev is not None else lane.project(x, y)
+                if abs(d_) > 15:
+                    s_, d_, _ = lane.project(x, y)
+                s_prev = s_; S.append(s_); D.append(d_); V.append(v)
+            S, D, V, T = map(np.array, (S, D, V, rec.ego_t[::10]))
+            line, = ax.plot(S, D, lw=1, label=f"{run.name}/{ep.parent.name}")
+            ch, i = [], 0
+            while i < len(T):
+                k = int(np.searchsorted(T, T[i] + 6.0))
+                if k < len(T) and abs(D[k] - D[i]) > 2.5 and V[i] > 2.0:
+                    m = i + int(np.argmax(np.abs(np.diff(D[i:k + 1])))); ch.append(round(float(S[m]), 1))
+                    ax.axvline(S[m], color=line.get_color(), lw=0.6, ls=":")
+                    i = k
+                else:
+                    i += 1
+            found[f"{run.name}/{ep.parent.name}"] = ch
+    ax.set_xlabel("route s (m)"); ax.set_ylabel("offset from route.json lane (m, left +)"); ax.grid(alpha=0.3); ax.legend(fontsize=7)
+    fig.tight_layout(); fig.savefig(out, dpi=110); plt.close(fig)
+    return found
+
+
 def timing(run):
     """late share and model_ms of the policy laps (stack /e2e_driver/debug), RTF per episode."""
     out = {}
@@ -194,6 +230,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("run")
     ap.add_argument("--route", default=str(HERE.parent / "assets" / "route.json"))
+    ap.add_argument("--compare", nargs="*", default=[], help="other run dirs for the lane-change profile (before/after)")
     a = ap.parse_args()
     run = Path(a.run).expanduser(); rep = run / "report"; rep.mkdir(exist_ok=True)
     lane = dl.Lane(a.route)
@@ -249,6 +286,7 @@ def main():
                         figure(rep / f"{pre}scene_{tag}.png", d, j, rec, lane, f"{name} {tag}: {e.parent.name}/{e.name} t_sim {d['t_sim'][j]:.1f}")
                         picked[tag] = f"{e.parent.name}/{e.name} j {j}"
             summ[f"figures_{name}"] = picked
+    summ["lane_changes"] = lane_profile([Path(r).expanduser() for r in a.compare] + [run], lane, rep / "lane_changes_expert.png")
     for f in ("check.txt", "cpu.txt"):
         p = run / "results" / f
         if p.exists():

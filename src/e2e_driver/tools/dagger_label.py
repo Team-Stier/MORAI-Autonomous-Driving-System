@@ -587,10 +587,13 @@ def main():
     ap.add_argument("--jobs", type=int, default=1, help="worker processes for the rollouts (fork)")
     ap.add_argument("--scorer", default=str(HERE.parents[3] / "Alpamayo-Cosmos" / "tools" / "scorer"),
                     help="tools/scorer (LabelChecker: verdicts, judged stop lines)")
+    ap.add_argument("--lookahead-s", type=float, help="pp lookahead time (pp.yaml 0.6 s), for the curve test")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    if a.lookahead_s:
+        PP["lookahead_time_sec"] = a.lookahead_s
     cfg = json.load(open(a.config))["action_space_cfg"] if a.config else dict(
         accel_mean=0.02902694707164455, accel_std=0.6810426736454882, curvature_mean=0.0002692167976330542,
         curvature_std=0.026148280660833106, a_lambda=1e-4, a_ridge=1e-4, kappa_lambda=1e-4, kappa_ridge=1e-4,

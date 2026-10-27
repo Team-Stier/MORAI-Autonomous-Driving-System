@@ -357,6 +357,10 @@ Alpamayo-Cosmos `RL_PLAN.md` 3.1의 actor 한 대: MORAI 리눅스 3대, ROS 폐
 
 ## 라벨 (`dagger_label.py`, 에피소드마다 `epK/dagger_labels.npz`)
 - 형식(러너와 약속): `step` int32 (N,) = steps.jsonl 줄 번호, `ak` float32 (N,64,2) a m/s²·κ 1/m(0.1 s), `valid` bool (N,64), `source` int8 (N,) 0 계획기 / 1 공식 차로.
+  - 선택 필드: `signal` int8(t0에 따르는 신호, 0 없음·모름 / 1 적 / 2 황 / 3 녹), `stop_d` float32(앞축에서 다음 판정 정지선까지, m), `intervened` bool(출발 개입 중).
+  - `valid=False`: 굴린 라벨이 없을 때, 그리고 채점기(`tools/scorer/label_check.py`)가 fail이나 unrecoverable로 판정할 때. 판정과 이유는 `dagger_debug.npz`에 있다.
+  - 파일은 임시 이름으로 쓴 뒤 바꾼다(러너는 생긴 파일만 읽는다).
+- **미래 정보 없음 (사용자 10/28):** t0의 계획, 신호, 물체(등속 예측)만 쓴다. 기록된 이후 계획이나 신호로 다시 계획하지 않는다.
 - 경로:
   - 기본은 계획기 경로다(source 0). 단, 0.5 s 안의 계획이 차에서 5 m·0.5 rad 안에서 시작해야 한다(path_planner의 `max_initial_*`와 같다).
   - 계획이 없거나 그 범위를 벗어나면 공식 차로 중심선(`assets/route.json`)을 쓴다(source 1).
@@ -369,9 +373,17 @@ Alpamayo-Cosmos `RL_PLAN.md` 3.1의 actor 한 대: MORAI 리눅스 3대, ROS 폐
   - speed_filter: 구간 11–12 밖에서 60 km/h를 넘으면 전제동.
   - yield·AEB: 수집 노드 코드(`conflict`/`brake_for`, `danger`)를 그대로 불러 등속으로 옮긴 GT 물체에 적용한다. Object Info 속도는 물체 좌표라 지도 좌표로 돌린다(아래 "알려진 문제").
   - 차량: 운동학 자전거 모델이다. 응답은 수집 주행기의 실제 주행으로 맞췄다: a = 3.56·accel − 14.1·brake − 0.15 − 0.029·v, 0.05 s 지연. pp.yaml 이득(5.74, 18.76)을 쓰면 6.4 s에 +2.5 m/s 빨랐다.
-  - **다시 계획:** velocity_planner는 시간 필터를 거친 목표 속도 하나를 경로 모든 점에 넣는다. 계획 길이도 약 50 m뿐이라, t0 계획만으로는 앞의 곡선·정지선·신호 변화를 못 본다.
-    - 그래서 굴리는 동안 0.1 s마다 그 시각의 기록된 계획으로 갈아탄다. 단, 그 계획이 굴린 차에서 3 m·0.5 rad 안에서 시작할 때만이다. `--no-replan`은 t0 계획만 쓴다.
-    - 계획이 끝나는 곳부터는 공식 차로에 velocity_planner의 곡률 속도(횡가속 2.6, 접근 감속 1.7)를 적용한다.
+  - **속도:** velocity_planner는 시간 필터를 거친 목표 속도 하나를 경로 모든 점에 넣는다. 계획 길이도 약 50 m다.
+    - 그래서 계획 속도가 점마다 같으면, 굴리는 동안 0.05 s마다 velocity_planner의 계산을 다시 한다(`Speeds`):
+      - 곡률 미리보기 45 m(횡가속 2.6, 접근 감속 1.7), 시간 필터 0.35 s, 가속 2.0(곡선 1.5)·감속 5.0 제한, 상한 60(구간 11–12는 100) km/h. 시작값은 t0 목표 속도다.
+      - 정지선 차단: 정지할 판정 정지선이 50 m 경로 안에 들어오면 목표 0. 정지점은 선 5 m 앞이다.
+    - 경로 계획기가 점별 속도를 준 경우(회전교차로 등)는 그 값을 쓴다.
+    - 계획이 끝나는 곳부터는 공식 차로를 잇고, 곡률 속도를 적용한다.
+  - **신호 (t0 상태 고정):** 판정 정지선은 점수기·채점기와 같다(앞축 기준).
+    - 적신호: 최대 제동(8 m/s², 0.2 s 지연)으로 선 전에 설 수 있으면 정지, 못 서면 교차로를 그대로 지난다(`go_unstoppable`).
+    - 앞축이 이미 선을 넘었으면 진행한다(`go_past`). 교차 차량·물체는 yield·AEB가 본다.
+    - 황신호: velocity_planner처럼 v²/(2·3) ≤ 정지점 거리면 정지.
+    - 녹색이어도 t0 계획이 정지 중이면(n_frames 확인 전) 정지. 1 s 뒤 녹색이 될 것을 알고 출발하지 않는다.
 - (a, κ): GT 이력 16점(시뮬 시간)에 굴린 속도·헤딩을 이어 `morai_vla.data.ego_trajectory` + `traj_to_action`에 넣는다(학습과 같다). 납품본 config.json의 action_space_cfg를 쓴다.
 - 디버그: `epK/dagger_debug.npz`(굴린 궤적, 이유, 플래그). 그림·오차표는 `dagger_eval.py RUN_DIR`(Mac)로 만든다.
 - Mac 실행: `uv run --no-project --with torch,numpy,pandas,pillow,hydra-core,einops,scipy,colorlog,pyyaml python dagger_label.py EP… --rec REC --gt <스킬 scripts/wsl> --config <납품본 config.json> --alpamayo <alpamayo f3198c2 src> --jobs 9`.
@@ -385,10 +397,22 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
 ```
 - 상자에서 도는 순서(`dagger_box.sh`):
   1. 쉐도 빌드와 actor 기동(world 1, 엔진 `--dump`, 스택)
-  2. 정책 에피소드(`SHADOW=1`)
+  2. 정책 에피소드(`SHADOW=1`, `TAKEOVER=1`, `--red-cap 5 20`)
+  2a. 엔진이 내려간 뒤 dagger-engine의 LLM LoRA 교체 확인(`test/lora_llm_check.py`, 결과 `lora_llm_check.json`)
   3. 전문가가 직접 달리는 에피소드(`shadow.sh up 1 drive`, 포크 자체 브릿지·speed_filter)
   4. 라벨 → B2
 - 에피소드는 rl_episode 규칙대로 끝난다(stuck, 충돌 뒤 stuck, 시간). 정책이 멈추면 그 랩은 거기서 끝난다.
+- **적신호 상한 (`rl_episode --red-cap LO HI`):** 신호 주기는 지도(MGeo)에 고정이라 장면 파일로는 도착 위상만 바꿀 수 있다.
+  - 그래서 판정 정지선 40 m 안에서 경로 녹색 없이 서 있은 시간이 [LO, HI]에서 뽑은 값을 넘으면, 그 교차로를 경로 녹색 위상으로 바꾼다(Infrastructure gRPC `SetIntersectionPhase`).
+  - 접근, 정지, 출발, 황신호는 그대로 나온다. 바꾼 기록은 episodes.jsonl `red_cap`에 남는다.
+- **출발 개입 (`takeover.py`, `TAKEOVER=1`):** 차가 `TAKEOVER_S`(적신호 상한 + 5 s = 25 s) 넘게 서 있고, 쉐도가 "출발"이라고 판단하면 쉐도 control 명령을 실제 명령으로 넘긴다.
+  - 쉐도의 "출발": 계획 속도 > 0.5, 적·황 아님, yield·AEB 1 s 동안 없음.
+  - 3 m/s, 5 s, 또는 출발 판단이 깨지면 정책에게 돌려준다. 다시 개입하려면 새로 N s를 서 있어야 한다.
+  - 넘기는 방법: 스택 master의 `/morai_udp_bridge/control_cmd`에 500 Hz로 낸다(speed_filter 20 Hz보다 빠름).
+  - 개입 구간은 `rec_w1/takeover.jsonl`에 남고, 라벨 `intervened`가 된다. eval_manager·rl_episode의 stuck 기준은 60 s라 N보다 길다.
+- **쉐도 차선 변경 앞당기기 (`shadow_patches/early_lane_change.patch`, 빌드 때 사본에만 적용):**
+  - 원인: lanelet2 `shortestPathVia`는 차로를 바꿀 수 있는 마지막 lanelet에서 바꾼다. frenet_path는 후보를 "경로 lanelet 위 진행 정도 → 경로 중심선과의 평균 거리" 순으로 고르므로, 50 m 앞이 그 전환점에 닿을 때에야 바꿨다.
+  - 고침: `global_path.hpp`가 경로를 받은 뒤, 같은 방향 평행 차로가 끝까지 이어지는 곧은 구간의 가장 이른 lanelet으로 변경을 당긴다(차선 표시가 허용하는 변경만, 체크포인트 lanelet은 빼지 않음). 간격 확인은 frenet의 충돌 검사가 그대로 한다.
 - B2: spool은 `runs/dagger/shadow_debug/spool/`, 기록·결과는 `runs/dagger/shadow_debug/<이름>/`에 둔다.
 - 결과는 `~/morai-eval/dagger/<이름>/`로 가져오고(엔진 덤프 제외), 끝나면 상자를 지운다.
 
@@ -396,12 +420,27 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
 - 기록: 정책 에피소드 3개(4,698판단)와 전문가 직접 주행 2개(2,476판단).
   - 정책: 전체 랩 2개(둘 다 CP7·CP9에서 stuck), 고주로 1개.
   - 전문가: 전체 랩 1개(CP8 회전교차로 진입에서 NPC와 충돌), 고주로 1개.
-- 라벨 오차(전문가 직접 주행, 실제로 달린 6.4 s와 비교): 이후 계획 사용 시 ADE 평균 1.45 m(중앙 0.54), 횡 0.13 m, 종 1.41 m. t0 계획만 쓰면 ADE 3.84 m(종 3.70 m). 결과: `~/morai-eval/dagger/shadow-20261028c-hw/report/`.
+- 라벨 오차(전문가 직접 주행, 실제로 달린 6.4 s와 비교, t0 정보만): ADE 평균 3.18 m(중앙 1.52), 횡 0.35 m, 종 3.09 m, 3 s ADE 0.84 m.
+  - 남은 오차의 대부분은 적신호 정지 중 녹색 전환이다. 미래 정보를 쓰지 않는 한 남는다.
+  - 참고로 기록된 이후 계획을 쓰면 1.45 m지만 미래 정보라 쓰지 않는다. 결과: `~/morai-eval/dagger/shadow-20261028c-hw/report/`.
+- 채점기: 적신호 행(정책 1,033, 전문가 638)에서 정지선을 넘는 라벨은 0이다. fail은 정책 2.7 %, 전문가 2.2 %다.
+  - 차선 회피 가능 위반은 곡선보다 s 250–350(차선 변경·정지선 315.9), s 400–450(4188 교차로), s 1100(고주로 진입)에 몰린다.
+  - 룩어헤드를 0.6 → 0.4 s로 줄이면 오히려 나빠졌다(정책 에피소드 하나: 차선 fail 26 → 54, 전체 fail 59 → 140). 그래서 pp.yaml 0.6 s를 유지한다.
 - 정책 주행 타이밍(쉐도 붙임): 엔진 왕복 p50 120 ms, 모델 p50 78 ms다. 쉐도가 없던 기준과 같다.
   - CPU는 23코어 중 6.3코어를 썼다(쉐도 1.0).
   - late는 63–99 %다. 이 상자는 RTF가 약 1.0이라 τ 100 ms가 벽시계 100 ms이기 때문이다. 쉐도와는 상관없다.
 
+## 10/28 두 번째 실행 (vast 9950X3D 5090, $0.762/h, 32분 약 $0.41, run d)
+- 정책 2랩(5,135판단, CP12·CP8에서 체크포인트 놓침으로 끝남), 전문가 1랩(4188에서 적신호 통과 뒤 stuck).
+- 적신호 상한: 208.5 m에서 9.5·10.8 s, 315.9 m에서 8.1 s 대기 뒤 녹색으로 바꿨다. 정책 행 중 적신호 32 %.
+- 출발 개입 2번(각 약 1.3 s 만에 3 m/s).
+- 채점기(정책): pass 73 %, pass_unavoidable 20 %, fail 4.9 %, unrecoverable 0.3 %. 적신호 행에서 정지선을 넘는 라벨은 0이다.
+  - 전문가 쪽 13행은 정지 불가(`go_unstoppable`)·선 넘음(`go_past`) 규칙에 따른 통과다.
+- 차선 변경 앞당기기: 고주로에서 쉐도 계획의 차로 이동이 약 60–200 m 앞당겨졌다(그림 `report/lane_changes_plan_highway.png`). 4188 적신호 통과는 그 근처에 차로 이동이 없어 패치와 무관하다(황신호 진행 판단).
+- dagger-engine LoRA 교체 확인 통과(교체 0.3–0.45 s, 비트 일치, model_ms p50 78.9).
+- late 31 %(RTF 0.8–1.0).
+
 ## 알려진 문제
 - **Object Info 차량 속도는 물체 좌표다.** 수집 노드(gt-yield·gt-aeb)는 이를 지도 좌표로 읽는다. 그래서 남북으로 달리는 앞차를 가로지르는 차로 보고 세운다. R2 수집 때도 그랬을 것이다. 라벨은 지도 좌표로 돌려 쓴다. 수집 노드 코드는 그대로 두었다.
 - yield가 켜진 판단(앞차 따라가기, 보행자)의 라벨 오차가 가장 크다. 등속 예측과 노드의 켜짐·꺼짐 반복 때문이다.
-- 정지 상태에서 녹색으로 바뀌는 순간: 다시 계획이 기록으로 메운다. t0 계획만 쓰면 6.4 s 정지로 남는다.
+- 정지 상태에서 녹색으로 바뀌는 순간은 t0 정보만으로는 맞힐 수 없다(라벨은 정지, 실제는 출발). 사용자 결정대로 정지 라벨을 둔다.
