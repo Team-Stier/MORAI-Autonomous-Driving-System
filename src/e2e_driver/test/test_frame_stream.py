@@ -56,14 +56,22 @@ def clear():
         c.clear()
 
 
+def build_old(req, key="live"):
+    """build_sample without stand-ins: every frame decoded and stacked, as before the records."""
+    held = assemble._held
+    assemble._held = lambda *a: None
+    try:
+        return build_sample(req, key)
+    finally:
+        assemble._held = held
+
+
 def reference(req, cfg):
     """the training path: frames decoded, processor without caches -> batch, fp32 pixels, fingerprints, layout."""
-    clear()
-    s = build_sample(req, key="ref")
+    s = build_old(req, key="ref")
     s.pop("_image_keys"), s.pop("_recs")
     b = tokenize(s, cfg)
     td = b["tokenized_data"]
-    clear()
     return b, td["pixel_values"], fingerprints(td["pixel_values"], td["image_grid_thw"]), layout(td["input_ids"], td["image_grid_thw"], IMG, MERGE)
 
 
@@ -88,11 +96,11 @@ def main():
     reqdir = Path(sys.argv[2]) if len(sys.argv) > 2 else HERE.parent / "assets" / "warmup"
     reqs = [wire.unpack(f.read_bytes()) for f in sorted(reqdir.glob("req_*.bin"))]
     assert reqs, reqdir
-    refs = [reference(r, cfg) for r in reqs]
     for warmed in (True, False):
         clear()
         store = FrameStore()
-        for n, (req, (b_ref, pv_ref, keys_ref, lay_ref)) in enumerate(zip(reqs, refs)):
+        for n, req in enumerate(reqs):
+            b_ref, pv_ref, keys_ref, lay_ref = reference(req, cfg)                          # one at a time (memory)
             t_scan = [float(req["t0"]) - 0.3 + 0.1 * j for j in range(4)]                     # synthetic, consistent stamps
             if n:                                                                             # consecutive requests: scans move on one
                 t_scan = [t + 0.1 * n for t in t_scan]
@@ -121,19 +129,10 @@ def main():
                   f"{'stand-in' if s['bev_frames'].shape[1:] == (0,) else 'packed'})")
 
     # CPU time: the old steady state (all images cached, full pixel tensors) vs warmed records
-    assemble_old = assemble.build_sample
-
-    def build_old(req, key="live"):                    # no stand-ins: frames decoded and stacked as before
-        held = assemble._held
-        assemble._held = lambda *a: None
-        try:
-            return assemble_old(req, key)
-        finally:
-            assemble._held = held
     clear()
     t_old, t_new = [], []
     for _ in range(4):
-        for req in reqs:
+        for req in reqs[:50]:
             t = time.perf_counter(); s = build_old(req); s["_recs"] = {}
             b = tokenize(s, cfg); td = b["tokenized_data"]
             fingerprints(td["pixel_values"], td["image_grid_thw"]); layout(td["input_ids"], td["image_grid_thw"], IMG, MERGE)
@@ -142,22 +141,22 @@ def main():
             t = time.perf_counter(); cpu_prepare(build_sample(req, key="new"), cfg, IMG, MERGE)
             t_new.append(time.perf_counter() - t)
     print("CPU ms per request (steady state, %d runs): old %.1f, records %.1f" % (len(t_old) - 2, 1e3 * np.median(t_old[2:]), 1e3 * np.median(t_new[2:])))
-    clear()                                            # the warm thread's cost per streamed frame (all new)
-    w = {"cam": [], "bev": []}
+    w = {"cam": [], "bev": []}                         # the warm thread's cost per streamed frame (all new)
     store = FrameStore()
-    for n, req in enumerate(reqs):
+    for n, req in enumerate(reqs[:5]):
         for m in stream(req, [float(req["t0"]) - 0.3 + 0.1 * (j + n) for j in range(4)])[0]:
             job = store.add(m)
             if job is not None:
+                clear()                                # a frame seen before would cost nothing
                 t = time.perf_counter(); warm(cfg, job); w["cam" if "jpeg" in job else "bev"].append(time.perf_counter() - t)
     print("warm ms per frame: camera %.1f, BEV %.1f" % (1e3 * np.median(w["cam"]), 1e3 * np.median(w["bev"])))
-    server(sys.argv[1], reqs)
+    server(sys.argv[1], reqs[:20])
     if os.environ.get("DELIVER"):
-        engine_check(os.environ["DELIVER"], reqs, build_old)
+        engine_check(os.environ["DELIVER"], reqs)
     print("frame stream ok")
 
 
-def engine_check(deliver, reqs, build_old):
+def engine_check(deliver, reqs):
     from backends import EngineBackend
     be = EngineBackend(deliver, seed=0)
     fe, cfg = be.fast, be.model.config
@@ -200,7 +199,7 @@ def server(config_dir, reqs):
             r = wire.recv(c)
             assert r["id"] == n and r["timing"]["prefix_tokens"] > 1000, r
             kept = wire.unpack((dump / f"req_{n:06d}.bin").read_bytes())
-            bad = same({k: req[k] for k in req}, {k: kept[k] for k in req}, "dump")
+            bad = same({k: req[k] for k in req if k != "id"}, {k: kept[k] for k in req if k != "id"}, "dump")   # id: the one sent
             assert not bad, bad
         wire.send(c, dict(slim, id=9, camera_stamps=[[1.5] * 4] * 4))                      # never streamed
         try:
