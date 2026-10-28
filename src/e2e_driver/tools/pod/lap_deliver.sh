@@ -8,7 +8,8 @@ HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; E2E=$V/MORAI-Autonomous
 OUT=$1; n=$2; k=$3; NAME=$4; K=$(printf %02d $((k + 1))); k3=$(printf %03d "$k")
 O=$OUT/w$n; FR=/root/frames/$NAME; PY=$V/venv-rl/bin/python; D=$OUT/lap_$K; mkdir -p "$D"
 b2env() { eval "$(tr '\0' '\n' < /proc/1/environ | grep -E '^B2_APPLICATION_KEY(_ID)?=' | sed 's/^/export /')"; }
-$PY $E2E/tools/lap_video.py make "$FR/w$n" "$O/eval_map/lap$k3.clock.json" "$FR/w${n}_lap$K.mp4" 30 > "$D/video.log" 2>&1 &&
+# 15 fps = the capture rate: at 30 the 835 s lap 1 of r2stop (10/28) took 6 min to write 25k frames next to the live drive
+$PY $E2E/tools/lap_video.py make "$FR/w$n" "$O/eval_map/lap$k3.clock.json" "$FR/w${n}_lap$K.mp4" 15 > "$D/video.log" 2>&1 &&
   bash "$HERE/phone_video.sh" "$FR/w${n}_lap$K.mp4" "$D/${NAME}_lap$K.mp4" 18 20000000 >> "$D/video.log" 2>&1
 line=$($PY "$HERE/lap_report.py" "$O" "$k" 2> "$D/report.err")
 [[ -s $D/${NAME}_lap$K.mp4 ]] || line="$line | 영상 없음"
