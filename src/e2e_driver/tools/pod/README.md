@@ -25,9 +25,10 @@ cd src/e2e_driver/tools/pod
 PROVIDER=vast OFFER="<offer id 1> <offer id 2> <offer id 3>" BUNDLE=v1 LAPS=8 LAP_DELIVER=1 VIEW_FPS=15 EVAL_MAX_MIN=300 \
   bash eval_pod.sh <이름, 예: 20261028-rt8> /workspace/models/wowmayo_final
 ```
-- 시드를 안 주면 run마다 새 무작위 시드를 100–999에서 뽑는다. 같은 장면을 다시 돌려 비교할 때만 끝에 시드를 준다(예: `28`).
-  - 평가 장면 번호(S·1000+k)는 1,000,000 아래로 둔다. DAgger(S ≥ 1000)·PPO(S ≥ 2000) 액터 장면과 겹치지 않는다.
-  - 쓴 시드는 `eval_pod.log`("seeds …"), 바퀴마다 `laps.jsonl`의 `seed`(S·1000+k)와 DM 요약 줄에 남는다.
+- 시드를 안 주면 run마다 새 무작위 시드를 뽑는다. 같은 장면을 다시 돌려 비교할 때만 끝에 시드를 준다.
+  - 범위는 평가 구간 0–99다. 7, 28, 29(이전 run들의 장면)는 빼므로, DAgger(S ≥ 1000)·PPO(S ≥ 2000) 액터 장면과 겹치지 않는다.
+  - 재생 확인이 실패해 다시 뽑을 때도 같은 규칙을 따른다.
+  - 쓴 시드는 결과 이름 `NAME_s<시드>`(B2 `runs/eval_vps/NAME_s<시드>`), `eval_pod.log`("seeds …"), 바퀴마다 `laps.jsonl`의 `seed`(S·1000+k)와 DM 요약 줄에 남는다.
 - `OFFER`에는 후보를 여러 개 준다. 6분(`LOAD_MIN`) 안에 running이 안 되면 그 상자를 지우고 다음 후보로 넘어간다.
   - 10/28 프랑스 호스트는 이미지 내려받기에서 19분 동안 멈춰 있었다.
 - 순서: 상자 생성 → B2 묶음 받기(32 MB 구간 48개씩 동시에) → 계정 파일과 코드 → setup → 시뮬·스택·엔진 → 바퀴마다 무작위 장면 → 주행.

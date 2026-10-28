@@ -26,9 +26,12 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
-# no seed given: a new one per run (scenes S*1000+k, in laps.jsonl and every lap report); give one only to replay scenes.
-# 100-999: eval scenes stay below 1,000,000 and apart from the DAgger (S >= 1000) and PPO (S >= 2000) actors
-(( ${#SEEDS[@]} )) || SEEDS=($(( RANDOM % 900 + 100 )))
+# no seed given: a new one per run (scenes S*1000+k, in laps.jsonl, every lap report and the results name NAME_sS); give
+# one only to replay scenes. draw: eval seeds are 0-99 (DAgger actors 1000+, PPO 2000+), never 7, 28 or 29 (the scenes of
+# earlier runs, user 10/28) or a seed of this run
+draw() { python3 -c 'import random,sys; print(random.choice([s for s in range(100) if s not in {7, 28, 29, *map(int, sys.argv[1:])}]))' "$@"; }
+(( ${#SEEDS[@]} )) || SEEDS=($(draw))
+RUN=${NAME}_s$(IFS=-; echo "${SEEDS[*]}")   # results and B2 runs/eval_vps/RUN; LOCAL (ssh_config) keeps NAME
 KEY=${RUNPOD_API_KEY:-$(sed -n 's/^api_key = "\(.*\)"/\1/p' ~/.runpod/config.toml)}
 read -r -a VOLUMES <<< "${VOLUMES:-1tra2qsxbl:EU-CZ-1}"     # VOLUME_ID:DATA_CENTER ..., tried in order
 IFS=$'\n' read -r -d '' -a GPUS <<< "${GPUS:-NVIDIA GeForce RTX 5090
@@ -171,11 +174,11 @@ deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and r
 NMAX=$(P "python3 -c 'import subprocess as s; q=open(\"/sys/fs/cgroup/cpu.max\").read().split(); c=int(q[0])/int(q[1]) if q[0] != \"max\" else len(open(\"/proc/cpuinfo\").read().split(\"processor\"))-1; m=open(\"/sys/fs/cgroup/memory.max\").read().strip(); r=(int(m) if m != \"max\" else int(open(\"/proc/meminfo\").read().split()[1])*1024)/2**30; v=int(s.check_output([\"nvidia-smi\",\"--query-gpu=memory.total\",\"--format=csv,noheader,nounits\"]).split()[0])/1024; print(max(1, min(int((v-0.8-7.3)/3.13), int((0.9*c-2.5)/3.1), int((0.85*r-4.5)/4.8))), round(c,1), round(r), round(v,1))'")
 read -r N CPUQ RAMG VRAMG <<< "$NMAX"; [[ ${SYNC:-0} == 1 ]] || N=${#SEEDS[@]}
 log "host: CPU quota $CPUQ cores, RAM $RAMG GiB, VRAM $VRAMG GiB -> $N worlds at once; seeds ${SEEDS[*]}"
-P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt"
-redraw=${REDRAW:-1}; next=$(( $(printf '%s\n' "${SEEDS[@]}" | sort -n | tail -1) + 1 ))
+P "mkdir -p /workspace/results/$RUN && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$RUN/timeline.txt"
+redraw=${REDRAW:-1}
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
-  wave=("${SEEDS[@]:w:N}"); WN=$NAME; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${NAME}_wave$((w / N + 1))
-  P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$NAME/timeline.txt /workspace/results/$WN/ && \
+  wave=("${SEEDS[@]:w:N}"); WN=$RUN; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${RUN}_wave$((w / N + 1))
+  P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$RUN/timeline.txt /workspace/results/$WN/ && \
      (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
       KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
@@ -191,7 +194,7 @@ for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   # scenes that did not play as generated (GT replay check failed): drawn anew once, as one more wave
   bad=$(python3 -c 'import json,sys; print(sum(d.get("replay_ok") is False for d in json.load(open(sys.argv[1]))["drives"]))' "$LOCAL/$WN/summary.json" 2> /dev/null || echo 0)
   if (( redraw && bad > 0 )); then
-    log "$bad scene(s) failed the replay check: seeds $next.. drawn anew"; redraw=0
-    for ((i = 0; i < bad; i++)); do SEEDS+=($((next + i))); done
+    for ((i = 0; i < bad; i++)); do SEEDS+=($(draw "${SEEDS[@]}")); done
+    log "$bad scene(s) failed the replay check: seeds ${SEEDS[*]: -bad} drawn anew"; redraw=0
   fi
 done
