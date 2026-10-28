@@ -483,6 +483,22 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
   - D(납품본 1랩 추돌 장면 입력): 모델이 NPC 48 앞으로 차로를 바꾼 334–336 s에 쉐도는 바꾸지 않고 섰다(계획 속도 0).
   - 그림: `~/morai-eval/dagger/report_20261028/highway_cp12_lane_change.png`, `roundabout_entry.png`.
 
+## 쉐도 로컬 재생 (상자 없이, Mac Docker, 10/28)
+기록된 주행(쉐도 기록 `rec_w1`)을 로컬 컨테이너 쉐도에 다시 넣어, 쉐도가 그 상태에서 무엇을 계획하는지 본다. 열린 고리라 차는 기록대로 움직인다. 상태별 계획만 읽는다.
+```bash
+W=<이 worktree>; F=$W/../MORAI-Autonomous-Driving-System-collect; D=~/shadow-replay; mkdir -p $D/gt
+COPYFILE_DISABLE=1 tar -C $F -cf $D/shadow_src.tar --no-mac-metadata --no-xattrs --no-fflags --exclude=.git --exclude=./build --exclude=./devel .
+cp ~/.claude/skills/morai-parallel-collect/scripts/wsl/*.py $D/gt/
+cd $W/src/e2e_driver/tools   # 입력: 기록 rec_w1의 벽시계 구간 T0..T1
+uv run --no-project --with numpy python pod/shadow_replay.py make ~/morai-eval/dagger/<run>/rec_w1 <T0> <T1> $D/a.json
+docker run -d --name shadow-replay --cpus 6 -v $D:/workspace/shadow -v $W/src/e2e_driver/tools:/opt/e2e_tools:ro morai-stack:c931a5b sleep infinity
+docker exec shadow-replay bash -c 'mv /workspaces/MORAI-Autonomous-Driving-System /workspaces/image-ws; V=/workspace bash /opt/e2e_tools/pod/shadow.sh build'   # 약 10분(rosdep), 패치 포함
+docker exec -w / shadow-replay bash /opt/e2e_tools/pod/shadow_replay.sh /workspace/shadow/a.json   # 입력 여러 개 가능
+uv run --no-project --with numpy python pod/shadow_replay.py plans $D/rec_w1 $D/marks.txt
+```
+- 패치를 바꾸면 컨테이너 안에서 `$V/shadow/ws`와 `BUILT`을 지우고 다시 `build` 한다.
+- 합성 입력도 같은 JSON(`ego [t, x, y, yaw, v]`, `obj [t, [[id, label, x, y, yaw, vx, vy, va, sx, sy], ...]]`, 속도는 물체 좌표)이면 된다. 10/28 고주로 시험 A–D(위 "run f")가 이렇게 만들어졌다.
+
 ## 라벨 종방향 오차 분해 (전문가 직접 주행 3회, 3,805판단, t0 정보만, ADE 평균 3.07 m)
 분류에만 기록된 미래를 쓰고, 라벨에는 쓰지 않는다.
 
