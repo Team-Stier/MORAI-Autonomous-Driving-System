@@ -150,9 +150,10 @@ class Episodes(em.Manager):
                 for s_stop, (ic, ph, bit) in RED_LIGHTS.items():
                     if not s_stop - 40.0 <= s <= s_stop + 2.0:
                         continue
-                    if abs(e["v"]) >= 0.5 or (e["color"] if e["color"] is not None else -1) & bit:
-                        waits.pop(s_stop, None)   # moving, or the route's green is on (no light: -1)
-                        continue
+                    col = e["color"] if e["color"] is not None else -1
+                    if abs(e["v"]) >= 0.5 or (col >= 0 and col & bit):
+                        waits.pop(s_stop, None)   # moving, or the route's green is on; no light reading (-1) counts as
+                        continue                  # waiting (10/28: -1 & 32 read as green kept a CP6 wait from ever ending)
                     w = waits.setdefault(s_stop, [tau, float(rng.uniform(*self.a.red_cap)), None])
                     if tau - w[0] >= w[1] and (w[2] is None or tau - w[2] > 3.0):
                         try:
