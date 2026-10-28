@@ -1,5 +1,5 @@
---- a/src/path_planner/include/path_planner/cores/frenet_path.hpp	2026-10-28 09:49:27
-+++ b/src/path_planner/include/path_planner/cores/frenet_path.hpp	2026-10-28 09:54:29
+--- a/src/path_planner/include/path_planner/cores/frenet_path.hpp	2026-10-28 11:00:45
++++ b/src/path_planner/include/path_planner/cores/frenet_path.hpp	2026-10-28 11:50:06
 @@ -55,6 +55,8 @@
      }
      updateRoute(*route);
@@ -9,15 +9,20 @@
      visualization_msgs::MarkerArray display;
      visualization_msgs::Marker clear;
      clear.action = visualization_msgs::Marker::DELETEALL;
-@@ -63,10 +65,16 @@
+@@ -63,19 +65,32 @@
      std::size_t best_progress = 0;
      double best_cost = std::numeric_limits<double>::infinity();
      std::size_t selected_marker = 0;
 +    double selected_end = std::numeric_limits<double>::infinity();
++    const Reference* chosen = nullptr;
++    bool waiting = false;                                  // a change back to the route waits for a gap
      for (const auto& reference : references) {
 +      // DAgger shadow (10/28): a lane change only into a gap, over at least LANE_CHANGE_S of travel
 +      const bool change = reference.lanes.front() != current;
-+      if (change && !gapOk(reference, movers, position, speed)) continue;
++      if (change && !gapOk(reference, movers, position, speed)) {
++        waiting |= std::any_of(reference.lanes.begin(), reference.lanes.end(), [&](const auto& l) { return onRoute(l); });
++        continue;
++      }
        for (double transition : parameters_.transition_lengths_m) {
          for (double offset : parameters_.lateral_offsets_m) {
 -          auto candidate = generate(reference, position, heading, transition, offset);
@@ -27,23 +32,28 @@
            if (candidate.points.empty()) continue;
            const bool accepted = !collides(candidate, obstacles);
            auto marker = visualize(candidate, ego.header, static_cast<int>(display.markers.size()), accepted);
-@@ -76,6 +84,7 @@
+           if (accepted) {
+-            const auto cost = routeCost(candidate);
++            const auto cost = routeCost(candidate, parameters_.path_length_m);   // longer change paths: no extra progress
+             if (cost.first > best_progress || (cost.first == best_progress && cost.second < best_cost)) {
                best_progress = cost.first;
                best_cost = cost.second;
                selected = std::move(candidate);
 +              selected_end = reference.line.stations.back() - reference.start_s;
++              chosen = &reference;
                selected_marker = display.markers.size();
              }
            }
-@@ -89,6 +98,7 @@
+@@ -89,6 +104,8 @@
        marker.scale.x = 0.12;
      }
      visualizer_.publish(display);
++    if (waiting && chosen) selected_end = std::min(selected_end, routeExit(*chosen));
 +    if (selected_end < parameters_.path_length_m) stopAtLaneEnd(selected, selected_end);
      return selected;
    }
  
-@@ -243,7 +253,7 @@
+@@ -243,7 +260,7 @@
        Reference reference = std::move(pending.back());
        pending.pop_back();
        reference.start_s = project(reference.line, position, first.stations.back()).station;
@@ -52,7 +62,7 @@
          complete.push_back(std::move(reference));
          continue;
        }
-@@ -265,11 +275,11 @@
+@@ -265,11 +282,11 @@
      return complete;
    }
    interfaces::Path generate(const Reference& reference, const Vec2& position, double heading,
@@ -66,7 +76,7 @@
      if (horizon <= 0.0) return path;
      transition = std::min(transition, horizon);
      const double d0 = (position - origin.point.head<2>()).dot(normal(origin.heading));
-@@ -304,10 +314,58 @@
+@@ -304,10 +321,82 @@
      const double heading = poseYaw(pose);
      return {xy(pose.position) + ((parameters_.vehicle_front_m - parameters_.vehicle_rear_m) / 2) * unit(heading),
              heading, (parameters_.vehicle_front_m + parameters_.vehicle_rear_m) / 2, parameters_.vehicle_half_width_m};
@@ -78,7 +88,8 @@
 +  // 20 m back) at least GAP_M away and GAP_REAR_TTC_S from closing in, one ahead within FRONT_RANGE_M at least GAP_M
 +  // and GAP_FRONT_TTC_S; and a lane that ends (a merge lane) is driven to a stop short of its end until then.
 +  static constexpr double LANE_CHANGE_S = 3.0, GAP_M = 10.0, GAP_REAR_TTC_S = 3.0, GAP_FRONT_TTC_S = 2.0;
-+  static constexpr double REAR_RANGE_M = 20.0, FRONT_RANGE_M = 80.0, LANE_HALF_M = 2.0, END_DECEL = 2.0, END_GAP_M = 2.0;
++  // END_GAP_M: the shortest transition, so a change from a standstill there is over by the end
++  static constexpr double REAR_RANGE_M = 20.0, FRONT_RANGE_M = 80.0, LANE_HALF_M = 2.0, END_DECEL = 2.0, END_GAP_M = 8.0;
 +  // a lane change's path runs LANE_CHANGE_EXTRA_M past path_length_m (3 s at 27 m/s); the others keep 50 m, so the
 +  // stop-line cutoff (velocity_planner, on the path's length) still starts 50 m out
 +  static constexpr double LANE_CHANGE_EXTRA_M = 30.0;
@@ -91,13 +102,20 @@
 +        movers.push_back({xy(object.bbox_pose.position), object.bbox_size.x / 2, v});
 +    }
 +    return movers;
-   }
++  }
 +  bool gapOk(const Reference& reference, const std::vector<Mover>& movers, const Vec2& position, double speed) const {
 +    for (const auto& m : movers) {
 +      const auto p = project(reference.line, m.center);
-+      if (p.distance_squared > LANE_HALF_M * LANE_HALF_M) continue;   // not in the target lane
-+      const double rel = p.station - reference.start_s;
-+      const double along = m.velocity.dot(unit(p.heading));
++      double rel = p.station - reference.start_s, along = m.velocity.dot(unit(p.heading));
++      bool in_lane = p.distance_squared <= LANE_HALF_M * LANE_HALF_M;
++      if (p.station <= 1e-6) {   // behind the target lane's first lanelet (10/28 replay: 2.6 m back, unseen): straight back
++        const auto o = sample(reference.line, 0.0);
++        const Vec2 d = m.center - o.point.head<2>();
++        rel = d.dot(unit(o.heading)) - reference.start_s;
++        along = m.velocity.dot(unit(o.heading));
++        in_lane = std::abs(d.dot(normal(o.heading))) <= LANE_HALF_M;
++      }
++      if (!in_lane) continue;                                  // not in the target lane
 +      if (rel < 0) {
 +        if (-rel > REAR_RANGE_M + m.half_length) continue;
 +        const double gap = -rel - parameters_.vehicle_rear_m - m.half_length, closing = along - speed;
@@ -109,6 +127,22 @@
 +      }
 +    }
 +    return true;
+   }
++  bool onRoute(const lanelet::ConstLanelet& lane) const {
++    return std::find(route_ids_.begin(), route_ids_.end(), key(lane)) != route_ids_.end();
++  }
++  // while a change back to the route waits for a gap: how far the kept lane still runs on or beside the route (a
++  // neighbour the markings let it change into); past that the route is lost (10/28 run f: by CP12 the exit lane runs
++  // beside the main lane only to s 1709, then solid lines), so the car stops short of it and waits
++  double routeExit(const Reference& reference) {
++    double station = 0.0;
++    for (std::size_t k = 0; k < reference.lanes.size(); ++k) {   // (the kept lane may be on the route up to the change)
++      const auto& lane = reference.lanes[k];
++      const auto l = graph_->left(lane), r = graph_->right(lane);
++      if (k && !onRoute(lane) && !(l && onRoute(*l)) && !(r && onRoute(*r))) return station - reference.start_s;
++      station += data(lane).center.stations.back();
++    }
++    return std::numeric_limits<double>::infinity();
 +  }
 +  static void stopAtLaneEnd(interfaces::Path& path, double end) {
 +    double station = 0.0;
@@ -125,3 +159,32 @@
        boxes.push_back({xy(object.bbox_pose.position), poseYaw(object.bbox_pose),
                         object.bbox_size.x / 2, object.bbox_size.y / 2});
      }
+@@ -355,11 +444,14 @@
+       ++index;
+     }
+   }
+-  std::pair<std::size_t, double> routeCost(const interfaces::Path& path) const {
+-    double cost = 0.0;
+-    std::size_t endpoint_index = 0;
+-    for (const auto& point : path.points) {
+-      const Vec2 position = xy(point.pose.pose.position);
++  std::pair<std::size_t, double> routeCost(const interfaces::Path& path, double length) const {
++    double cost = 0.0, station = 0.0;
++    std::size_t endpoint_index = 0, count = 0;
++    for (std::size_t k = 0; k < path.points.size(); ++k) {
++      const Vec2 position = xy(path.points[k].pose.pose.position);
++      if (k) station += (position - xy(path.points[k - 1].pose.pose.position)).norm();
++      if (station > length) break;
++      ++count;
+       double nearest = std::numeric_limits<double>::infinity();
+       std::size_t nearest_index = 0;
+       for (const auto& segment : route_segments_) {
+@@ -374,7 +466,7 @@
+       cost += nearest;
+       endpoint_index = nearest_index;
+     }
+-    return {endpoint_index, cost / path.points.size()};
++    return {endpoint_index, cost / count};
+   }
+   static visualization_msgs::Marker visualize(const interfaces::Path& path, const std_msgs::Header& header,
+                                                int id, bool accepted) {
