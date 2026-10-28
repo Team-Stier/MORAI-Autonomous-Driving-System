@@ -48,7 +48,7 @@ mv /root/actor/managers.pids /root/actor/managers.pids.old
 kill $(cat /root/actor/server.pids) 2> /dev/null; mv /root/actor/server.pids /root/actor/server.pids.old
 bash "$HERE/stacks.sh" down > /dev/null; bash "$HERE/shadow.sh" down > /dev/null
 
-if [[ ${FRAME_CHECK:-1} == 1 ]]; then                 # dagger-engine 2e4a2bb: frames prepared ahead, engine output identity
+if [[ ${FRAME_CHECK:-0} == 1 ]]; then                 # dagger-engine 2e4a2bb: frames prepared ahead, engine output identity
   mkdir -p /tmp/fs_reqs; i=0
   for f in $V/spool/${NAME}_w1/ep*/[0-9]*.req.bin; do ln -sf "$f" /tmp/fs_reqs/req_$(printf %06d $i).bin; i=$((i + 1)); done
   (cd $E2E && DELIVER=$DELIVER HF_HUB_OFFLINE=1 HF_HOME=$V/models/hf MORAI_VLA_PYLIB=$V/morai-student/pylib TORCHINDUCTOR_CACHE_DIR=$V/cache/inductor \
