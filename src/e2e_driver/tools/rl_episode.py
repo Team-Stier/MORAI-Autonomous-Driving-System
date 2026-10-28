@@ -378,9 +378,10 @@ def main():
     deploy(a)
     em.serve(mgr, a.port)
     print(f"status: http://localhost:{a.port}/status  records: {mgr.out}  s_goal {mgr.s_goal:.1f} m", flush=True)
-    k = 0
+    # a restart goes on after the episodes already there (scene seed*1000+k: no repeat, no overwritten epK for the learner)
+    k0 = k = 1 + max((int(p.name[2:]) for p in mgr.out.glob("ep[0-9]*") if p.name[2:].isdigit()), default=-1)
     try:
-        while not a.episodes or k < a.episodes:
+        while not a.episodes or k - k0 < a.episodes:
             mgr.run_episode(k)
             k += 1
     finally:

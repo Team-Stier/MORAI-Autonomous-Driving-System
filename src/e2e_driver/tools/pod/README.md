@@ -427,6 +427,11 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
   - 쉐도의 구간 판정 반경은 25 m다(원래 10 m). CP11 공식 Spawn이 계획기 CP 점에서 21 m 떨어져, 복귀 뒤 CP12까지 구간이 0이었고 그동안 틈 검사가 꺼져 있었다.
   - 한계: 틈을 만들려고 가속하지는 않는다(속도는 velocity_planner 그대로). 정지 속도는 path_planner 점 속도로 들어가 velocity_planner의 곡률 제한을 거치지 않는다.
 - B2: spool은 `runs/dagger/shadow_debug/spool/`, 기록·결과는 `runs/dagger/shadow_debug/<이름>/`에 둔다.
+- **시드 (10/28):** 장면은 `seed × 1000 + k`(k = 에피소드 번호)다.
+  - 시드 구간: 0–999 평가(영상 제공기 표준 28000–28007, 29, 7 등. 학습에 넣지 않는다), 1000–1999 DAgger, 2000–2999 PPO.
+  - `actor.sh`는 `SEED_BASE`가 꼭 있어야 한다. world n의 시드는 `SEED_BASE + n`이고, spool 이름도 `NAME_s<시드>_wn`이다. 그래서 여러 상자의 B2 경로가 겹치지 않는다. 상자마다, 띄울 때마다 다른 구간을 준다(예: DAgger `1000 + 100 × 라운드 + 10 × 상자`). RL_ARGS에는 `--seed`를 넣지 않는다.
+  - `rl_episode`는 출력 폴더에 이미 있는 epK 다음 번호부터 이어 간다. 다시 띄워도 같은 장면을 반복하지 않고, epK를 덮어쓰지 않는다.
+  - 디버그(`dagger_box.sh`, `dagger_pod.sh`) 기본 시드는 1990이다. 디버그 기록은 학습 spool에 넣지 않는다.
 - 결과는 `~/morai-eval/dagger/<이름>/`로 가져오고(엔진 덤프 제외), 끝나면 상자를 지운다.
 
 ## 10/28 디버그 실행 (vast i9-12900K 5090, $0.775/h)
