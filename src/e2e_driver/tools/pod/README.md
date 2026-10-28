@@ -526,3 +526,79 @@ uv run --no-project --with numpy python pod/shadow_replay.py plans $D/rec_w1 $D/
 - **Object Info 차량 속도는 물체 좌표다.** 수집 노드(gt-yield·gt-aeb)는 이를 지도 좌표로 읽는다. 그래서 남북으로 달리는 앞차를 가로지르는 차로 보고 세운다. R2 수집 때도 그랬을 것이다. 라벨은 지도 좌표로 돌려 쓴다. 수집 노드 코드는 그대로 두었다.
 - yield가 켜진 판단(앞차 따라가기, 보행자)의 라벨 오차가 가장 크다. 등속 예측과 노드의 켜짐·꺼짐 반복 때문이다.
 - 정지 상태에서 녹색으로 바뀌는 순간은 t0 정보만으로는 맞힐 수 없다(라벨은 정지, 실제는 출발). 사용자 결정대로 정지 라벨을 둔다.
+
+# PPO 액터 (10/28)
+
+실시간 5090 상자 N대(상자마다 MORAI world 1대)를 한 명령으로 띄우고 내린다. 액터와 learner는 B2로만 주고받는다.
+
+## 실행 (Mac, 유료)
+```bash
+cd src/e2e_driver/tools/pod
+OFFERS="<vast 오퍼 id …>" SIGMA=<σ> BASE_B2=runs/stageC/deliver bash ppo_pods.sh up <RUN> <LAUNCH> <N>
+bash ppo_pods.sh down <RUN>          # 상자마다 마지막 중계 → 로그를 ~/morai-eval/ppo/<RUN>/로 → vast destroy
+```
+
+| 인자 | 뜻 |
+|---|---|
+| `RUN` | learner와 같은 이름. B2 `runs/ppo/<RUN>/` |
+| `LAUNCH` | 0–9. 띄울 때마다 새 번호(장면이 겹치지 않는다) |
+| `N` | 상자 수 1–10. 구간은 `SEGMENTS=round,hwy FULL_SHARE=0 segments.py N`대로 나눈다(둘 다 `--returns`) |
+| `OFFERS` | 필수. `vastai search offers`로 고른 id. 상자 k는 k번째를 쓰고, N개 뒤의 id는 모든 상자의 예비다 |
+| `SIGMA` | 필수. 엔진 `--rl-sigma` |
+| `BASE_B2` | 필수. 버킷 안 납품 폴더(`final/` + `quant_manifest.json`). 끝의 `/final`은 떼고 받는다 |
+| `EXPERT2_ZONE` | 기본 `[800, 1841.7]`. 노드가 두 번째 expert 세트를 쓰는 경로 s |
+| `RL_ARGS` | rl_episode 추가 인자. `--seed`는 넣지 않는다 |
+| `EVERY` / `APPLY_DELAY_S` | 중계 주기 30 s / 계획 적용 지연 0.1 s(eval3, dagger_box와 같다) |
+
+- 상자 k: 이름 `ppo-<RUN>-l<LAUNCH>-b<k>`, `SEED_BASE = 2000 + 100 × LAUNCH + 10 × k`. world 1의 시드는 `SEED_BASE + 1`이고, actor(spool) 이름은 `<구간>_s<시드>_w1`이다.
+- 상자 하나 = `eval_pod.sh PROVIDER=vast BUNDLE=v1 CREATE_ONLY=1`(대여, B2 묶음, setup, 이 checkout, Mac `~/.morai-secrets`의 계정 파일) → `ppo_box.sh up`.
+- `ppo_box.sh up`: 납품본을 B2에서 받는다 → `ppo_relay.sh`를 띄운다 → `actor.sh up <구간> 1`을 띄운다.
+  - 엔진: `--sims 1 --rl-sigma σ --expert2 --lora-watch /workspace/out/lora/latest.json`
+  - 노드: `E2E_EXPERT2_ZONE` → `e2e_driver.launch`의 `expert2_zone`(yaml 목록)
+- 에피소드 관리자가 끝나면(죽어도) 마지막 중계를 하고 모두 내린다. 로그는 B2로 올린다. 그다음 idle watchdog이 상자를 stop한다. 디스크 요금은 `down`까지 나간다.
+- 진행: `ssh -F ~/morai-eval/pod/<상자>/ssh_config pod tail -f /workspace/results/<상자>/timeline.txt`.
+
+## B2 구조 (`b2://morai2026-alpamayo/runs/ppo/<RUN>/`)
+```
+lora/vNNNNN.safetensors, lora/latest.json          learner → 액터 (learner가 파일 먼저, latest.json 나중에 올린다)
+spool/<구간>_s<시드>_w1/epK/…                      액터 → learner (steps.jsonl, K.req/out.bin, timeline.json, rows/objects.json.gz, outside/, done.json)
+spool/<구간>_s<시드>_w1/inflight.json, episodes.jsonl
+boxes/<상자>/                                       상자 로그 (timeline.txt, relay.log, actor·엔진·스택 로그)
+```
+
+## 중계 (`ppo_relay.sh`, 30 s마다)
+- LoRA 내려받기:
+  1. `latest.json`을 숨은 `.part`로 받는다.
+  2. 거기 적힌 버전 파일이 없으면 받는다.
+  3. 그다음에야 `latest.json`으로 이름을 바꾼다. 그래서 엔진과 rl_episode가 보는 `latest.json`의 파일은 늘 이미 와 있다.
+  - 파일이 아직 B2에 없으면 `latest.json`을 다음 주기까지 미룬다. `path`가 `vNNNNN.safetensors` 꼴이 아니면 버린다.
+- spool 올리기(에피소드 단위로 원자적):
+  1. 주기 시작에 done.json 목록을 찍는다.
+  2. 아직 안 올린 에피소드마다 done.json을 뺀 폴더를 `b2 sync`한다. done.json이 마지막에 쓰이므로 이때 파일은 모두 완성돼 있다.
+  3. 그 sync가 0으로 끝나야 done.json만 올린다. 그래서 B2에는 파일이 덜 온 에피소드의 done.json이 생기지 않는다.
+  - done.json이 없는(달리는 중인) 폴더는 올리지 않는다.
+- `inflight.json`과 `episodes.jsonl`은 mtime이 바뀐 주기에 올린다. b2는 파일 mtime을 지키므로, learner의 `actor_timeout`은 액터가 쓴 시각을 읽는다.
+- 올린 에피소드의 `*.bin`은 상자에서 지운다. 덤프는 world당 약 6 MB/s(req.bin 약 0.6 MB × 10 Hz, 추정)라 150 GB 디스크가 몇 시간이면 찬다. 작은 파일은 남긴다.
+
+## 확인한 것 (유료 자원 없이)
+- 새 스크립트 3개 모두 `bash -n`을 통과했다.
+- 가짜 `b2`(파일 복사, 임의 순서, 지연, done.json을 올릴 때마다 B2 쪽 에피소드 파일 비교)로 `ppo_relay.sh`를 시험했다. Mac bash 3.2와 focal 컨테이너 bash 5.0 모두 통과했다.
+  - 한 번씩 돌리기: inflight는 바뀔 때만 올라간다. done.json은 늘 자기 에피소드의 마지막 PUT이다. 달리는 중인 폴더는 올리지 않는다. 한 파일이 실패하면 rc 1이고 done.json을 미룬 뒤 다음 주기에 올린다. latest.json이 가리키는 파일이 B2에 없으면 미룬다. 나쁜 path는 무시한다.
+  - 동시에 돌리기: 가짜 액터 2개 × 에피소드 5개, 가짜 learner(v3–v8, v5는 latest.json을 먼저 올림), 중계를 0.2 s 주기로 함께 돌렸다. 위반 0이었다. 에피소드 10개가 모두 B2에서 완전했다. inflight는 5번 쓰여 5번 올라갔다. 2 ms마다 감시했는데 `latest.json`이 파일 없이 보인 적이 0번이었다.
+  - 시험이 잡는지 보려고 일부러 망가뜨렸다. done.json을 sync에 넣은 판과 latest.json을 먼저 옮긴 판은 둘 다 FAIL이 났다.
+- `ppo_box.sh up → 에피소드 1개 → down`을 focal 컨테이너에서 돌렸다(가짜 actor.sh와 b2).
+  - 엔진 인자, `E2E_EXPERT2_ZONE`, `SEED_BASE`, `/final` 떼기를 확인했다.
+  - LoRA는 latest.json을 읽은 뒤 파일을 받았다.
+  - spool은 파일을 올린 뒤 done.json을 올렸다. 그다음 B2_OK, DONE, `boxes/` 로그가 생겼다. `down`은 exit 0이었다.
+- `roslaunch --dump-params`(noetic): `E2E_EXPERT2_ZONE="[800, 1841.7]"`면 `/e2e_driver/expert2_zone: [800, 1841.7]`이 된다. 없으면 yaml의 `[]`이다.
+- `ppo_pods.sh`는 가짜 eval_pod/ssh/vastai로 돌렸다.
+  - 인자 검사(OFFERS 없음, LAUNCH 12, RL_ARGS의 `--seed`)가 동작했다. N=3의 split은 round 2, hwy 1이었다. 오퍼 배정과 원격 명령의 따옴표도 확인했다.
+  - `down`은 마지막 중계가 실패한 상자를 남겼다. `FORCE=1`이면 지웠다.
+- 아직 안 한 것: 진짜 b2 CLI·vast·MORAI·엔진으로는 돌리지 않았다.
+
+## learner 쪽에 필요한 것
+- `train/rl/run.sh`는 spool을 `b2 sync` 한 번에 받는다. sync 안의 순서는 정해져 있지 않다. 그래서 받는 도중 done.json과 steps.jsonl이 먼저 오고 `*.bin`이 늦게 올 수 있다. 그러면 `finished()`가 그 에피소드를 집고 `Decisions`가 없는 파일에서 죽는다.
+  - 고치는 법: 스테이징 폴더로 받는다. 그 done.json을 가져온 `b2 sync`가 0으로 끝난 뒤에만 에피소드를 spool로 옮긴다. 액터가 파일을 먼저 올리므로 그 sync의 목록에는 파일이 모두 들어 있다.
+- 살아 있음 판정: b2가 mtime을 지키므로 게이트는 액터가 inflight.json을 쓴 시각(에피소드 시작)을 본다. 중계와 learner sync 때문에 최대 약 1–2분 늦게 도착한다. 그래서 에피소드가 약 8분을 넘으면 그 액터는 게이트에서 죽은 것으로 보인다(로컬에서도 10분이면 같다).
+- 버려진 에피소드: `rl_episode`는 steps.jsonl을 에피소드가 끝날 때만 쓴다. 그래서 죽은 액터의 달리던 에피소드는 spool에 오지 않는다(로컬도 같다). `finished()`의 abandoned 경로는 사실상 쓰이지 않는다.
+- 회선: 상자당 약 6 MB/s다. 상자 8대면 learner 회선에 약 50 MB/s가 들어오고, B2에는 상자당 시간당 약 22 GB가 쌓인다(추정).

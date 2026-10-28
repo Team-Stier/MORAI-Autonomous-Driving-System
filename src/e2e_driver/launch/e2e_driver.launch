@@ -11,6 +11,8 @@
     <param if="$(eval optenv('E2E_APPLY_DELAY_S', '') != '')" name="apply_delay_s" value="$(optenv E2E_APPLY_DELAY_S 0)" type="double"/>
     <!-- the world number the node puts in its requests (RL episode managers pick their decisions from the engine dumps) -->
     <param name="world" value="$(optenv E2E_WORLD 0)" type="int"/>
+    <!-- RL actor (tools/pod/ppo_box.sh): route s [s0, s1] of the server's second expert set, e.g. "[800, 1841.7]"; unset = the yaml's -->
+    <param if="$(eval optenv('E2E_EXPERT2_ZONE', '') != '')" name="expert2_zone" value="$(optenv E2E_EXPERT2_ZONE [])" type="yaml"/>
     <!-- MORAI synchronous mode (tools/pod sync evaluation): no loops, the steps come from sync_clock_node -->
     <param name="sync" value="$(optenv E2E_SYNC 0)" type="bool"/>
   </node>
