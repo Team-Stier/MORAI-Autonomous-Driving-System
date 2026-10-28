@@ -33,7 +33,8 @@ Records = the learner's spool (Alpamayo-Cosmos train/rl/episodes.py): OUT is the
   OUT/NAME/epK/objects.json.gz   every 20 Hz frame: [tau, t_wall, Object Info records (id, type, x, y, z, heading deg,
                            length, width, height, as decode_objects gives them)] (the PPO critic's offline inputs)
 --returns (the DAgger actor, user 10/28): a failure does not end the episode: as eval_manager's laps, off road
-  (OFF_ROAD_S), stuck (STUCK_S, red time excluded; CRASH_STUCK_S after a collision) or a skipped checkpoint (SKIP_M)
+  (OFF_ROAD_S), stuck (eval_manager's Stuck: STUCK_S without progress, red-light and yield time excluded, WAIT_MAX_S in
+  all; CRASH_STUCK_S after a collision) or a skipped checkpoint (SKIP_M)
   spawns the car at the last checkpoint passed and the lap goes on (GRACE_S before the next check); --return-hook runs
   after each. The episode records the returns (t, tau, t_wall, to, reason, s, how); steps.jsonl rows carry
   since_return_s (simulator s since the last return) once one happened: their 1.5 s history may cross the jump.
@@ -119,9 +120,9 @@ class Episodes(em.Manager):
         self.critic = rl_critic.Critic(self.kmap, self.cfg, self.lanes, self.s_exit, self.s_goal)
         tr.i, clock.last, passed = self.cp_i[self.a.start_cp], None, self.a.start_cp
         t_play = t_move = x0 = None
-        prog_s, prog_t, crash_t, off_t, grace = 0.0, math.inf, -math.inf, None, math.inf
+        st, off_t, grace = None, None, math.inf          # st: eval_manager's no-progress clock (em.Stuck), from play
         end = t_end = None
-        waits, rng, ep["red_cap"], ep["returns"], objt, tau_prev = {}, np.random.default_rng(seed), [], [], [], None
+        waits, rng, ep["red_cap"], ep["returns"], objt = {}, np.random.default_rng(seed), [], [], []
         w0 = time.time()
         while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
             t = time.time()
@@ -143,7 +144,7 @@ class Episodes(em.Manager):
             if t_move is None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
                 t_move = tau
             if t_play is None and (played.is_set() or t_move is not None):
-                t_play, prog_s, prog_t, grace = tau, s, tau, tau + em.GRACE_S
+                t_play, st, grace = tau, em.Stuck(tau, s), tau + em.GRACE_S
             if passed < 14 and math.hypot(e["x"] - cps[passed + 1, 0], e["y"] - cps[passed + 1, 1]) <= em.CP_R:
                 passed += 1
                 ep["checkpoints"].append([passed, round(tau - t_play, 2) if t_play is not None else 0.0])
@@ -164,28 +165,23 @@ class Episodes(em.Manager):
                             print(f"red cap {ic}: {err}", flush=True)
                         w[2] = tau
                         ep["red_cap"].append([s_stop, round(tau - w[0], 1), round(tau - (t_play or tau), 1)])
-            if e["hit"]:
-                crash_t = tau
-            if s > prog_s + em.PROGRESS_M:
-                prog_s, prog_t = s, tau
-            elif self.a.returns and tau_prev is not None and e["tl"] and e["color"] & 1 and not e["color"] & 16:
-                prog_t += tau - tau_prev                  # as eval_manager: red time does not count as stuck
-            tau_prev = tau
+            stuck = st.update(tau, s, e, objs, bool(e["hit"])) if st else None   # red and yield time excluded, 90 s cap
             off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
             off_t = (off_t if off_t is not None else tau) if off else None
             why = None                                    # --returns: eval_manager's return rules, then on from the last CP
             if self.a.returns and end is None and t_play is not None and tau >= grace:
                 if off_t is not None and tau - off_t >= em.OFF_ROAD_S:
                     why = "off_road"
-                elif tau - prog_t >= em.STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= em.CRASH_STUCK_S):
-                    why = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
+                elif stuck:
+                    why = stuck
                 elif passed < 14 and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + em.SKIP_M:
                     why = f"missed_cp{passed + 1}"
             if why:
                 how = self.spawn(passed)
                 ep["returns"].append(dict(t=round(tau - t_play, 2), tau=round(tau, 3), t_wall=round(t, 3), to=passed,
                                           reason=why, s=round(s, 1), how=how))
-                tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
+                tr.i, off_t = self.cp_i[passed], None
+                st.reset(tau, float(tr.s[self.cp_i[passed]]))
                 grace, clock.last = tau + em.GRACE_S, None
                 if self.a.return_hook:                    # e.g. the shadow's planners must not see the jump
                     threading.Thread(target=lambda: subprocess.run(["bash", "-c", self.a.return_hook], capture_output=True,
@@ -197,8 +193,8 @@ class Episodes(em.Manager):
                     end = "slow"
                 elif not self.a.returns and tau >= grace and off_t is not None and tau - off_t >= self.min_off:
                     end = "off_road"
-                elif not self.a.returns and tau >= grace and (tau - prog_t >= em.STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= em.CRASH_STUCK_S)):
-                    end = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
+                elif not self.a.returns and tau >= grace and stuck:
+                    end = stuck
                 elif not self.a.returns and passed < self.a.end_cp and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + em.SKIP_M:
                     end = f"missed_cp{passed + 1}"
                 elif tau - t_play > self.limit_s:
