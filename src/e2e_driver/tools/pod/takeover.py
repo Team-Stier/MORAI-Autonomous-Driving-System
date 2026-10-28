@@ -2,9 +2,10 @@
 """takeover.py watch PORT LOG N_S (shadow master) | pub PORT (stack master): the actor's start intervention (user
 10/28: a policy that stays stopped where the expert would go only repeats the same rows, then the 60 s stuck return).
 watch: once the car has stood (GT speed < 0.3 m/s) for N_S seconds (the longest red wait + 5 s) and the shadow
-collection driver says go (its plan's speed > 0.5 m/s and fresh, its light not red/yellow, no yield or AEB command in the
-last second), its /shadow/control_cmd goes to `pub` over UDP until the car reaches 3 m/s, 5 s pass or the go breaks;
-then a new full N_S stop is needed. A teleport (> 5 m jump) or a planner gap (> 1 s: the episode restart) resets the
+collection driver says go (its plan's speed > 0.5 m/s and fresh, no yield or AEB command in the last second; its
+velocity_planner already zeroes the plan before a red stop line, and a light check of its own held a left turn on its
+arrow: 10/28 run f, 900 s at CP6), its /shadow/control_cmd goes to `pub` over UDP until the car reaches 3 m/s, 5 s
+pass or the go breaks; then a new full N_S stop is needed. A teleport (> 5 m jump) or a planner gap (> 1 s: the episode restart) resets the
 clock. Each intervention is a line of LOG (JSON: t_start, t_end, wall clock; why it ended) for dagger_label.py.
 pub: republishes the newest command (< 0.15 s old) on /morai_udp_bridge/control_cmd at 500 Hz: the bridge sends the
 newest message at 50 Hz, so the speed filter's 20 Hz output rarely gets through (the collection AEB overrides alike).
@@ -16,18 +17,17 @@ import sys
 import time
 
 V_STOP, V_DONE, MAX_S, QUIET_S = 0.3, 3.0, 5.0, 1.0
-STOP_STATES = (2, 3, 5, 6, 8, 10, 13)               # interfaces/TrafficLight with red or yellow lit (no green)
 
 
 def watch(port, log, n_s):
     import rospy
-    from interfaces.msg import Path, TrafficLight
+    from interfaces.msg import Path
     from morai_msgs.msg import CtrlCmd
     from nav_msgs.msg import Odometry
 
     rospy.init_node("shadow_takeover_watch")
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    st = dict(v=0.0, xy=None, stopped=None, plan=(0.0, -1e9), light=0, override=-1e9, on=None)
+    st = dict(v=0.0, xy=None, stopped=None, plan=(0.0, -1e9), override=-1e9, on=None)
 
     def now():
         return time.time()
@@ -52,7 +52,7 @@ def watch(port, log, n_s):
     def go():
         t = now()
         v_plan, t_plan = st["plan"]
-        return v_plan > 0.5 and t - t_plan < 0.3 and st["light"] not in STOP_STATES and t - st["override"] > QUIET_S
+        return v_plan > 0.5 and t - t_plan < 0.3 and t - st["override"] > QUIET_S
 
     def end(why):
         rec = dict(t_start=round(st["on"], 3), t_end=round(now(), 3), why=why, v_end=round(st["v"], 2))
@@ -84,7 +84,6 @@ def watch(port, log, n_s):
 
     rospy.Subscriber("/collect_only/ego_status", Odometry, on_ego, queue_size=10)
     rospy.Subscriber("/local_path/velocity_injected", Path, on_plan, queue_size=1)
-    rospy.Subscriber("/traffic_light", TrafficLight, lambda m: st.__setitem__("light", m.state), queue_size=1)
     rospy.Subscriber("/shadow/control_cmd", CtrlCmd, on_cmd, queue_size=1)
     rospy.Subscriber("/shadow/yield_cmd", CtrlCmd, on_override, queue_size=1)
     rospy.Subscriber("/shadow/aeb_cmd", CtrlCmd, on_override, queue_size=1)
