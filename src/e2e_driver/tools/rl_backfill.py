@@ -36,6 +36,8 @@ import rl_episode  # noqa: E402
 import rl_reward  # noqa: E402
 import segments  # noqa: E402
 
+EXEMPT_END_CP = 12   # the 고주로 exit: the only segment end PPO closes as "slow" (round etc. run --no-slow-end)
+
 
 def _cps(args):
     t = args.split()
@@ -59,7 +61,7 @@ def episode(mgr, d, ep):
         return "frame_count"
     rets = ep.get("returns", [])
     tl["penalties"] = sorted([p for p in tl["penalties"] if p[2] != "return"] + [[x["tau"], em.RETURN_S, "return"] for x in rets])
-    if tl["end"] == "slow" and ep["end_cp"] != rl_episode.EXEMPT_END_CP:
+    if tl["end"] == "slow" and ep["end_cp"] != EXEMPT_END_CP:
         tl["end"] = "slow_cut"
     W, T = np.asarray(tl["clock"], float).T
     t_dec = [float(np.interp(rl_episode.head(d / st["req"])["t_wall"], W, T)) if "req" in st and (d / st["req"]).exists()

@@ -12,8 +12,10 @@
 #   stack n's master (shadow_relay.py, restamped to wall time). shadow_rec.py records what dagger_label.py needs.
 # drive: the collection driver drives world 1 itself (label accuracy check; stack 1 must be down): the fork's own bridge
 #   (make-bridge.py config) and speed_filter, no remaps: the R2 Mac stack's driver.
-# Objects (shadow_objects.py): Object Info velocities in map axes for every node, the highway's moving vehicles for the
-#   planners (frenet_gap.patch), no vehicles for the yield node in the roundabout (roundabout_merge decides the entry).
+# Objects (shadow_objects.py): yield and AEB get moving objects only while the model could see them (the checker's
+#   visible(), SCORER = Alpamayo-Cosmos tools/scorer), Object Info velocities in map axes for every node, the highway's
+#   moving vehicles for the planners (frenet_gap.patch), no vehicles for the yield node in the roundabout
+#   (roundabout_merge decides the entry).
 # restart: the driver nodes anew (an episode's spawn is a jump the planners must not see; rl_episode --loc-restart),
 #   back once /local_path is out again (25 s at most). Logs: /root/shadow/n/. Env: SHADOW_CPUS (all).
 # TAKEOVER=1 (shadow mode): the start intervention, takeover.py watch (here) + pub (stack n's master, TAKEOVER_S 25):
@@ -91,7 +93,7 @@ nodes() {  # n: the driver nodes as one session (restart kills and starts this s
     st tl_gt python3 -u \$T/collect-only-tl-gt-node.py _enable_collect_only:=true _port:=$((7509 + off))
     st tl_gt_driver python3 -u \$T/tl-gt-driver-node.py
     st objects python3 -u \$T/gt-objects-filter-node.py _object_port:=$((17505 + off)) /objects:=/shadow/objects_static
-    st shadow_objects python3 -u $HERE/shadow_objects.py
+    st shadow_objects python3 -u $HERE/shadow_objects.py ${SCORER:-$V/Alpamayo-Cosmos/tools/scorer}
     st gt_aeb python3 -u \$T/gt-aeb-node.py /shadow/objects_map $aeb
     st gt_yield python3 -u \$T/gt-yield-node.py /shadow/yield_objects $yld
     st tf rosrun tf_publisher tf_publisher_node
@@ -154,5 +156,5 @@ case ${1:-} in
   restart) restart "$2" ;;
   down) down ;;
   check) check "$2" ;;
-  *) sed -n 2,19p "$0"; exit 1 ;;
+  *) sed -n 2,22p "$0"; exit 1 ;;
 esac

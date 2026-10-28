@@ -9,13 +9,14 @@ N: prints the split and one line per actor (segment, its rl_episode arguments). 
 import argparse
 import os
 
-# segment -> (rl_episode range arguments, weight). dyn / tunnel: shadow-dyn's proposal (CP5 at 471.1 m would end the
-# episode inside the dynamic zone); round: shadow-round's runs; hwy: CP9 for the on-ramp merge at CP10 (1118.7 m).
+# segment -> (rl_episode range arguments, weight). dyn / tunnel: shadow-dyn's (38b340d: scenes whose movers make the Ego
+# brake, the run past the end CP not cut by the "slow" end); round: shadow-round's runs, same end; hwy: CP9 for the
+# on-ramp merge at CP10 (1118.7 m), the official slow end after CP12 kept.
 SEGMENTS = dict(
-    dyn=("--start-cp 4 --end-cp 6 --past-m 0", 30),
-    round=("--start-cp 7 --end-cp 9 --past-m 60", 25),
+    dyn=("--start-cp 4 --end-cp 5 --past-m 90 --no-slow-end --scene-preset brake", 30),
+    round=("--start-cp 7 --end-cp 9 --past-m 60 --no-slow-end", 25),
     hwy=("--start-cp 9 --end-cp 12 --past-m 100", 25),
-    tunnel=("--start-cp 12 --end-cp 14 --past-m 60", 20),
+    tunnel=("--start-cp 12 --end-cp 13 --past-m 125 --no-slow-end --scene-preset brake", 20),
 )
 FULL = "--start-cp 0 --end-cp 14 --past-m 100"
 COMMON = "--returns"

@@ -89,7 +89,8 @@ def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S, returns=False):
     a = argparse.Namespace(name="t", start_cp=9, end_cp=12, past_m=100.0, seed=0, limit_s=limit_s, v_ref=80 / 3.6,
                            fail_s=100.0, weather=None, scorer=scorer, out=out, direct=True, loc_restart="true",
                            world=1, dump_dir=dump, objinfo_port=0, lora_latest=os.path.join(out, "latest.json"),
-                           sync=None, red_cap=None, returns=returns, return_hook=None)
+                           sync=None, red_cap=None, returns=returns, return_hook=None, no_slow_end=False,
+                           scene_preset="")
     wall, order = Wall(), []
     wall.t = time.time()                                  # dump mtimes are real: keep the fake wall clock near them
 
@@ -100,7 +101,7 @@ def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S, returns=False):
         return "ok"
     em.time = rl_episode.time = wall
     em.msc = msc
-    em.make_scene = lambda seed: ("ev_test", em.shade_test(BOX), {})
+    em.make_scene = lambda seed, preset="": ("ev_test", em.shade_test(BOX), {})
     em.send_weather = lambda host, w, h: order.append("weather")
     rl_episode.subprocess = types.SimpleNamespace(run=lambda *args, **kw: order.append("loc_restart"))
     mgr = rl_episode.Episodes(a)

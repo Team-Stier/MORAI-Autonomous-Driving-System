@@ -10,14 +10,16 @@ Checkpoints are the official 10/7 table rows (checkpoints_20261007.csv, START = 
 them). The 60 kph exemption (고주로) is CP10 s 1118.7 -> CP12 s 1741.7, so the default episode is CP9 (s 930.6) -> CP12
 + 100 m: the entry and the exit hand-over, where the limit applies again, are inside it.
 Episode k (seed S*1000+k):
-  - scene: a fresh clcol variant (scenario_variants.py, as an eval lap: signal phases, NPC traffic, obstacles drawn)
+  - scene: a fresh clcol variant (scenario_variants.py, as an eval lap: signal phases, NPC traffic, obstacles drawn;
+    --scene-preset brake: DAgger dynamic/tunnel movers that make the Ego stop)
   - pause -> load-scene -> Ego to START_CP with MORAI's Spawn program (gRPC SetTransform to the table pose with --direct
     or on a simulator whose gRPC port is not 7789: the program only talks to 7789) -> weather and time of the start
     section -> localization restart (LOC_RESTART) -> 4 s -> play
   - weather and time per checkpoint section, drawn from (seed, section) as in evaluation (rules §2-7-2)
-  - ends: "goal" (route s >= s_goal = s(END_CP) + PAST_M), "slow" (past END_CP below 60 kph), a failure ("off_road":
-    all wheels off the drivable area outside the shadow for the scorer's inoperable.min_s; "missed_cpN"; "stuck" /
-    "stuck_after_collision" as in evaluation) or "time_limit" (LIMIT_S of simulator time after play: truncated)
+  - ends: "goal" (route s >= s_goal = s(END_CP) + PAST_M), "slow" (past END_CP below 60 kph; not with --no-slow-end),
+    a failure ("off_road": all wheels off the drivable area outside the shadow for the scorer's inoperable.min_s;
+    "missed_cpN"; "stuck" / "stuck_after_collision" as in evaluation) or "time_limit" (LIMIT_S of simulator time after
+    play: truncated)
   - recorded 1 s past the end, paused, scored by tools/scorer, rewards per decision (rl_reward.py), the privileged
     critic vector per decision (rl_critic.py, from the 20 Hz Ego GT and MORAI Object Info on --objinfo-port)
 Records = the learner's spool (Alpamayo-Cosmos train/rl/episodes.py): OUT is the spool, NAME the actor.
@@ -31,7 +33,8 @@ Records = the learner's spool (Alpamayo-Cosmos train/rl/episodes.py): OUT is the
   OUT/NAME/epK/objects.json.gz   every 20 Hz frame: [tau, t_wall, Object Info records (id, type, x, y, z, heading deg,
                            length, width, height, as decode_objects gives them)] (the PPO critic's offline inputs)
 --returns (the DAgger actor, user 10/28): a failure does not end the episode: as eval_manager's laps, off road
-  (OFF_ROAD_S), stuck (STUCK_S, red time excluded; CRASH_STUCK_S after a collision) or a skipped checkpoint (SKIP_M)
+  (OFF_ROAD_S), stuck (eval_manager's Stuck: STUCK_S without progress, red-light and yield time excluded, WAIT_MAX_S in
+  all; CRASH_STUCK_S after a collision) or a skipped checkpoint (SKIP_M)
   spawns the car at the last checkpoint passed and the lap goes on (GRACE_S before the next check); --return-hook runs
   after each. The episode records the returns (t, tau, t_wall, to, reason, s, how); steps.jsonl rows carry
   since_return_s (simulator s since the last return) once one happened: their 1.5 s history may cross the jump.
@@ -62,7 +65,6 @@ import rl_critic
 import rl_reward
 
 LIMIT_S = 150.0      # simulator s after play; CP9 -> CP12 + 100 m is 911 m (46.5 s median for the 623 m exemption alone)
-EXEMPT_END_CP = 12   # "slow" (below 60 kph past END_CP) ends only the 고주로's episodes: elsewhere the car is always below it
 # --red-cap LO HI (user 10/28): a red wait at a judged stop line ends after a time drawn from [LO, HI] s: the
 # intersection gets its phase with the route's green (SetIntersectionPhase over Infrastructure gRPC restarts that phase,
 # then the normal cycle; morai-parallel-collect r2_lights). The cycle itself is fixed in the map (MGeo), so a scene can
@@ -90,7 +92,7 @@ class Episodes(em.Manager):
 
     def reset(self, k, seed):
         """pause -> load-scene -> Spawn START_CP -> start section's weather -> localization restart -> 4 s (-> play)."""
-        name, shaded, meta = em.make_scene(seed)
+        name, shaded, meta = em.make_scene(seed, self.a.scene_preset)
         em.msc("pause")
         r = em.msc("load-scene", name + "/62", 90)
         if not r.startswith("ok"):
@@ -118,9 +120,9 @@ class Episodes(em.Manager):
         self.critic = rl_critic.Critic(self.kmap, self.cfg, self.lanes, self.s_exit, self.s_goal)
         tr.i, clock.last, passed = self.cp_i[self.a.start_cp], None, self.a.start_cp
         t_play = t_move = x0 = None
-        prog_s, prog_t, crash_t, off_t, grace = 0.0, math.inf, -math.inf, None, math.inf
+        st, off_t, grace = None, None, math.inf          # st: eval_manager's no-progress clock (em.Stuck), from play
         end = t_end = None
-        waits, rng, ep["red_cap"], ep["returns"], objt, tau_prev = {}, np.random.default_rng(seed), [], [], [], None
+        waits, rng, ep["red_cap"], ep["returns"], objt = {}, np.random.default_rng(seed), [], [], []
         w0 = time.time()
         while end is None or tau < t_end + 1.0:          # 1 s past the end: the scorer's 10 Hz grid reaches it too
             t = time.time()
@@ -142,7 +144,7 @@ class Episodes(em.Manager):
             if t_move is None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
                 t_move = tau
             if t_play is None and (played.is_set() or t_move is not None):
-                t_play, prog_s, prog_t, grace = tau, s, tau, tau + em.GRACE_S
+                t_play, st, grace = tau, em.Stuck(tau, s), tau + em.GRACE_S
             if passed < 14 and math.hypot(e["x"] - cps[passed + 1, 0], e["y"] - cps[passed + 1, 1]) <= em.CP_R:
                 passed += 1
                 ep["checkpoints"].append([passed, round(tau - t_play, 2) if t_play is not None else 0.0])
@@ -163,28 +165,23 @@ class Episodes(em.Manager):
                             print(f"red cap {ic}: {err}", flush=True)
                         w[2] = tau
                         ep["red_cap"].append([s_stop, round(tau - w[0], 1), round(tau - (t_play or tau), 1)])
-            if e["hit"]:
-                crash_t = tau
-            if s > prog_s + em.PROGRESS_M:
-                prog_s, prog_t = s, tau
-            elif self.a.returns and tau_prev is not None and e["tl"] and e["color"] & 1 and not e["color"] & 16:
-                prog_t += tau - tau_prev                  # as eval_manager: red time does not count as stuck
-            tau_prev = tau
+            stuck = st.update(tau, s, e, objs, bool(e["hit"])) if st else None   # red and yield time excluded, 90 s cap
             off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
             off_t = (off_t if off_t is not None else tau) if off else None
             why = None                                    # --returns: eval_manager's return rules, then on from the last CP
             if self.a.returns and end is None and t_play is not None and tau >= grace:
                 if off_t is not None and tau - off_t >= em.OFF_ROAD_S:
                     why = "off_road"
-                elif tau - prog_t >= em.STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= em.CRASH_STUCK_S):
-                    why = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
+                elif stuck:
+                    why = stuck
                 elif passed < 14 and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + em.SKIP_M:
                     why = f"missed_cp{passed + 1}"
             if why:
                 how = self.spawn(passed)
                 ep["returns"].append(dict(t=round(tau - t_play, 2), tau=round(tau, 3), t_wall=round(t, 3), to=passed,
                                           reason=why, s=round(s, 1), how=how))
-                tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
+                tr.i, off_t = self.cp_i[passed], None
+                st.reset(tau, float(tr.s[self.cp_i[passed]]))
                 grace, clock.last = tau + em.GRACE_S, None
                 if self.a.return_hook:                    # e.g. the shadow's planners must not see the jump
                     threading.Thread(target=lambda: subprocess.run(["bash", "-c", self.a.return_hook], capture_output=True,
@@ -192,12 +189,12 @@ class Episodes(em.Manager):
             if end is None and t_play is not None:
                 if passed >= self.a.end_cp and lat < 15.0 and s >= self.s_goal:
                     end = "goal"
-                elif self.a.end_cp == EXEMPT_END_CP and passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
+                elif not self.a.no_slow_end and passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
                     end = "slow"
                 elif not self.a.returns and tau >= grace and off_t is not None and tau - off_t >= self.min_off:
                     end = "off_road"
-                elif not self.a.returns and tau >= grace and (tau - prog_t >= em.STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= em.CRASH_STUCK_S)):
-                    end = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
+                elif not self.a.returns and tau >= grace and stuck:
+                    end = stuck
                 elif not self.a.returns and passed < self.a.end_cp and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + em.SKIP_M:
                     end = f"missed_cp{passed + 1}"
                 elif tau - t_play > self.limit_s:
@@ -367,6 +364,9 @@ def main():
     ap.add_argument("--out", default="~/morai-eval/rl", help="the learner spool (NAME = actor)")
     ap.add_argument("--port", type=int, default=8092)
     ap.add_argument("--direct", action="store_true", help="Spawn and weather over gRPC instead of the official programs")
+    ap.add_argument("--no-slow-end", action="store_true", help="end at the goal only, not \"slow\" past END_CP (a segment "
+                    "goal short of the next light: the dynamic zone's CP5 + 90 m stops before the CP6 light)")
+    ap.add_argument("--scene-preset", default="", help="scenario_variants.py SCENE_PRESET (brake: DAgger dynamic/tunnel scenes)")
     ap.add_argument("--red-cap", type=float, nargs=2, metavar=("LO", "HI"), help="red waits end after a time drawn from [LO, HI] s")
     ap.add_argument("--returns", action="store_true", help="a failure returns to the last checkpoint passed (eval_manager's "
                     "rules) and the lap goes on; the episode ends at the goal or --limit-s")
