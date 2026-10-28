@@ -626,13 +626,13 @@ def one(j):
         else:
             mode = "plan"                             # no merge (the ring's objects): the planner's stop request
     out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, speed)
-    entering = outside_band(out[:1])                  # ring decisions: the label from what the model sees (objs), its
-    meet = sec in ROUNDABOUT and ring_meet(out, objs_all, behind=entering) is not None   # validity against every car
+    entering = outside_band(out[:1])                  # ring cars the model sees at t0 (objs): a hidden one is the checker's
+    meet = sec in ROUNDABOUT and ring_meet(out, objs, behind=entering) is not None   # unavoidable, not a yield or ring:meet
     if mode.startswith("rb_") and meet and entering:
         speed.k = 0                                   # the same schedule from t0, capped to yield at the band
         for name, sp in (("rb_yield", yield_at_band(path, speed)), ("rb_stop", lambda n: 0.0)):
             stop, fs = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, sp)
-            if ring_meet(stop, objs_all) is None:
+            if ring_meet(stop, objs) is None:
                 out, fl, mode, meet = stop, fs, name, False
                 break
     ring = set(map(id, ring_cars(objs_all))) if sec in ROUNDABOUT else set()
