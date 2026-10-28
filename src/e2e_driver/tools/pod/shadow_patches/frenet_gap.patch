@@ -1,6 +1,14 @@
 --- a/src/path_planner/include/path_planner/cores/frenet_path.hpp	2026-10-28 11:00:45
-+++ b/src/path_planner/include/path_planner/cores/frenet_path.hpp	2026-10-28 11:50:06
-@@ -55,6 +55,8 @@
++++ b/src/path_planner/include/path_planner/cores/frenet_path.hpp	2026-10-28 12:07:07
+@@ -3,6 +3,7 @@
+ #include <path_planner/libraries/types.hpp>
+ #include <node_pipeline/extension.hpp>
+ #include <nav_msgs/Odometry.h>
++#include <ros/console.h>
+ #include <visualization_msgs/MarkerArray.h>
+ #include <lanelet2_core/geometry/LaneletMap.h>
+ #include <lanelet2_routing/RoutingGraph.h>
+@@ -55,6 +56,8 @@
      }
      updateRoute(*route);
      const auto obstacles = objectBoxes(objects);
@@ -9,19 +17,38 @@
      visualization_msgs::MarkerArray display;
      visualization_msgs::Marker clear;
      clear.action = visualization_msgs::Marker::DELETEALL;
-@@ -63,19 +65,32 @@
+@@ -63,19 +66,52 @@
      std::size_t best_progress = 0;
      double best_cost = std::numeric_limits<double>::infinity();
      std::size_t selected_marker = 0;
 +    double selected_end = std::numeric_limits<double>::infinity();
 +    const Reference* chosen = nullptr;
 +    bool waiting = false;                                  // a change back to the route waits for a gap
++    double match = std::numeric_limits<double>::infinity();   // a slower target-lane flow to come down to first
++    double remaining = 0.0;                                // how far the kept lane still goes: its end or the route's loss
++    for (const auto& reference : references)
++      if (reference.lanes.front() == current) {
++        const double end = reference.line.stations.back() - reference.start_s;
++        remaining = std::max(remaining, std::min(end >= parameters_.path_length_m + LANE_CHANGE_EXTRA_M - 1.0 ?
++            std::numeric_limits<double>::infinity() : end, routeExit(reference)));
++      }
++    const bool forced = remaining - END_GAP_M < LANE_CHANGE_S * std::max(speed, 5.0);
++    Flow merge_flow;
      for (const auto& reference : references) {
-+      // DAgger shadow (10/28): a lane change only into a gap, over at least LANE_CHANGE_S of travel
++      // DAgger shadow (10/28): a lane change only into a gap, over at least LANE_CHANGE_S of travel, and only at the
++      // target lane's flow speed (within FLOW_DIFF_MPS) unless the lane runs out first (forced: rear BEV range empty)
 +      const bool change = reference.lanes.front() != current;
-+      if (change && !gapOk(reference, movers, position, speed)) {
-+        waiting |= std::any_of(reference.lanes.begin(), reference.lanes.end(), [&](const auto& l) { return onRoute(l); });
-+        continue;
++      Flow flow;
++      if (change) {
++        flow = laneFlow(reference, movers);
++        const bool matched = flow.n == 0 || std::abs(flow.speed - speed) <= FLOW_DIFF_MPS;
++        if (!(forced || matched) || !gapOk(reference, movers, speed, forced)) {
++          if (std::any_of(reference.lanes.begin(), reference.lanes.end(), [&](const auto& l) { return onRoute(l); })) {
++            waiting = true;
++            if (!matched && flow.speed < speed) match = std::min(match, flow.speed);
++          }
++          continue;
++        }
 +      }
        for (double transition : parameters_.transition_lengths_m) {
          for (double offset : parameters_.lateral_offsets_m) {
@@ -41,19 +68,26 @@
                selected = std::move(candidate);
 +              selected_end = reference.line.stations.back() - reference.start_s;
 +              chosen = &reference;
++              merge_flow = flow;
                selected_marker = display.markers.size();
              }
            }
-@@ -89,6 +104,8 @@
+@@ -89,6 +125,14 @@
        marker.scale.x = 0.12;
      }
      visualizer_.publish(display);
++    const bool changing = chosen && chosen->lanes.front() != current;
++    if (changing && !changing_)                            // one line per merge start (DAgger debug: speed difference)
++      ROS_INFO("frenet merge: v %.2f flow %.2f n %d forced %d remaining %.1f", speed, merge_flow.speed, merge_flow.n,
++               int(forced), remaining);
++    changing_ = changing;
++    if (waiting && chosen && !changing && match < speed - FLOW_DIFF_MPS) matchSpeed(selected, speed, match);
 +    if (waiting && chosen) selected_end = std::min(selected_end, routeExit(*chosen));
 +    if (selected_end < parameters_.path_length_m) stopAtLaneEnd(selected, selected_end);
      return selected;
    }
  
-@@ -243,7 +260,7 @@
+@@ -243,7 +287,7 @@
        Reference reference = std::move(pending.back());
        pending.pop_back();
        reference.start_s = project(reference.line, position, first.stations.back()).station;
@@ -62,7 +96,7 @@
          complete.push_back(std::move(reference));
          continue;
        }
-@@ -265,11 +282,11 @@
+@@ -265,11 +309,11 @@
      return complete;
    }
    interfaces::Path generate(const Reference& reference, const Vec2& position, double heading,
@@ -76,11 +110,10 @@
      if (horizon <= 0.0) return path;
      transition = std::min(transition, horizon);
      const double d0 = (position - origin.point.head<2>()).dot(normal(origin.heading));
-@@ -304,10 +321,82 @@
-     const double heading = poseYaw(pose);
+@@ -305,9 +349,113 @@
      return {xy(pose.position) + ((parameters_.vehicle_front_m - parameters_.vehicle_rear_m) / 2) * unit(heading),
              heading, (parameters_.vehicle_front_m + parameters_.vehicle_rear_m) / 2, parameters_.vehicle_half_width_m};
-+  }
+   }
 +  // DAgger shadow (10/28): the collection driver changed lanes late, 8-16 m long at any speed (a 3.5 m shift at 23 m/s
 +  // is curvature ~0.08, so velocity_planner's curve speed sqrt(2.6 / 0.08) dropped it to ~5.7 m/s) and blind to the
 +  // moving cars (gt-objects-filter drops them; shadow_objects.py adds the highway's moving vehicles in map axes). A
@@ -93,6 +126,10 @@
 +  // a lane change's path runs LANE_CHANGE_EXTRA_M past path_length_m (3 s at 27 m/s); the others keep 50 m, so the
 +  // stop-line cutoff (velocity_planner, on the path's length) still starts 50 m out
 +  static constexpr double LANE_CHANGE_EXTRA_M = 30.0;
++  // the merge speed rule (user 10/28): a 3 s change with 5 m of margin is safe from a car the 20 m rear range cannot see
++  // only up to ~5 m/s of speed difference; the highway NPCs keep 50-100 km/h per lane
++  static constexpr double FLOW_DIFF_MPS = 5.0, FLOW_VIEW_M = 60.0, MATCH_DECEL = 2.0;
++  bool changing_ = false;
 +  struct Mover { Vec2 center; double half_length; Vec2 velocity; };
 +  std::vector<Mover> movingVehicles(const interfaces::Objects& objects) const {
 +    std::vector<Mover> movers;
@@ -103,31 +140,58 @@
 +    }
 +    return movers;
 +  }
-+  bool gapOk(const Reference& reference, const std::vector<Mover>& movers, const Vec2& position, double speed) const {
++  // a mover in the target lane: station from the car (+ ahead) and speed along the lane, or false when not in it
++  bool inLane(const Reference& reference, const Mover& m, double& rel, double& along) const {
++    const auto p = project(reference.line, m.center);
++    rel = p.station - reference.start_s, along = m.velocity.dot(unit(p.heading));
++    if (p.station > 1e-6) return p.distance_squared <= LANE_HALF_M * LANE_HALF_M;
++    const auto o = sample(reference.line, 0.0);  // behind the target lane's first lanelet (10/28 replay: 2.6 m back): straight back
++    const Vec2 d = m.center - o.point.head<2>();
++    rel = d.dot(unit(o.heading)) - reference.start_s;
++    along = m.velocity.dot(unit(o.heading));
++    return std::abs(d.dot(normal(o.heading))) <= LANE_HALF_M;
++  }
++  // forced (the kept lane runs out): no car within the rear range at all and FRONT gap ahead, no TTC
++  bool gapOk(const Reference& reference, const std::vector<Mover>& movers, double speed, bool forced) const {
 +    for (const auto& m : movers) {
-+      const auto p = project(reference.line, m.center);
-+      double rel = p.station - reference.start_s, along = m.velocity.dot(unit(p.heading));
-+      bool in_lane = p.distance_squared <= LANE_HALF_M * LANE_HALF_M;
-+      if (p.station <= 1e-6) {   // behind the target lane's first lanelet (10/28 replay: 2.6 m back, unseen): straight back
-+        const auto o = sample(reference.line, 0.0);
-+        const Vec2 d = m.center - o.point.head<2>();
-+        rel = d.dot(unit(o.heading)) - reference.start_s;
-+        along = m.velocity.dot(unit(o.heading));
-+        in_lane = std::abs(d.dot(normal(o.heading))) <= LANE_HALF_M;
-+      }
-+      if (!in_lane) continue;                                  // not in the target lane
++      double rel, along;
++      if (!inLane(reference, m, rel, along)) continue;
 +      if (rel < 0) {
 +        if (-rel > REAR_RANGE_M + m.half_length) continue;
 +        const double gap = -rel - parameters_.vehicle_rear_m - m.half_length, closing = along - speed;
-+        if (gap < GAP_M || (closing > 0 && gap / closing < GAP_REAR_TTC_S)) return false;
++        if (forced || gap < GAP_M || (closing > 0 && gap / closing < GAP_REAR_TTC_S)) return false;
 +      } else {
 +        const double gap = rel - parameters_.vehicle_front_m - m.half_length, closing = speed - along;
 +        if (gap > FRONT_RANGE_M) continue;
-+        if (gap < GAP_M || (closing > 0 && gap / closing < GAP_FRONT_TTC_S)) return false;
++        if (gap < GAP_M || (!forced && closing > 0 && gap / closing < GAP_FRONT_TTC_S)) return false;
 +      }
 +    }
 +    return true;
-   }
++  }
++  // the target lane's flow (user 10/28): mean speed along it of the cars the model can see there at t0, the LiDAR BEV
++  // (REAR_RANGE_M back, FLOW_VIEW_M ahead); none seen -> no difference
++  struct Flow { double speed = 0.0; int n = 0; };
++  Flow laneFlow(const Reference& reference, const std::vector<Mover>& movers) const {
++    Flow flow;
++    for (const auto& m : movers) {
++      double rel, along;
++      if (!inLane(reference, m, rel, along) || rel < -(REAR_RANGE_M + m.half_length) || rel > FLOW_VIEW_M) continue;
++      flow.speed += along;
++      ++flow.n;
++    }
++    if (flow.n) flow.speed /= flow.n;
++    return flow;
++  }
++  // come down to a slower target-lane flow in the own lane (MATCH_DECEL); a faster flow is velocity_planner's to reach
++  static void matchSpeed(interfaces::Path& path, double speed, double target) {
++    double station = 0.0;
++    for (std::size_t i = 0; i < path.points.size(); ++i) {
++      if (i) station += (xy(path.points[i].pose.pose.position) - xy(path.points[i - 1].pose.pose.position)).norm();
++      const double v = std::max(target, std::sqrt(std::max(0.0, speed * speed - 2.0 * MATCH_DECEL * station)));
++      auto& out = path.points[i].velocity;
++      out = std::isnan(out) ? v : std::min(out, v);
++    }
++  }
 +  bool onRoute(const lanelet::ConstLanelet& lane) const {
 +    return std::find(route_ids_.begin(), route_ids_.end(), key(lane)) != route_ids_.end();
 +  }
@@ -149,7 +213,8 @@
 +    for (std::size_t i = 0; i < path.points.size(); ++i) {
 +      if (i) station += (xy(path.points[i].pose.pose.position) - xy(path.points[i - 1].pose.pose.position)).norm();
 +      const double v = std::sqrt(std::max(0.0, 2.0 * END_DECEL * (end - END_GAP_M - station)));
-+      if (v < 16.0) path.points[i].velocity = v;          // the rest keeps velocity_planner's target (NaN)
++      auto& out = path.points[i].velocity;
++      if (v < 16.0) out = std::isnan(out) ? v : std::min(out, v);   // the rest keeps velocity_planner's target (NaN)
 +    }
 +  }
    std::vector<Box> objectBoxes(const interfaces::Objects& objects) const {
@@ -159,7 +224,7 @@
        boxes.push_back({xy(object.bbox_pose.position), poseYaw(object.bbox_pose),
                         object.bbox_size.x / 2, object.bbox_size.y / 2});
      }
-@@ -355,11 +444,14 @@
+@@ -355,11 +503,14 @@
        ++index;
      }
    }
@@ -179,7 +244,7 @@
        double nearest = std::numeric_limits<double>::infinity();
        std::size_t nearest_index = 0;
        for (const auto& segment : route_segments_) {
-@@ -374,7 +466,7 @@
+@@ -374,7 +525,7 @@
        cost += nearest;
        endpoint_index = nearest_index;
      }
