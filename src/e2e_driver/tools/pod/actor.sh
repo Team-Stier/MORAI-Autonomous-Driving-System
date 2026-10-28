@@ -10,6 +10,8 @@
 #   SEED_BASE     required: world n draws scenes seed*1000+k with seed SEED_BASE+n, which also names its spool (B2 paths
 #                 of several boxes never meet). One range per box and launch: 0-999 are evaluation (the video provider's
 #                 28000-28007, 29, 7): never training. DAgger 1000-1999, PPO 2000-2999 (README "시드").
+#   SEGMENT       full | dyn | round | hwy | tunnel: the DAgger segment preset (segments.py; its CPs, --returns), before
+#                 RL_ARGS. `SEGMENTS=... FULL_SHARE=0.2 segments.py N` prints the split of N actors.
 #   RL_ARGS       extra rl_episode.py arguments, no --seed (e.g. --episodes 20 --start-cp 9 --end-cp 12)
 #   SHADOW=1      the R2 collection driver as a DAgger shadow beside each world (shadow.sh, README "DAgger 쉐도"): up after
 #                 the stacks, restarted at every episode start with the localization, Object Info through its tee (27505)
@@ -33,6 +35,7 @@ engine() {  # n server(s): one batched engine on 47011, or one per stack with EN
 case ${1:-} in
   up)
     : "${SEED_BASE:?SEED_BASE: the scene seed range of this box (header)}"
+    SEG_ARGS=; [[ -n ${SEGMENT:-} ]] && { SEG_ARGS=$(python3 "$HERE/segments.py" --args "$SEGMENT") || exit 1; echo "segment $SEGMENT: $SEG_ARGS"; }
     bash "$HERE/worlds.sh" up "$N" || exit 1
     engine
     bash "$HERE/stacks.sh" up "$N"
@@ -50,7 +53,7 @@ case ${1:-} in
         --world $n --dump-dir $V/dump --objinfo-port $objport --lora-latest $V/out/lora/latest.json \
         --launcher $d/MoraiLauncher_Lin_Data --port $((8091 + n)) --seed $s \
         --loc-restart "source /opt/ros/noetic/setup.bash; ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode kill /localization_node$sh_restart" \
-        "${hook[@]}" ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
+        "${hook[@]}" $SEG_ARGS ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
       echo $! >> $R/managers.pids
       sleep 5                                             # managers deploy the same scene tools to ~ in turn
     done
