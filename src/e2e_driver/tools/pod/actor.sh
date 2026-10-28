@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # actor.sh up NAME [N] | down: one RL actor pod (RL_PLAN.md 3.1): N (3) MORAI worlds, the model server, N ROS stacks and
-# an episode manager per world (rl_episode.py). After setup.sh. Records: the learner spool $V/spool/NAME_wn/epK/
+# an episode manager per world (rl_episode.py). After setup.sh. Records: the learner spool $V/spool/NAME_sS_wn/epK/
 # (steps.jsonl with the engine dumps of $V/dump moved in, critic_obs, done.json); LoRA version from $V/out/lora/latest.json.
 #   ENGINE_ARGS   model_server.py arguments (default: the batched RL engine of branch rl/actor-engine on the volume's
 #                 delivery, all N nodes on one port, slots in connection order; add the RL flags --rl-sigma S --expert2
 #                 --lora-watch FILE, side-session-notes rl-actor-engine-20261027.md; "--backend fake --sims N
 #                 --fake-speed 9" for a plumbing test without a GPU model)
 #   CPUS_n / STACK_CPUS / ENGINE_CPUS   CPU affinities (worlds.sh; stacks and engine default to the CPUs after the worlds)
-#   RL_ARGS       extra rl_episode.py arguments (e.g. --episodes 20 --start-cp 9 --end-cp 12)
+#   SEED_BASE     required: world n draws scenes seed*1000+k with seed SEED_BASE+n, which also names its spool (B2 paths
+#                 of several boxes never meet). One range per box and launch: 0-999 are evaluation (the video provider's
+#                 28000-28007, 29, 7): never training. DAgger 1000-1999, PPO 2000-2999 (README "시드").
+#   SEGMENT       full | dyn | round | hwy | tunnel: the DAgger segment preset (segments.py; its CPs, --returns), before
+#                 RL_ARGS. `SEGMENTS=... FULL_SHARE=0.2 segments.py N` prints the split of N actors.
+#   RL_ARGS       extra rl_episode.py arguments, no --seed (e.g. --episodes 20 --start-cp 9 --end-cp 12)
 #   SHADOW=1      the R2 collection driver as a DAgger shadow beside each world (shadow.sh, README "DAgger 쉐도"): up after
 #                 the stacks, restarted at every episode start with the localization, Object Info through its tee (27505)
 set -uo pipefail
@@ -29,6 +34,8 @@ engine() {  # n server(s): one batched engine on 47011, or one per stack with EN
 
 case ${1:-} in
   up)
+    : "${SEED_BASE:?SEED_BASE: the scene seed range of this box (header)}"
+    SEG_ARGS=; [[ -n ${SEGMENT:-} ]] && { SEG_ARGS=$(python3 "$HERE/segments.py" --args "$SEGMENT") || exit 1; echo "segment $SEGMENT: $SEG_ARGS"; }
     bash "$HERE/worlds.sh" up "$N" || exit 1
     engine
     bash "$HERE/stacks.sh" up "$N"
@@ -40,12 +47,13 @@ case ${1:-} in
       sh_restart=; objport=$((7505 + 1000 * (n - 1)))
       hook=(); [[ ${SHADOW:-0} == 1 ]] && { sh_restart="; bash $HERE/shadow.sh restart $n"; objport=$((27505 + 1000 * (n - 1)))
         hook=(--return-hook "bash $HERE/shadow.sh restart $n"); }   # a checkpoint return (--returns) is a jump too
-      SCORER=$V/Alpamayo-Cosmos/tools/scorer setsid $V/venv-rl/bin/python -u $E2E/tools/rl_episode.py "${NAME}_w$n" \
+      s=$((SEED_BASE + n))                                # scene seeds s*1000+k: per box and world (README "시드")
+      SCORER=$V/Alpamayo-Cosmos/tools/scorer setsid $V/venv-rl/bin/python -u $E2E/tools/rl_episode.py "${NAME}_s${s}_w$n" \
         --scorer $V/Alpamayo-Cosmos/tools/scorer --out $V/spool --host local --direct --grpc 127.0.0.1:$((7788 + n)) \
         --world $n --dump-dir $V/dump --objinfo-port $objport --lora-latest $V/out/lora/latest.json \
-        --launcher $d/MoraiLauncher_Lin_Data --port $((8091 + n)) --seed $n \
+        --launcher $d/MoraiLauncher_Lin_Data --port $((8091 + n)) --seed $s \
         --loc-restart "source /opt/ros/noetic/setup.bash; ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode kill /localization_node$sh_restart" \
-        "${hook[@]}" ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
+        "${hook[@]}" $SEG_ARGS ${RL_ARGS:-} > $R/episodes_w$n.log 2>&1 < /dev/null &
       echo $! >> $R/managers.pids
       sleep 5                                             # managers deploy the same scene tools to ~ in turn
     done

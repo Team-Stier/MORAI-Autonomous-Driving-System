@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dagger_pod.sh NAME [SHADOW_EPISODES 2] [DRIVE_EPISODES 1] [SEED 28]   (Mac) the DAgger shadow debug run on a fresh vast
+# dagger_pod.sh NAME [SHADOW_EPISODES 2] [DRIVE_EPISODES 1] [SEED 1990]   (Mac) the DAgger shadow debug run on a fresh vast
 # 5090, end to end, PAID (README "DAgger 쉐도"): eval_pod.sh PROVIDER=vast BUNDLE=v1 CREATE_ONLY=1 (box, B2 bundle,
 # setup, this checkout) -> the collection fork snapshot (MORAI-Autonomous-Driving-System-collect at e2cd63a, clean) and the
 # morai-parallel-collect GT/R2 nodes -> dagger_box.sh -> results without engine dumps to ~/morai-eval/dagger/NAME ->
@@ -11,7 +11,7 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd)
 FORK=$REPO/../MORAI-Autonomous-Driving-System-collect; GT=$HOME/.claude/skills/morai-parallel-collect/scripts/wsl
-NAME=$1; K=${2:-2}; D=${3:-1}; SEED=${4:-28}
+NAME=$1; K=${2:-2}; D=${3:-1}; SEED=${4:-1990}
 LOCAL=$HOME/morai-eval/dagger/$NAME; mkdir -p "$LOCAL"; SSHC=$HOME/morai-eval/pod/$NAME/ssh_config
 log() { echo "$(date +%T) $*" | tee -a "$LOCAL/dagger_pod.log"; }
 [[ $(git -C "$FORK" rev-parse --short HEAD) == e2cd63a && -z $(git -C "$FORK" status --porcelain) ]] ||

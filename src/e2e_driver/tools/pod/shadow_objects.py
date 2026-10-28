@@ -4,8 +4,9 @@ Object Info's velocity turned into map axes (it comes in the object's own frame:
 body frame vs 20 m/s as map frame; the collection nodes read it as map axes). From /collect_only/objects_all and
 gt-objects-filter's standing objects (remapped to /shadow/objects_static):
   /objects                 the planners: the standing objects, plus on the highway (route s 1118.7-1741.7, sections
-                           11-12) the moving vehicles, so frenet_path can check the target lane's gap before a lane
-                           change (shadow_patches/frenet_gap.patch; gt-objects-filter drops every moving object)
+                           11-13: frenet_path's, path_planner selection.yaml) the moving vehicles, so frenet_path can
+                           check the target lane's gap before a lane change (shadow_patches/frenet_gap.patch;
+                           gt-objects-filter drops every moving object)
   /shadow/objects_map      the GT AEB node: every object
   /shadow/yield_objects    the GT yield node: every object, but no vehicles in the roundabout section (9): there
                            roundabout_merge decides the entry from the ring traffic (user 10/28: the yield node held the
@@ -13,7 +14,7 @@ gt-objects-filter's standing objects (remapped to /shadow/objects_static):
 import copy
 import math
 
-ROUNDABOUT, HIGHWAY_SECTIONS = (9,), (11, 12)
+ROUNDABOUT, HIGHWAY_SECTIONS = (9,), (11, 12, 13)
 MOVING = 0.3
 
 

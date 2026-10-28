@@ -33,6 +33,9 @@ inm() {  # MASTER_PORT cmd...: in that ROS master (wall time), shadow workspace
 build() {  # the fork snapshot ($V/shadow/shadow_src.tar from the Mac) -> $SW, built (the packages listed below only)
   mkdir -p "$SW" /workspaces && tar -xf $V/shadow/shadow_src.tar -C "$SW" || return 1
   sed -i 's/^stop_timeout_sec: .*/stop_timeout_sec: 600.0/' "$SW/src/velocity_planner/config/velocity_planner/parameters/stop_line_state.yaml"
+  # the section is the last planner checkpoint passed within radius_m (10); a restart after a return spawns at the
+  # official CP pose, for CP11 21 m past the planner's (s 1614.6 vs 1593.6): section 0 up to CP12 (10/28 run f)
+  sed -i 's/^radius_m: .*/radius_m: 25.0/' "$SW/src/section_annotator/config/section_annotator/parameters/checkpoint_sections.yaml"
   local f; for f in "$HERE"/shadow_patches/*.patch; do patch -s -N -p1 -d "$SW" < "$f" || { echo "patch $f failed"; return 1; }; done   # early lane changes
   ln -sfn "$SW" /workspaces/MORAI-Autonomous-Driving-System      # the GT nodes' fixed paths (relay module, global path)
   local p pk=""; for p in path_planner velocity_planner control node_pipeline section_annotator tf_publisher speed_filter morai_test interfaces MORAI-ROS_morai_msgs MORAI-UDP-Bridge-Node; do pk+=" $SW/src/$p"; done
