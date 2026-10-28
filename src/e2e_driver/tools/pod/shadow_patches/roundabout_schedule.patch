@@ -1,0 +1,51 @@
+--- a/src/path_planner/include/path_planner/cores/roundabout_merge.hpp	2026-10-28 11:21:42
++++ b/src/path_planner/include/path_planner/cores/roundabout_merge.hpp	2026-10-28 11:58:56
+@@ -3,6 +3,7 @@
+ #include <path_planner/libraries/types.hpp>
+ #include <Eigen/Geometry>
+ #include <ros/console.h>
++#include <node_pipeline/extension.hpp>
+ #include <algorithm>
+ #include <array>
+ #include <cmath>
+@@ -88,6 +89,8 @@
+     const double acceleration = last_acceleration_;
+     const double initial_velocity = std::max(0.0, velocity + acceleration*(plan_time - measured_time));
+     auto schedule = search(path, station, obstacles, age, horizon, initial_velocity, acceleration);
++    publishSchedule(schedule, stamp, schedule.empty() &&
++        search(path, station, {}, age, horizon, initial_velocity, acceleration).empty());
+     if (schedule.empty()) {
+       ROS_WARN_THROTTLE(1.0, "roundabout_merge: no feasible merge trajectory; requesting stop");
+       for (auto& point : path.points) {
+@@ -585,6 +588,24 @@
+     if (layers.back().front().t >= horizon - 1e-9 &&
+         (best.empty() || layers.back().front().cost < best.back().cost)) return trace(layers, 0);
+     return best;
++  }
++  // DAgger shadow (10/28): the searched schedule, before the braking tail, for dagger_label.py to drive by time (the point
++  // speeds are by station: they lose a wait and end in the tail's stop, which replanning never drives).
++  // /visualizer/rb_schedule: header.stamp = plan time, frame_id "schedule", or with no merge "blocked" (the ring's
++  // objects) or "kinematic" (no merge even without objects: speed, curvature); per point x = t (s), y = s (m), v, a.
++  void publishSchedule(const std::vector<State>& schedule, const ros::Time& stamp, bool kinematic) {
++    interfaces::Path message;
++    message.header.stamp = stamp;
++    message.header.frame_id = !schedule.empty() ? "schedule" : kinematic ? "kinematic" : "blocked";
++    for (const auto& state : schedule) {
++      interfaces::PathPoint point;
++      point.pose.pose.position.x = state.t;
++      point.pose.pose.position.y = state.s;
++      point.velocity = state.v;
++      point.acceleration = state.a;
++      message.points.push_back(point);
++    }
++    schedule_visualizer_.publish(message);
+   }
+   static State stateAt(const std::vector<State>& schedule, double time) {
+     const auto after = std::upper_bound(schedule.begin(), schedule.end(), time,
+@@ -602,5 +623,6 @@
+   double last_speed_time_ = -std::numeric_limits<double>::infinity();
+   double last_acceleration_ = 0;
+   double tracking_padding_ = 0;
++  node_pipeline::Visualizer<interfaces::Path> schedule_visualizer_{"rb_schedule"};
+ };
+ }  // namespace path_planner

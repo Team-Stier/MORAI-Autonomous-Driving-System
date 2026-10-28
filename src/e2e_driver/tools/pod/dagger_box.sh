@@ -91,7 +91,7 @@ LBL="$V/venv-engine/bin/python -u $E2E/tools/dagger_label.py --rec $V/shadow/rec
 $LBL $V/spool/$PS/ep[0-9]* > "$OUT/labels_policy.jsonl" 2> "$OUT/labels_policy.err" && stamp "labels (policy): $(cat "$OUT/labels_policy.jsonl" | tr '\n' ' ' | cut -c1-300)" || stamp "labels (policy) failed: $(tail -3 "$OUT/labels_policy.err")"
 (( D > 0 )) && { $LBL --actual $V/spool/${NAME}_drive_w1/ep[0-9]* > "$OUT/labels_drive.jsonl" 2> "$OUT/labels_drive.err" && stamp "labels (drive): $(cat "$OUT/labels_drive.jsonl" | tr '\n' ' ' | cut -c1-300)" || stamp "labels (drive) failed: $(tail -3 "$OUT/labels_drive.err")"; }
 gzip -k $V/shadow/rec_w1/*.jsonl 2> /dev/null
-(b2env; B=$V/venv-tools/bin/b2; P=b2://morai2026-alpamayo/runs/dagger/shadow_debug
+(b2env; B=$V/venv-tools/bin/b2; P=b2://morai2026-alpamayo/runs/dagger/${B2_SUB:-shadow_debug}   # B2_SUB: another debug set
  $B sync --threads 32 --no-progress $V/spool/ $P/spool/ > "$OUT/b2_spool.log" 2>&1 &&
  $B sync --threads 16 --no-progress --exclude-regex '.*\.jsonl$' $V/shadow/rec_w1/ $P/$NAME/rec_w1/ > "$OUT/b2_rec.log" 2>&1 &&
  cp $V/shadow/build.log "$OUT/" && stamp "B2 spool and records" &&
@@ -101,6 +101,6 @@ if [[ -n ${LATE_SEED:-} ]]; then                      # late with frames prepare
   LAPS=1 LAP_DELIVER=0 VIEW_FPS=${VIEW_FPS:-15} bash "$HERE/eval3.sh" "${NAME}_late" "$DELIVER" "$LATE_SEED" > "$V/results/${NAME}_late.log" 2>&1
   stamp "eval3 late: $(head -3 $V/results/${NAME}_late/summary.txt 2> /dev/null | tr '\n' ' ' | cut -c1-300)"
   rsync -a --exclude '*.mp4' "$V/results/${NAME}_late/" "$OUT/late_eval3/" 2> /dev/null
-  (b2env; $V/venv-tools/bin/b2 sync --threads 16 --no-progress "$OUT/late_eval3/" b2://morai2026-alpamayo/runs/dagger/shadow_debug/$NAME/late_eval3/ > /dev/null 2>&1)
+  (b2env; $V/venv-tools/bin/b2 sync --threads 16 --no-progress "$OUT/late_eval3/" b2://morai2026-alpamayo/runs/dagger/${B2_SUB:-shadow_debug}/$NAME/late_eval3/ > /dev/null 2>&1)
 fi
 touch "$OUT/DONE"

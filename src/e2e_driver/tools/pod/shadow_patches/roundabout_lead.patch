@@ -1,0 +1,23 @@
+--- a/src/path_planner/config/path_planner/parameters/roundabout_merge.yaml	2026-10-28 12:22:25
++++ b/src/path_planner/config/path_planner/parameters/roundabout_merge.yaml	2026-10-28 12:22:25
+@@ -6,7 +6,8 @@
+ max_jerk_mps3: 4.0
+ max_lateral_acceleration_mps2: 2.0
+ time_step_sec: 0.5
+-command_step_sec: 0.2
++# DAgger shadow 10/28: 0.8 s ahead (pp is PI only and lags; from rest the 0.2 s target, 0.08 m/s, never started the car)
++command_step_sec: 0.8
+ beam_width: 8
+ collision_margin_m: 0.5
+ prediction_uncertainty_mps: 0.2
+--- a/src/path_planner/include/path_planner/parameters/roundabout_merge.hpp	2026-10-28 12:22:25
++++ b/src/path_planner/include/path_planner/parameters/roundabout_merge.hpp	2026-10-28 12:22:25
+@@ -36,7 +36,7 @@
+     if (!std::isfinite(value) || value < 0.0)
+       throw std::invalid_argument("roundabout_merge margins must be finite and nonnegative");
+   if (p.time_step_sec < 0.05 || p.time_step_sec > 0.5 || p.command_step_sec < 0.01 ||
+-      p.command_step_sec > p.time_step_sec)
++      p.command_step_sec > 2.0 * p.time_step_sec)  // DAgger shadow 10/28: the 0.8 s command lead
+     throw std::invalid_argument("roundabout_merge time steps are unbounded or inconsistent");
+ 
+   std::istringstream asset(params.asset("global_path_file"));

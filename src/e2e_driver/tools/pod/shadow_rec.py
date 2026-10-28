@@ -10,6 +10,8 @@ t_wall), to OUT_DIR/rec_<start epoch>.jsonl:
                                                    bridge gets; mark = CtrlCmd.acceleration, -97 yield, -99 AEB)
   ["obj", t, [[id, label, x, y, yaw, vx, vy, va, sx, sy], ...]]   /collect_only/objects_all (GT)
   ["tl", t, state], ["tlgt", t, index, status], ["sec", t, section], ["comp", t, v, steer_rad, accel, brake]
+  ["rbs", t, stamp, [[t_plan, s, v, a], ...], why]   roundabout_merge's searched schedule (shadow_patches/roundabout_schedule.patch;
+                                                   why: schedule, or with no points blocked / kinematic)
 MODE shadow: commands from /shadow/{control,yield,aeb}_cmd; drive: /control_cmd and /morai_udp_bridge/control_cmd."""
 import json
 import math
@@ -75,6 +77,10 @@ def main():
                                          r(o.velocity.x), r(o.velocity.y), int(o.velocity_available), r(o.bbox_size.x), r(o.bbox_size.y)]
                                         for o in m.objects]])
 
+    def on_rbs(m):
+        put(["rbs", r(time.time(), 3), r(m.header.stamp.to_sec(), 3), [[r(p.pose.pose.position.x, 3), r(p.pose.pose.position.y), r(p.velocity, 3),
+                                                                     r(p.acceleration, 3)] for p in m.points], m.header.frame_id])
+
     def on_comp(m):
         t = time.time()
         if t - last["comp"] >= 0.05:          # 20 Hz is plenty
@@ -92,6 +98,7 @@ def main():
       lambda m: put(["tlgt", r(time.time(), 3), m.trafficLightIndex, m.trafficLightStatus]), queue_size=20)
     S("/section_annotation", SectionAnnotation, lambda m: put(["sec", r(time.time(), 3), m.state]), queue_size=20)
     S("/vehicle/competition_status", CompetitionVehicleStatus, on_comp, queue_size=50)
+    S("/visualizer/rb_schedule", Path, on_rbs, queue_size=20)
     if mode == "drive":
         S("/control_cmd", CtrlCmd, on_cmd("control"), queue_size=100)
         S("/morai_udp_bridge/control_cmd", CtrlCmd, on_cmd("bridge"), queue_size=500)
