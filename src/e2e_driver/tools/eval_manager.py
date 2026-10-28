@@ -22,7 +22,8 @@ Returns (rules §3-2: to the previous checkpoint, +15 s, when the operators judg
 off the drivable area outside the shadow zone, stuck after a collision, or the checkpoint order broken). Here:
   - off road: all four wheels off the lanelets and the 2 m route corridor (tools/scorer's drive_inoperable test)
     outside the shadow zone for OFF_ROAD_S;
-  - stuck: less than PROGRESS_M of route progress for CRASH_STUCK_S after a collision, or for STUCK_S at all;
+  - stuck (class Stuck, shared with rl_episode.py): less than PROGRESS_M of route progress for CRASH_STUCK_S after a
+    collision, for STUCK_S (red-light and yield time excluded), or for WAIT_MAX_S in all;
   - order broken: route progress SKIP_M past the next checkpoint without having come within 3 m of it.
 The Ego goes to the last checkpoint passed (START before CP1) with MORAI's checkpoint Spawn program (MORAI_Spawn_Linux,
 10/13: point number on stdin; SetTransform to the 10/7 table pose, z and yaw as listed, speed left as it is).
@@ -79,7 +80,11 @@ EGO = {"id": {"value": "Ego"}, "object_type": "OBJECT_TYPE_VEHICLE", "client_key
 
 CP_R, LIMIT_S, START_S, START_FRAC, RETURN_S = 3.0, 900.0, 60.0, 0.05, 15.0    # rules §3-2
 FINISH_M = 1.0          # route progress within this of the last waypoint = finished (tools/scorer time.finish_m)
-STUCK_S = 60.0          # shortcut: longer than any give-way wait seen (red lights pause it); signal cycles are unpublished
+# User 10/28: returns at once, not after minutes. 60 s with red time excluded let a car stand 330 s before a light without
+# a return (r2stop lap 1, s 306): now 30 s of no progress, red-light and yield time excluded, and 90 s in all at most
+STUCK_S = 30.0
+WAIT_MAX_S = 90.0       # any stop, red light or yield included (red phases seen: 53-61 s at C1256W000016, 10/27)
+YIELD_M, YIELD_LAT_M, YIELD_V = 20.0, 10.0, 0.5   # yield = an object moving > YIELD_V m/s up to YIELD_M ahead, YIELD_LAT_M aside
 CRASH_STUCK_S = 15.0    # "cannot go on after a collision"
 PROGRESS_M = 5.0        # route progress that resets the stuck timers: a car pushing a small box creeps ~0.1 m/s (10/26)
 OFF_ROAD_S = 2.0
@@ -146,6 +151,44 @@ class Sim:
                                                                           "rotation": {"x": 0.0, "y": 0.0, "z": yaw_deg}}})
         self.call("SetVelocity", stop)
         return r
+
+
+class Stuck:
+    """No-progress returns: update() each step -> None, "stuck" or "stuck_after_collision"; reset() after a return or at
+    the start. objs: Object Info records (id, kind, x, y, ...) of this step, [] without Object Info."""
+
+    def __init__(self, tau, s=0.0):
+        self.prev = {}
+        self.reset(tau, s)
+
+    def reset(self, tau, s):
+        self.s, self.t, self.t0, self.crash, self.last = s, tau, tau, -math.inf, tau
+
+    def yielding(self, tau, e, objs):
+        c, sn, out = math.cos(e["yaw"]), math.sin(e["yaw"]), False
+        for o in objs:
+            p = self.prev.get(o[0])
+            self.prev[o[0]] = (tau, o[2], o[3])
+            if not p or not 0 < tau - p[0] < 1.0:
+                continue
+            v = math.hypot(o[2] - p[1], o[3] - p[2]) / (tau - p[0])
+            dx, dy = o[2] - e["x"], o[3] - e["y"]
+            ahead, lat = dx * c + dy * sn, -dx * sn + dy * c
+            out |= YIELD_V < v < 40.0 and 0.0 < ahead < YIELD_M and abs(lat) < YIELD_LAT_M   # 40: an ID reused far away
+        return out
+
+    def update(self, tau, s, e, objs=(), hit=False):
+        dt, self.last = tau - self.last, tau
+        yld = self.yielding(tau, e, objs)
+        if hit:
+            self.crash = tau
+        if s > self.s + PROGRESS_M:
+            self.s, self.t, self.t0 = s, tau, tau
+        elif (e["tl"] and e["color"] & 1 and not e["color"] & 16) or yld:
+            self.t += dt              # red light or yield: does not count (resetting let a car that let greens pass stand 229 s)
+        if self.crash > self.t - 1.0 and tau - self.t >= CRASH_STUCK_S:
+            return "stuck_after_collision"
+        return "stuck" if tau - self.t >= STUCK_S or tau - self.t0 >= WAIT_MAX_S else None
 
 
 class Clock:
@@ -442,10 +485,9 @@ class Manager:
         threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
         tr, clock = self.track, self.clock
         tr.i, clock.last, passed = 0, None, 0
-        tau_prev = clock.tau
         t_play, w_play, t_move, x0 = None, time.time(), None, None
-        best_s = prog_s = 0.0
-        prog_t, crash_t, off_t, grace = math.inf, -math.inf, None, math.inf
+        best_s = 0.0
+        off_t, grace, st = None, math.inf, Stuck(clock.tau)
         end = t_end = None
         lt = lap_s = 0.0
         interrupted = False
@@ -464,16 +506,18 @@ class Manager:
                 rows["collision"].append((ns, [(h, e["x"], e["y"]) for h in e["hit"]]))
                 rows["gps"].append((ns, shade))                  # the scorer's lane-exempt zone = the GPS shadow
                 egot.append((round(tau, 3), e["x"], e["y"], s))
+                objs = [o for o in self.objects() if math.hypot(o[2] - e["x"], o[3] - e["y"]) <= 80.0] if self.objects else []
                 if self.objects:
                     objt.append((round(tau, 3), [[o[0], o[1], round(o[2], 2), round(o[3], 2), round(o[6], 2), round(o[7], 2), round(o[8], 2)]
-                                                 for o in self.objects() if math.hypot(o[2] - e["x"], o[3] - e["y"]) <= 80.0]))
+                                                 for o in objs]))
                 if e["tl"]:
                     rows["signal"].append((ns, (e["tl"], e["color"])))
                 x0 = x0 or (e["x"], e["y"])
                 if t_move is None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
                     t_move = tau
                 if t_play is None and (played.is_set() or t_move is not None):
-                    t_play, prog_t, grace = tau, tau, tau + GRACE_S
+                    t_play, grace = tau, tau + GRACE_S
+                    st.reset(tau, st.s)
                 lt = tau - (t_move if t_move is not None else tau)
                 best_s = max(best_s, s) if lat < 15.0 else best_s
                 if passed < 14 and math.hypot(e["x"] - self.cps[passed + 1, 0], e["y"] - self.cps[passed + 1, 1]) <= CP_R:
@@ -491,28 +535,21 @@ class Manager:
                         end = "max_s"
                     t_end, lap_s = tau, lt
                 # drive failures -> return to the last checkpoint passed
-                if e["hit"]:
-                    crash_t = tau
-                if s > prog_s + PROGRESS_M:
-                    prog_s, prog_t = s, tau
-                elif e["tl"] and e["color"] & 1 and not e["color"] & 16:
-                    # red time does not count as stuck: waits at C1256W000016 ran 53-61 s and were returned; resetting
-                    # instead kept a car that let greens pass for 229 s from ever being returned (10/27 W1 laps)
-                    prog_t += tau - tau_prev
-                tau_prev = tau
+                stuck = st.update(tau, s, e, objs, bool(e["hit"]))
                 off = not shade and self.off_road(e["x"], e["y"], e["yaw"])
                 off_t = (off_t if off_t is not None else tau) if off else None
                 why = None
                 if off_t is not None and tau - off_t >= OFF_ROAD_S:
                     why = "off_road"
-                elif tau - prog_t >= STUCK_S or (crash_t > prog_t - 1.0 and tau - prog_t >= CRASH_STUCK_S):
-                    why = "stuck_after_collision" if crash_t > prog_t - 1.0 else "stuck"
+                elif stuck:
+                    why = stuck
                 elif passed < 14 and lat < 15.0 and s > tr.s[self.cp_i[passed + 1]] + SKIP_M:
                     why = f"missed_cp{passed + 1}"
                 if end is None and why and t_move is not None and tau >= grace:
                     how = self.spawn(passed)
                     lap["returns"].append(dict(t=round(lt, 2), to=passed, reason=why, s=round(s, 1), how=how))
-                    tr.i, prog_s, prog_t, crash_t, off_t = self.cp_i[passed], float(tr.s[self.cp_i[passed]]), tau, -math.inf, None
+                    tr.i, off_t = self.cp_i[passed], None
+                    st.reset(tau, float(tr.s[self.cp_i[passed]]))
                     grace, clock.last = tau + GRACE_S, None
                 self.status = (f"lap {k} {name}  t {lt:6.1f} s (wall {t - w_play:6.1f})  {'sync' if self.a.sync else 'rho'} {clock.rho:.2f}\n"
                                f"CP {passed}/14  s {s:7.1f} m  lat {lat:4.1f} m  v {e['v'] * 3.6:5.1f} km/h  {'shadow ' if shade else ''}"
@@ -642,6 +679,7 @@ def main():
     ap.add_argument("--tick-ms", type=int, default=100, choices=(50, 100), help="--sync: simulator step (100: one per decision, 50: two)")
     ap.add_argument("--serial", action="store_true", help="--sync: each decision's reply before the tick (default: during it)")
     ap.add_argument("--max-s", type=float, default=0.0, help="end a lap after this many seconds of driving (0: off)")
+    ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
     a = ap.parse_args()
     global BC, GRPC, LAUNCHER, SCEN
     BC, GRPC = a.host or BC, a.grpc or GRPC
@@ -655,7 +693,7 @@ def main():
     deploy(a)
     serve(mgr, a.port)
     print(f"viewer: http://localhost:{a.port}  records: {mgr.out}", flush=True)
-    k = 0
+    k = a.first_lap
     try:
         while not a.laps or k < a.laps:
             mgr.run_lap(k)

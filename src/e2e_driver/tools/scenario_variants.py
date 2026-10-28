@@ -348,6 +348,22 @@ def r2_dynamic(d, rng, route, uid, kind, s_lo, s_hi, curb, sample_ped, sample_ob
         uid[0] += 1
 
 
+RING_XY, RING_M = (-111.34, 358.26), 30.0   # clcol's roundabout spawn point (UNIQUEID 4); the highway points are 180 m+ away
+
+
+def ring_points(d):
+    """The roundabout's spawn points, found by position, set to type -1: MORAI draws each spawn's type (length class 2).
+    The base's 30100004 made every roundabout NPC the same car. ring_probe.py on a 5090, 10/28: -1 spawned 7-12 cars in
+    40-90 s, up to 10 different boxes (30100004, 30200003, 30700003 and cars outside VEHICLES, one 6.6 m long). Each of
+    the 8 VEHICLES also spawns there when set (4-7 in 40 s at 3 s), but one point takes one set type, and copies of the
+    point with other types spawned nothing (with or without their own destination ids)."""
+    ring = [sp for sp in d.get("spawnPointList", [])
+            if math.hypot(sp["pos"]["x"] - RING_XY[0], sp["pos"]["y"] - RING_XY[1]) < RING_M]
+    for sp in ring:
+        sp.update(spawnVehicleTypeID=-1, listVehicleLengthType=[2])
+    return ring
+
+
 def make(base, route, rng, uid0, cps=None):
     d = copy.deepcopy(base)
     meta = {}
@@ -358,8 +374,9 @@ def make(base, route, rng, uid0, cps=None):
     meta["signal_delta"] = [round(t["deltaTime"], 1) for t in d.get("tlList", [])]
 
     sps = []
+    ring = ring_points(d)
     for sp in d.get("spawnPointList", []):
-        roundabout = sp.get("spawnVehicleTypeID", -1) != -1 and sp.get("MinDesiredVelocity_Custom", 0) < 30
+        roundabout = any(sp is q for q in ring)
         v = rng.uniform(10, 30) if roundabout else rng.uniform(50, 100)
         period = rng.uniform(3, 10) if roundabout else 5.0   # highway: the densest the rules allow (eval 10/27; collection 5-15 s)
         bias = rng.uniform(0, 0.4)
@@ -367,8 +384,7 @@ def make(base, route, rng, uid0, cps=None):
         # waiting Ego (64 collisions in 35 episodes, none with the sample scene).
         sp.update(MinDesiredVelocity_Custom=v, MaxDesiredVelocity_Custom=v, minSpawnPeriod=period, maxSpawnPeriod=period,
                   MinLatBias=-bias, MaxLatBias=bias, SafetyDist=rng.uniform(5, 10), TTC=rng.uniform(1.0, 2.0),
-                  isLaneChange=False,   # vehicle type kept from the base scene: the 10/27 eval lap on bc-250 had no
-                                        # roundabout NPC with the randomized 30200003 (the sample's 30100004 is kept)
+                  isLaneChange=False,
                   # "Maximum Spawn" counts every vehicle a point ever spawns: the sample's 50 ran out within minutes at
                   # 3-5 s, and the 10/27 W1 lap met an empty roundabout and highway. 1000 outlasts a 15 min lap at 3 s.
                   maximumSpawnVehicle=max(sp.get("maximumSpawnVehicle", 0), 1000))
