@@ -139,6 +139,7 @@ class Lane:
     def __init__(self, route_json):
         r = json.load(open(route_json))
         self.P, self.S, self.lap = np.asarray(r["path"], float), np.asarray(r["s"], float), float(r["lap_m"])
+        self.highway = tuple(r["exempt_s"])                 # 고주로 (60 km/h exemption): frenet_path picks the lane there
         keep = np.r_[True, np.diff(self.S) >= 0.2]          # route.json has a 0.1 m kink segment at s 160 (heading 10 deg)
         self.P, self.S = self.P[keep], self.S[keep]
         d = np.diff(self.P, axis=0)
@@ -422,7 +423,9 @@ def one(j):
     bypass = any(math.hypot(o[5], o[6]) < 0.3 and abs(o[2] - x) + abs(o[3] - y) < 120.0 and
                  -20.0 < (q := lane.project(o[2], o[3], s0 + 20.0, 60.0))[0] - s0 < 80.0 and abs(q[1]) < BYPASS_D_M for o in objs)
     sec = rec.last("sec", tw); sec = sec[2] if sec else 0
-    lanes_free = sec in NO_LIMIT_SECTIONS             # the highway: frenet_path picks its lane, the expert drove up to 6 m off route.json's
+    # the highway (its route s span; the section id turns 13 before its end): frenet_path picks the lane there and the
+    # expert drove up to 6 m off route.json's lane
+    lanes_free = sec in NO_LIMIT_SECTIONS or lane.highway[0] <= s0 <= lane.highway[1]
     why = ("plan_stale" if P is None or age > PLAN_AGE_S else "plan_far" if d0 > PLAN_D0_M
            else "plan_heading" if abs(he) > PLAN_HE_RAD
            else "off_lane" if not (bypass or lanes_free) and (abs(d) > LANE_D_M or (abs(d) > PLAN_LANE_D_M and abs(dend) > PLAN_LANE_D_M))

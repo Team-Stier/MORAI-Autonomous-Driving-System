@@ -401,7 +401,12 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
   2a. 엔진이 내려간 뒤 dagger-engine의 LLM LoRA 교체 확인(`test/lora_llm_check.py`, 결과 `lora_llm_check.json`)
   3. 전문가가 직접 달리는 에피소드(`shadow.sh up 1 drive`, 포크 자체 브릿지·speed_filter)
   4. 라벨 → B2
-- 에피소드는 rl_episode 규칙대로 끝난다(stuck, 충돌 뒤 stuck, 시간). 정책이 멈추면 그 랩은 거기서 끝난다.
+- **실패하면 복귀 (`rl_episode --returns`, 영상 제공기와 같음):** 에피소드는 전체 랩(START → CP14 + 100 m, 15분)이다.
+  - 도로 이탈 2 s, stuck 60 s(적신호 시간 제외), 충돌 뒤 stuck 15 s, CP 건너뜀 10 m가 되면 직전에 지난 CP로 Spawn하고 랩을 이어 간다. 규칙은 eval_manager 복귀와 같고, 복귀 뒤 10 s 동안은 판정하지 않는다.
+  - `--return-hook`이 쉐도를 재시작한다.
+  - 기록: episodes.jsonl `returns`, steps.jsonl `since_return_s`. 복귀 뒤 1.5 s 행은 이력이 순간이동을 건너므로 라벨 없음이다.
+  - 10/28 run e: 랩 하나(400 s)에서 6번 복귀했다(도로 이탈 1, 충돌 뒤 stuck 5. 4번은 고주로 CP11 Spawn 직후 NPC 추돌).
+- **Object Info 원본:** `epK/objects.json.gz`. 20 Hz 프레임마다 `[tau, t_wall, [[id, type, x, y, z, heading_deg, length, width, height], ...]]`이고, 랩 하나에 약 1 MB다(PPO critic용).
 - **적신호 상한 (`rl_episode --red-cap LO HI`):** 신호 주기는 지도(MGeo)에 고정이라 장면 파일로는 도착 위상만 바꿀 수 있다.
   - 그래서 판정 정지선 40 m 안에서 경로 녹색 없이 서 있은 시간이 [LO, HI]에서 뽑은 값을 넘으면, 그 교차로를 경로 녹색 위상으로 바꾼다(Infrastructure gRPC `SetIntersectionPhase`).
   - 접근, 정지, 출발, 황신호는 그대로 나온다. 바꾼 기록은 episodes.jsonl `red_cap`에 남는다.
@@ -439,6 +444,19 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
 - 차선 변경 앞당기기: 고주로에서 쉐도 계획의 차로 이동이 약 60–200 m 앞당겨졌다(그림 `report/lane_changes_plan_highway.png`). 4188 적신호 통과는 그 근처에 차로 이동이 없어 패치와 무관하다(황신호 진행 판단).
 - dagger-engine LoRA 교체 확인 통과(교체 0.3–0.45 s, 비트 일치, model_ms p50 78.9).
 - late 31 %(RTF 0.8–1.0).
+
+## 라벨 종방향 오차 분해 (전문가 직접 주행 3회, 3,805판단, t0 정보만, ADE 평균 3.07 m)
+분류에만 기록된 미래를 쓰고, 라벨에는 쓰지 않는다.
+
+| 분류 | 판단 비율 | ADE 평균 / 중앙 | 전체 오차 중 |
+|---|---|---|---|
+| 6.4 s 안에 신호가 바뀜 (t0 원칙상 피할 수 없음) | 21 % | 6.0 / 2.5 m | 41 % |
+| yield·AEB 작동 (물체의 미래 행동, 대부분 피할 수 없음) | 22 % | 4.5 / 3.1 m | 33 % |
+| 그 밖의 주행 중 (모델 오차, 고칠 수 있음) | 26 % | 2.9 / 1.6 m | 25 % |
+| 정지 상태 | 31 % | 0.2 / 0.0 m | 2 % |
+
+- 고칠 수 있는 부분에는 큰 체계적 편향이 없다(6.4 s 속도 편향 −0.85 m/s, 종방향 끝 평균 −1.35 m, 중앙 +1.76 m). 대부분 흩어짐이다.
+  - 예: 45 m 너머의 곡률, 계획기의 정지 장애물 반응, 회전교차로 합류 판단.
 
 ## 알려진 문제
 - **Object Info 차량 속도는 물체 좌표다.** 수집 노드(gt-yield·gt-aeb)는 이를 지도 좌표로 읽는다. 그래서 남북으로 달리는 앞차를 가로지르는 차로 보고 세운다. R2 수집 때도 그랬을 것이다. 라벨은 지도 좌표로 돌려 쓴다. 수집 노드 코드는 그대로 두었다.
