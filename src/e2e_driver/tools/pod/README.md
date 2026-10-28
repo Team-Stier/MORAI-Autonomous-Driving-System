@@ -23,8 +23,11 @@ vastai search offers 'gpu_name=RTX_5090 num_gpus=1 rentable=true verified=true c
 ```bash
 cd src/e2e_driver/tools/pod
 PROVIDER=vast OFFER="<offer id 1> <offer id 2> <offer id 3>" BUNDLE=v1 LAPS=8 LAP_DELIVER=1 VIEW_FPS=15 EVAL_MAX_MIN=300 \
-  bash eval_pod.sh <이름, 예: 20261028-rt8> /workspace/models/wowmayo_final <시드, 예: 28>
+  bash eval_pod.sh <이름, 예: 20261028-rt8> /workspace/models/wowmayo_final
 ```
+- 시드를 안 주면 run마다 새 무작위 시드를 100–999에서 뽑는다. 같은 장면을 다시 돌려 비교할 때만 끝에 시드를 준다(예: `28`).
+  - 평가 장면 번호(S·1000+k)는 1,000,000 아래로 둔다. DAgger(S ≥ 1000)·PPO(S ≥ 2000) 액터 장면과 겹치지 않는다.
+  - 쓴 시드는 `eval_pod.log`("seeds …"), 바퀴마다 `laps.jsonl`의 `seed`(S·1000+k)와 DM 요약 줄에 남는다.
 - `OFFER`에는 후보를 여러 개 준다. 6분(`LOAD_MIN`) 안에 running이 안 되면 그 상자를 지우고 다음 후보로 넘어간다.
   - 10/28 프랑스 호스트는 이미지 내려받기에서 19분 동안 멈춰 있었다.
 - 순서: 상자 생성 → B2 묶음 받기(32 MB 구간 48개씩 동시에) → 계정 파일과 코드 → setup → 시뮬·스택·엔진 → 바퀴마다 무작위 장면 → 주행.
@@ -237,7 +240,7 @@ bash eval_pod.sh  r2c /workspace/models/wowmayo_final 7                    # 볼
   - `lap_report.py`로 한 줄 요약을 만든다: 완주·감점·복귀, late %, model_ms p50/p95, 날씨, 터널, 동적 물체, NPC, 재생 확인.
   - B2 `runs/eval_vps/NAME/lap_KK/`에 올리고, 영상의 7일 링크와 함께 `lap_KK.ready`를 남긴다.
   - Mac의 `eval_pod.sh`가 그 영상과 요약을 디스코드 DM으로 보낸다. 첨부가 실패하면 링크를 보낸다.
-- 명령(Mac): `PROVIDER=vast OFFER=<id> BUNDLE=v1 LAPS=8 LAP_DELIVER=1 VIEW_FPS=15 EVAL_MAX_MIN=300 bash eval_pod.sh NAME /workspace/models/wowmayo_final 28`
+- 명령(Mac): `PROVIDER=vast OFFER=<id> BUNDLE=v1 LAPS=8 LAP_DELIVER=1 VIEW_FPS=15 EVAL_MAX_MIN=300 bash eval_pod.sh NAME /workspace/models/wowmayo_final` (시드 생략 = 새 무작위)
 - 제공자 선택(10/28):
   - 실시간 RTF는 CPU 단일 스레드 속도에 좌우된다.
   - vast의 5 GHz대 Ryzen 5090이 $0.50–0.77/h이고, RunPod 5090(EPYC, $1.19)보다 바퀴당 싸다.
@@ -257,6 +260,12 @@ bash eval_pod.sh  r2c /workspace/models/wowmayo_final 7                    # 볼
   - 매 step Object Info(Ego 80 m 안)를 기록한다.
   - 바퀴가 끝나면 재생 확인을 `laps.jsonl` `validation`에 쓰고, 요약(`replay`)에 보인다.
 - 무작위화 축과 근거: 생성기 docstring(DATA_PLAN §6, DATA_PLAN_R2 §4 A/B, 대회 §2-7-2 날씨·시간).
+- 로터리 NPC 차종(10/28 고침): 로터리 spawn point는 위치로 찾는다(clcol UNIQUEID 4, (−111.3, 358.3) 30 m 안). 그 지점을 타입 −1로 두면 MORAI가 spawn마다 차종을 뽑는다.
+  - 전에는 기준 장면의 30100004를 그대로 두어서 로터리 차가 모두 같은 차종이었다.
+  - `ring_probe.py` 실측(5090):
+    - 8종 각각을 지정하면 모두 나온다(40 s에 4–7대).
+    - −1은 40–90 s에 7–12대가 나왔고, 치수가 최대 10가지였다. 8종 밖의 MORAI 승용차도 섞인다.
+    - 지점을 복사해 다른 차종을 주면 복사본은 하나도 내지 않았다. 그래서 버스(30400004)와 밴(30300002)은 로터리에 나오지 않는다.
 - 재생 확인(GT):
   - 동적 물체: Ego가 발동 거리+2 m 안에 들어왔으면 min(2 m, 이동 거리의 30 %) 이상 움직였어야 한다.
   - 정적 물체: 놓은 자리 3 m 안에 있어야 한다.

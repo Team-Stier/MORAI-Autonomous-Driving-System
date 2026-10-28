@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# eval_pod.sh NAME DELIVER [SEED ...]   (Mac) one closed-loop evaluation on a fresh RunPod GPU pod, end to end, PAID:
+# eval_pod.sh NAME DELIVER [SEED ...]   (Mac; no SEED: a new random one) one closed-loop evaluation on a fresh RunPod GPU pod, end to end, PAID:
 #   pod create (GraphQL podFindAndDeployOnDemand on the network volume, GPUs tried in order; start command = setup.sh, then
 #   the idle watchdog) -> ssh -> rsync of this checkout to the volume (only changed files) -> eval3.sh NAME DELIVER SEEDS
 #   (3 seeds = 3 MORAI worlds at once) -> results to ~/morai-eval/pod/NAME (no frames; B2 runs/eval_pod/NAME has all) ->
@@ -26,6 +26,9 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
+# no seed given: a new one per run (scenes S*1000+k, in laps.jsonl and every lap report); give one only to replay scenes.
+# 100-999: eval scenes stay below 1,000,000 and apart from the DAgger (S >= 1000) and PPO (S >= 2000) actors
+(( ${#SEEDS[@]} )) || SEEDS=($(( RANDOM % 900 + 100 )))
 KEY=${RUNPOD_API_KEY:-$(sed -n 's/^api_key = "\(.*\)"/\1/p' ~/.runpod/config.toml)}
 read -r -a VOLUMES <<< "${VOLUMES:-1tra2qsxbl:EU-CZ-1}"     # VOLUME_ID:DATA_CENTER ..., tried in order
 IFS=$'\n' read -r -d '' -a GPUS <<< "${GPUS:-NVIDIA GeForce RTX 5090
@@ -167,7 +170,7 @@ deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and r
 # CPU 3.1 N + 2.5 cores of 90 % of the quota, RAM 4.8 N + 4.5 GB of 85 %; the seeds run in waves of N
 NMAX=$(P "python3 -c 'import subprocess as s; q=open(\"/sys/fs/cgroup/cpu.max\").read().split(); c=int(q[0])/int(q[1]) if q[0] != \"max\" else len(open(\"/proc/cpuinfo\").read().split(\"processor\"))-1; m=open(\"/sys/fs/cgroup/memory.max\").read().strip(); r=(int(m) if m != \"max\" else int(open(\"/proc/meminfo\").read().split()[1])*1024)/2**30; v=int(s.check_output([\"nvidia-smi\",\"--query-gpu=memory.total\",\"--format=csv,noheader,nounits\"]).split()[0])/1024; print(max(1, min(int((v-0.8-7.3)/3.13), int((0.9*c-2.5)/3.1), int((0.85*r-4.5)/4.8))), round(c,1), round(r), round(v,1))'")
 read -r N CPUQ RAMG VRAMG <<< "$NMAX"; [[ ${SYNC:-0} == 1 ]] || N=${#SEEDS[@]}
-log "host: CPU quota $CPUQ cores, RAM $RAMG GiB, VRAM $VRAMG GiB -> $N worlds at once; ${#SEEDS[@]} seeds"
+log "host: CPU quota $CPUQ cores, RAM $RAMG GiB, VRAM $VRAMG GiB -> $N worlds at once; seeds ${SEEDS[*]}"
 P "mkdir -p /workspace/results/$NAME && echo '$T0 $(date -r "${T0%.*}" +%T) pod create ($POD)' > /workspace/results/$NAME/timeline.txt"
 redraw=${REDRAW:-1}; next=$(( $(printf '%s\n' "${SEEDS[@]}" | sort -n | tail -1) + 1 ))
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do

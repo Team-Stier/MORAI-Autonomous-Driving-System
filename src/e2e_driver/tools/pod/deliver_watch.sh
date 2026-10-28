@@ -3,8 +3,8 @@
 # watcher (Alpamayo-Cosmos tools/vast/r2ft_autowatch.py) writes "STAGE 납품 완료: b2://morai2026-alpamayo/<run>/deliver/final"
 # to EVENTS (~/.r2ft-watch.events); only lines after this script starts count. Then: the cheapest vast 5090 offers
 # (README quick start filter, up to MAX_DPH $/h, OFFERS_N tried in order), eval_pod.sh BUNDLE=v1 on b2:<run>/deliver (the
-# qad_export deliver dir: final/ + quant_manifest.json, as the delivered WoWmayo), LAPS (8) on SEED (28: the scenes of the
-# 10/28 rt8 run), each lap to the user's Discord DM starting with LABEL, B2 sync and self-deletion at the end.
+# qad_export deliver dir: final/ + quant_manifest.json, as the delivered WoWmayo), LAPS (8) on SEED (default: a new random one per
+# run; set it only to replay the scenes of an earlier run), each lap to the user's Discord DM starting with LABEL, B2 sync and self-deletion at the end.
 #   DRY_RUN=1 prints the command instead of renting.        nohup bash deliver_watch.sh > ~/morai-eval/deliver_watch.log 2>&1 &
 HERE=$(cd "$(dirname "$0")" && pwd); EVENTS=${EVENTS:-$HOME/.r2ft-watch.events}
 n0=$(wc -l < "$EVENTS" 2> /dev/null || echo 0)
@@ -26,7 +26,7 @@ if [[ -n ${pid:-} ]] && [[ $(vastai show instance "$pid" --raw 2> /dev/null | py
   done
 else att=(); fi
 cmd=(env "${att[@]}" EVENT_T0=$EVENT_T0 MSG_PREFIX="${LABEL:-[R2 미세조정 납품본] }" PROVIDER=vast OFFER="$offers" BUNDLE=v1 LAPS=${LAPS:-8} LAP_DELIVER=1 VIEW_FPS=15
-     EVAL_MAX_MIN=${EVAL_MAX_MIN:-330} bash "$HERE/eval_pod.sh" "$NAME" "b2:$src" "${SEED:-28}")
+     EVAL_MAX_MIN=${EVAL_MAX_MIN:-330} bash "$HERE/eval_pod.sh" "$NAME" "b2:$src" ${SEED:+"$SEED"})   # no SEED: eval_pod.sh draws a new one
 echo "$(date +%T) offers [$offers] -> ${cmd[*]}"
 [[ -n $offers ]] || { echo "no 5090 offer under \$${MAX_DPH:-1.0}/h"; exit 1; }
 [[ ${DRY_RUN:-0} == 1 ]] && exit 0
