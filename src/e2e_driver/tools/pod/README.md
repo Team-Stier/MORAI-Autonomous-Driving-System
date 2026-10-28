@@ -416,7 +416,10 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
   3. 전문가가 직접 달리는 에피소드(`shadow.sh up 1 drive`, 포크 자체 브릿지·speed_filter)
   4. 라벨 → B2
 - **실패하면 복귀 (`rl_episode --returns`, 영상 제공기와 같음):** 에피소드는 전체 랩(START → CP14 + 100 m, 15분)이다.
-  - 도로 이탈 2 s, stuck 60 s(적신호 시간 제외), 충돌 뒤 stuck 15 s, CP 건너뜀 10 m가 되면 직전에 지난 CP로 Spawn하고 랩을 이어 간다. 규칙은 eval_manager 복귀와 같고, 복귀 뒤 10 s 동안은 판정하지 않는다.
+  - 복귀 조건: 도로 이탈 2 s, 충돌 뒤 stuck 15 s, CP 건너뜀 10 m, 그리고 eval_manager의 공용 `Stuck`이다.
+    - `Stuck`: 경로 진행 5 m 미만이 30 s 이어지면 복귀한다. 적신호와 양보 시간은 세지 않지만, 한 번 선 시간이 90 s를 넘으면 무조건 복귀한다.
+    - 조건이 되면 직전에 지난 CP로 Spawn하고 랩을 이어 간다. 복귀 뒤 10 s 동안은 판정하지 않는다.
+  - 10/28 run f 정책 랩: CP6 좌회전(4356) 정지선 25–35 m 앞, 차선 위에서 550 s 서 있었는데도 복귀가 없었다. 그 신호등은 늘 적색이 켜져 있어(적색 또는 적색+좌회전 화살표) 예전 규칙이 그 시간을 모두 뺐기 때문이다. 이제 90 s 상한이 잡는다.
   - `--return-hook`이 쉐도를 재시작한다.
   - 기록: episodes.jsonl `returns`, steps.jsonl `since_return_s`. 복귀 뒤 1.5 s 행은 이력이 순간이동을 건너므로 라벨 없음이다.
   - 10/28 run e: 랩 하나(400 s)에서 6번 복귀했다(도로 이탈 1, 충돌 뒤 stuck 5. 4번은 고주로 CP11 Spawn 직후 NPC 추돌).
