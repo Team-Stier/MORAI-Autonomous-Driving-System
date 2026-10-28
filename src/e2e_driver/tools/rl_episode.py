@@ -10,14 +10,16 @@ Checkpoints are the official 10/7 table rows (checkpoints_20261007.csv, START = 
 them). The 60 kph exemption (고주로) is CP10 s 1118.7 -> CP12 s 1741.7, so the default episode is CP9 (s 930.6) -> CP12
 + 100 m: the entry and the exit hand-over, where the limit applies again, are inside it.
 Episode k (seed S*1000+k):
-  - scene: a fresh clcol variant (scenario_variants.py, as an eval lap: signal phases, NPC traffic, obstacles drawn)
+  - scene: a fresh clcol variant (scenario_variants.py, as an eval lap: signal phases, NPC traffic, obstacles drawn;
+    --scene-preset brake: DAgger dynamic/tunnel movers that make the Ego stop)
   - pause -> load-scene -> Ego to START_CP with MORAI's Spawn program (gRPC SetTransform to the table pose with --direct
     or on a simulator whose gRPC port is not 7789: the program only talks to 7789) -> weather and time of the start
     section -> localization restart (LOC_RESTART) -> 4 s -> play
   - weather and time per checkpoint section, drawn from (seed, section) as in evaluation (rules §2-7-2)
-  - ends: "goal" (route s >= s_goal = s(END_CP) + PAST_M), "slow" (past END_CP below 60 kph), a failure ("off_road":
-    all wheels off the drivable area outside the shadow for the scorer's inoperable.min_s; "missed_cpN"; "stuck" /
-    "stuck_after_collision" as in evaluation) or "time_limit" (LIMIT_S of simulator time after play: truncated)
+  - ends: "goal" (route s >= s_goal = s(END_CP) + PAST_M), "slow" (past END_CP below 60 kph; not with --no-slow-end),
+    a failure ("off_road": all wheels off the drivable area outside the shadow for the scorer's inoperable.min_s;
+    "missed_cpN"; "stuck" / "stuck_after_collision" as in evaluation) or "time_limit" (LIMIT_S of simulator time after
+    play: truncated)
   - recorded 1 s past the end, paused, scored by tools/scorer, rewards per decision (rl_reward.py), the privileged
     critic vector per decision (rl_critic.py, from the 20 Hz Ego GT and MORAI Object Info on --objinfo-port)
 Records = the learner's spool (Alpamayo-Cosmos train/rl/episodes.py): OUT is the spool, NAME the actor.
@@ -89,7 +91,7 @@ class Episodes(em.Manager):
 
     def reset(self, k, seed):
         """pause -> load-scene -> Spawn START_CP -> start section's weather -> localization restart -> 4 s (-> play)."""
-        name, shaded, meta = em.make_scene(seed)
+        name, shaded, meta = em.make_scene(seed, self.a.scene_preset)
         em.msc("pause")
         r = em.msc("load-scene", name + "/62", 90)
         if not r.startswith("ok"):
@@ -191,7 +193,7 @@ class Episodes(em.Manager):
             if end is None and t_play is not None:
                 if passed >= self.a.end_cp and lat < 15.0 and s >= self.s_goal:
                     end = "goal"
-                elif passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
+                elif not self.a.no_slow_end and passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
                     end = "slow"
                 elif not self.a.returns and tau >= grace and off_t is not None and tau - off_t >= self.min_off:
                     end = "off_road"
@@ -364,6 +366,9 @@ def main():
     ap.add_argument("--out", default="~/morai-eval/rl", help="the learner spool (NAME = actor)")
     ap.add_argument("--port", type=int, default=8092)
     ap.add_argument("--direct", action="store_true", help="Spawn and weather over gRPC instead of the official programs")
+    ap.add_argument("--no-slow-end", action="store_true", help="end at the goal only, not \"slow\" past END_CP (a segment "
+                    "goal short of the next light: the dynamic zone's CP5 + 90 m stops before the CP6 light)")
+    ap.add_argument("--scene-preset", default="", help="scenario_variants.py SCENE_PRESET (brake: DAgger dynamic/tunnel scenes)")
     ap.add_argument("--red-cap", type=float, nargs=2, metavar=("LO", "HI"), help="red waits end after a time drawn from [LO, HI] s")
     ap.add_argument("--returns", action="store_true", help="a failure returns to the last checkpoint passed (eval_manager's "
                     "rules) and the lap goes on; the episode ends at the goal or --limit-s")

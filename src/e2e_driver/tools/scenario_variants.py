@@ -246,6 +246,8 @@ def r2_actor(d, rng, route, uid, kind, s0, side, ptype, timing, curb, v_e, sampl
         # (r2c3-b1-003). The "no conflict" class keeps its short trigger (the object reaches the lane after the Ego).
         safe = v_e * v_e / 6.0 + 8.0 if timing != "no_conflict" else ACTIVE_MIN
         active = min(max(math.hypot(lon, abs(lat0)), ACTIVE_MIN, safe), ACTIVE_MAX)
+    if kind in HOLD_LINE:                           # not set off from the stop line before the zone (preset brake)
+        active = min(active, math.hypot(s_start - HOLD_LINE[kind], lat0) - 1.0)
     x, y, z, h = route.at(s_start, lat0)
     pts = [(x, y)]
     for s_, l_ in extra + [(s_end, lat_end)]:
@@ -288,6 +290,21 @@ PTYPES = [("cross_lr", 0.35), ("cross_rl", 0.35), ("behind_parked", 0.18), ("alo
 # Timing of the 90 % non-"along" objects; "along" (10 %) is no-conflict too, so 0.444/0.222/0.222/0.111 gives the plan's
 # 40/20/20/20 overall. R2_TIMING="must_stop:w,pass_front:w,passed:w,no_conflict:w" overrides (catch-up batches).
 TIMINGS = [("must_stop", 0.444), ("pass_front", 0.222), ("passed", 0.222), ("no_conflict", 0.112)]
+TUNNEL = [("dynamic", 0.4), ("both", 0.3), ("static", 0.2), ("none", 0.1)]   # DATA_PLAN_R2 §4 B
+RA_S, HOLD_LINE, NO_CARS = (445.0, 500.0), {}, ()
+# SCENE_PRESET=brake (DAgger dynamic-obstacle and tunnel segments; user 10/28 "only the ones that really brake"): every
+# mover crosses the route lane when the Ego must stop (pass_front, a slow-down at most, rarely), no roadside walkers,
+# every tunnel has one; trigger distances sized for the policy's speed there (10/28 shadow runs c-f, median 7.2-8.5 m/s
+# at s 430-500, 13-15.6 in the tunnel). The dynamic zone starts past s 465 with triggers shorter than the reach from the
+# stop line at s 436.8: an Ego waiting at its red would set a mover off to cross long before it arrives (shadow-dyn 10/28).
+# No car props in the one-lane tunnel: one starts in the Ego's lane (curb + 1.6 m) or ends with its body in it at the
+# right wall, and the GT AEB held the expert there for the rest of the episode (shadow-dyn-20261028b drive ep 2)
+if os.environ.get("SCENE_PRESET") == "brake":
+    PTYPES = [("cross_lr", 0.40), ("cross_rl", 0.40), ("behind_parked", 0.20)]
+    TIMINGS = [("must_stop", 0.85), ("pass_front", 0.15)]
+    TUNNEL = [("dynamic", 0.6), ("both", 0.4)]
+    V_NOMINAL = {"ra": 8.5, "rb": 14.0}
+    RA_S, HOLD_LINE, NO_CARS = (465.0, 500.0), {"ra": 436.8}, ("rb",)
 
 
 def r2_dynamic(d, rng, route, uid, kind, s_lo, s_hi, curb, sample_ped, sample_obj, info, avoid=None):
@@ -318,8 +335,9 @@ def r2_dynamic(d, rng, route, uid, kind, s_lo, s_hi, curb, sample_ped, sample_ob
             info.append(r2_static(d, rng, route, uid[0], s_car, curb[0] + 1.6, sample_obj, car, f"{kind}_parked", 3.0))
             uid[0] += 1
         cls = pick(rng, [("person", 0.70), ("other", 0.15), ("car", 0.15)])
-        if cls == "car" and ptype in ("behind_parked", "along"):   # a car prop behind the parked car overlaps it and
-            cls = "person"                                        # never moves (R2 QA); one along the lane stays in it
+        # a car prop behind the parked car overlaps it and never moves (R2 QA); one along the lane stays in it
+        if cls == "car" and (ptype in ("behind_parked", "along") or kind in NO_CARS):
+            cls = "person"
         if ptype == "along":
             timing = "no_conflict"
         elif timing == "no_conflict":
@@ -422,7 +440,7 @@ def make(base, route, rng, uid0, cps=None):
     sample_ped = base["pedestrianList"][0]
     d["objectList"], d["pedestrianList"] = objs, peds
     # dynamic zone (the official sample pedestrian's, past stop line s 436.8): DATA_PLAN_R2 §4 A objects, s 445-500
-    r2_dynamic(d, rng, route, uid, "ra", 445.0, 500.0, A_CURB, sample_ped, sample_obj, info)
+    r2_dynamic(d, rng, route, uid, "ra", *RA_S, A_CURB, sample_ped, sample_obj, info)
 
     if d.get("shadedAreaList"):
         area = d["shadedAreaList"][0]
@@ -433,7 +451,7 @@ def make(base, route, rng, uid0, cps=None):
         st = s_area + shift
         half = float(area["size"]["x"]) * 0.4
         meta["shade_shift_m"] = round(shift, 1)
-        comp = pick(rng, [("dynamic", 0.4), ("both", 0.3), ("static", 0.2), ("none", 0.1)])   # DATA_PLAN_R2 §4 B
+        comp = pick(rng, TUNNEL)
         meta["tunnel"] = comp
         if comp in ("both", "static"):
             # Only past s 1894 (front face >= 1890 even for a 6.6 m vehicle model): before that the solid left line of
