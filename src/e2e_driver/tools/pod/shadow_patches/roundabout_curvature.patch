@@ -1,0 +1,25 @@
+--- a/src/path_planner/include/path_planner/cores/roundabout_merge.hpp	2026-10-28 11:51:45
++++ b/src/path_planner/include/path_planner/cores/roundabout_merge.hpp	2026-10-28 11:51:45
+@@ -361,13 +361,19 @@
+     }
+     return true;
+   }
++  // DAgger shadow (10/28): the heading change over +-2 m, not per 0.5 m segment: a lanelet join's kink (11 deg at the
++  // entry wait line, s 885.1; 7 deg at s 914.8) read as kappa 0.39 capped the merge at 2.3 m/s (the ring itself: 6.3).
+   static double curvature(const Message& path, const std::vector<double>& station, double a, double b) {
++    constexpr double window_m = 2.0;
+     double maximum = 0;
+     for (std::size_t i = 0; i + 1 < station.size(); ++i) {
+       if (station[i + 1] < a || station[i] > b) continue;
+-      const double turn = angle(yaw(path.points[i + 1].pose.pose.orientation) -
+-                                yaw(path.points[i].pose.pose.orientation));
+-      maximum = std::max(maximum, std::abs(turn) / (station[i + 1] - station[i]));
++      const std::size_t lo = std::lower_bound(station.begin(), station.end(), station[i] - window_m) - station.begin();
++      const std::size_t hi = std::max<std::size_t>(i + 1,
++          std::upper_bound(station.begin(), station.end(), station[i] + window_m) - station.begin() - 1);
++      const double turn = angle(yaw(path.points[hi].pose.pose.orientation) -
++                                yaw(path.points[lo].pose.pose.orientation));
++      maximum = std::max(maximum, std::abs(turn) / (station[hi] - station[lo]));
+     }
+     return maximum;
+   }

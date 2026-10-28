@@ -19,6 +19,7 @@ Per decision (t_wall, t_sim from steps.jsonl; the shadow's records by host wall 
     brake above 60 km/h outside sections 11-12), and the collection's GT overrides with their own code (gt-yield-node.py
     conflict/brake_for every 0.2 s, gt-aeb-node.py danger every 0.1 s with its 0.5 s hold) on the GT objects moved at
     constant velocity; kinematic bicycle, a = 5.74 accel - min(18.76 brake, A_BRAKE_MAX).
+  - roundabout (section 9): roundabout_merge's own schedule by time (Schedule), not its point speeds.
   - (a, kappa): the 16-point GT history (rows, simulator time) + the rollout's speed and heading at 0.1 s.
 Out per episode (the runner's contract, do not change): EP_DIR/dagger_labels.npz step int32 (N,) = steps.jsonl line,
 ak float32 (N, 64, 2) a m/s^2 and kappa 1/m at 0.1 s, valid bool (N, 64), source int8 (N,) 0 planner / 1 official lane;
@@ -53,6 +54,11 @@ CAR = dict(accel=3.56, brake=14.1, a0=0.15, drag=0.029, delay_steps=1)
 CURVE = dict(a_lat=2.6, v_min=4.166666666666667, approach=1.70, cap60=16.666666666666668, cap100=27.77777777777778)
 SPEED_LIMIT_MPS, NO_LIMIT_SECTIONS = 60 / 3.6, (11, 12)   # speed_filter selection.yaml
 ROUNDABOUT = (9,)            # path_planner selection.yaml roundabout_merge: the yield node ignores vehicles there (shadow_objects.py)
+# roundabout_merge (roundabout_merge.yaml, shadow_patches/roundabout_lead.patch): it commands its schedule
+# command_step_sec ahead; a schedule ending at least this fast (or still speeding up) has merged and goes on past its
+# searched horizon; schedule and plan stamps within RB_STAMP_S; with no merge for kinematic reasons only (speed,
+# curvature: not the ring's objects) the newest schedule within RB_REUSE_S before goes on
+RB_LEAD_S, RB_GO_MPS, RB_STAMP_S, RB_REUSE_S = 0.8, 0.5, 0.15, 1.0
 PLAN_AGE_S, NO_PLAN_S, PLAN_D0_M, PLAN_HE_RAD, LANE_D_M = 0.5, 2.0, 5.0, 0.5, 4.5
 # a plan that keeps the car off the route lane (both > 2 m from it, 30 m ahead too) is the planner following a wrong lane,
 # unless a standing object sits on the route lane ahead: then it is the obstacle bypass (10/28 shadow run: 3-4 m, plan 3 m)
@@ -294,6 +300,38 @@ class Speeds:
         return self.last
 
 
+class Schedule:
+    """roundabout_merge's searched schedule (shadow_rec "rbs": t s v a from its plan time, cubic between states as its
+    Edge) driven by time, one call per 0.05 s step: v(t_off + k dt), t_off = t0 - plan time + RB_LEAD_S. Its point speeds
+    are by station: they lose a wait (a car stopped at the entry gets 0.08 m/s, its first jerk-limited step, and never
+    starts) and end in the braking tail before the 40 m path's end, which replanning never drives. Past its horizon (t0
+    predictions end there): its end speed, slowed for curvature as velocity_planner (Speeds), once it has merged (no
+    speeding up behind ring cars no node sees there: 10/28 run b labels ran into them at 5-6 s), else it stays stopped."""
+
+    def __init__(self, states, t_off, path, cap):
+        self.S, self.t, self.k = np.asarray(states, float), t_off, 0
+        self.path, self.cap, self.after = path, cap, None
+
+    def v(self, t):
+        S = self.S
+        i = min(max(int(np.searchsorted(S[:, 0], t, side="right")) - 1, 0), len(S) - 2)
+        (t0, _, v0, a0), (t1, _, v1, a1) = S[i], S[i + 1]
+        h, u = t1 - t0, min(max(t - t0, 0.0), t1 - t0)
+        c2, c3 = 3 * (v1 - v0) / h ** 2 - (2 * a0 + a1) / h, 2 * (v0 - v1) / h ** 3 + (a0 + a1) / h ** 2
+        return max(0.0, v0 + u * (a0 + u * (c2 + u * c3)))
+
+    def __call__(self, nearest):
+        t = self.t + self.k * PP["control_period_sec"]
+        self.k += 1
+        if t <= self.S[-1, 0]:
+            return self.v(t)
+        if self.after is None:
+            vt, at = self.S[-1, 2], self.S[-1, 3]
+            sp = Speeds(self.path, vt, self.cap)
+            self.after = (lambda n: min(vt, sp(n))) if vt >= RB_GO_MPS or (vt > 0.05 and at > 0) else (lambda n: 0.0)
+        return self.after(nearest)
+
+
 def rollout(path, v_path, x, y, yaw, v, steer, objs, section, gt, speed=None):
     """-> (x, y, yaw, v at 0.1 ... 6.4 s, flags dict): the collection driver from this state along path (M, 2) with
     point speeds v_path, or speed(nearest index) -> target (Speeds); objs from Rec.objects (moved at constant velocity)."""
@@ -478,6 +516,16 @@ def one(j):
         if mode == "plan" and plan_zero:
             stop_station = 0.0                        # stopping for a line this map reading does not see: keep it
         speed = Speeds(path, v_t0, cap, stop_station)
+    elif sec in ROUNDABOUT and (q := rec.last("rbs", p[1])) is not None and abs(q[2] - p[2]) < RB_STAMP_S:   # the plan's own cycle
+        mode = "rb_schedule"
+        if not q[3] and q[4:] == ["kinematic"]:
+            i = int(np.searchsorted(rec.t["rbs"], p[1], side="right"))
+            q, mode = next((r for r in reversed(rec.rows["rbs"][max(i - 40, 0):i]) if len(r[3]) >= 2), None), "rb_reuse"
+            q = q if q is not None and tw - q[2] < RB_REUSE_S else None
+        if q is not None and len(q[3]) >= 2:
+            speed = Schedule(q[3], tw - q[2] + RB_LEAD_S, path, cap)
+        else:
+            mode = "plan"                             # no merge (the ring's objects): the planner's stop request
     out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, speed)
     r = chk.check(ego, out, signal=sig, objects=objs, steer=steer)
     extra = dict(verdict=r["verdict"], valid=bool(r["valid"]), reasons=" ".join(r["reasons"]), tags=" ".join(r["tags"]),
@@ -582,6 +630,11 @@ def selftest():
     assert out[-1, 3] < 2.0 and out[:, 0].max() < 42.0, out[-1]   # pp's lag: it creeps up to the line
     out, fl = rollout(straight, np.full(len(s), 25.0), 0.0, 0.0, 0.0, 17.0, 0.0, [], 1, gt)   # speed filter at 60 km/h
     assert fl["sf_on"] and out[:, 3].max() < 17.5, out[:, 3].max()
+    sched = [[0.0, 0.0, 0.0, 0.0], [2.0, 0.0, 0.0, 0.0], [2.5, 0.083, 1.0, 2.0], [3.0, 0.583, 2.0, 2.0], [4.5, 3.583, 4.0, 0.0]]
+    out, _ = rollout(straight, np.zeros(len(s)), 0.0, 0.0, 0.0, 0.0, 0.0, [], 9, gt, Schedule(sched, RB_LEAD_S, straight, 16.7))
+    assert out[10, 3] < 0.05 and 3.5 < out[-1, 3] < 4.5 and out[-1, 0] > 10.0, out[[10, -1]]   # waits ~2 s (less its lead), goes on at 4 m/s
+    out, _ = rollout(straight, np.zeros(len(s)), 0.0, 0.0, 0.0, 0.0, 0.0, [], 9, gt, Schedule(sched[:2], RB_LEAD_S, straight, 16.7))
+    assert out[:, 3].max() < 0.05, out[:, 3].max()                                      # still waiting at its horizon: stays
     print("selftest ok")
 
 

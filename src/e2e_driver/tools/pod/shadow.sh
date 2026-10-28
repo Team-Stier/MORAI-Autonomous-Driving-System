@@ -13,7 +13,9 @@
 # drive: the collection driver drives world 1 itself (label accuracy check; stack 1 must be down): the fork's own bridge
 #   (make-bridge.py config) and speed_filter, no remaps: the R2 Mac stack's driver.
 # Objects (shadow_objects.py): Object Info velocities in map axes for every node, the highway's moving vehicles for the
-#   planners (frenet_gap.patch), no vehicles for the yield node in the roundabout (roundabout_merge decides the entry).
+#   planners (frenet_gap.patch), no vehicles for the yield node in the roundabout (roundabout_merge decides the entry;
+#   roundabout_schedule.patch publishes its schedule by time for the labels; roundabout_curvature.patch and
+#   roundabout_lead.patch: no 1-2 m/s caps at lanelet joins, a 0.8 s command lead the PI-only pp starts from).
 # restart: the driver nodes anew (an episode's spawn is a jump the planners must not see; rl_episode --loc-restart),
 #   back once /local_path is out again (25 s at most). Logs: /root/shadow/n/. Env: SHADOW_CPUS (all).
 # TAKEOVER=1 (shadow mode): the start intervention, takeover.py watch (here) + pub (stack n's master, TAKEOVER_S 25):
