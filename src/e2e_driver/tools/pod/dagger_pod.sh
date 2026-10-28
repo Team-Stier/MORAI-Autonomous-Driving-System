@@ -52,7 +52,11 @@ P "${RANGE:+RANGE='$RANGE' }${LATE_SEED:+LATE_SEED=$LATE_SEED }setsid nohup bash
 for i in $(seq 30); do P "test -s /workspace/results/$NAME/timeline.txt" && break; sleep 2; done
 log "dagger_box running: ssh -F $SSHC pod tail -f /workspace/results/$NAME/timeline.txt"
 seen=0
-until P "test -e /workspace/results/$NAME/DONE || ! pgrep -f '[d]agger_box.sh $NAME' > /dev/null"; do
+state() { P "test -e /workspace/results/$NAME/DONE && echo done || (pgrep -f '[d]agger_box.sh $NAME' > /dev/null && echo run || echo dead)" 2> /dev/null; }
+gone=0
+while :; do   # an ssh hiccup is not an end (10/28: "connection refused" for a minute read as dagger_box gone)
+  st=$(state); [[ $st == done ]] && break
+  [[ $st == dead ]] && { gone=$((gone + 1)); (( gone >= 2 )) && break; } || gone=0
   (( $(date +%s) - T0 > ${MAX_MIN:-150} * 60 )) && { log "MAX_MIN reached: giving up"; exit 1; }
   n=$(P "wc -l < /workspace/results/$NAME/timeline.txt" 2> /dev/null || echo "$seen")
   (( n > seen )) && { P "tail -n $((n - seen)) /workspace/results/$NAME/timeline.txt" | cut -c26- | while read -r l; do log "box: $l"; done; seen=$n; }
