@@ -429,6 +429,9 @@ RANGE="--start-cp 10 --end-cp 12 --past-m 100" ATTACH=<id> ATTACH_NAME=<첫 이�
     - 흐름이 5 m/s 넘게 느리면 자기 차로에서 2 m/s²로 먼저 줄인다. 빠르면 velocity_planner가 올릴 수 있는 만큼만 올린다(곡률·상한은 넘지 않는다).
     - 지금 차로가 끝나거나 경로를 잃기 3 s 주행 + 8 m 전부터는 강제 합류다: 뒤 20 m가 비고 앞 간격이 10 m 이상이면 바꾼다.
     - 합류를 시작할 때마다 쉐도 rosout(`/root/shadow/n/ros/log/*/rosout.log`)에 `frenet merge: v … flow … n … forced …` 한 줄을 남긴다.
+  - 라벨은 계획(약 80 m)이 끝난 뒤를 공식 차로로 잇는다. 계획 끝이 다른 차로에 있으면 3 s × 속도에 걸쳐 공식 차로로 옮긴다. 다만 t0에 그 사이 차로에 움직이는 차가 보이면(뒤 22 m–앞 60 m) 계획 끝 차로를 그대로 유지한다.
+    - 예전처럼 공식 차로로 바로 붙이면 6.4 s 안에 두 차로를 건너 뒤차와 겹쳤다(run h 전문가 7행, lane_change_rear).
+    - 유지하면 그 차로가 경로에서 갈라지는 곳(s 1450–1500, 가장 왼쪽 차로)에서 차로 위반으로 빠진다(회당 약 21행, valid=False).
   - "경로를 잃음"은 그 차로에서 경로 lanelet에 다시 닿을 수 없을 때(차로 변경 포함 400 m 안)만이다. 공식 차로가 lanelet2 경로와 떨어져 달리다 다시 붙는 곳(s 1420 → 1591)에서 세우지 않는다.
   - 한계: 틈을 만들려고 가속하지는 않는다(속도는 velocity_planner 그대로). 정지 속도는 path_planner 점 속도로 들어가 velocity_planner의 곡률 제한을 거치지 않는다.
 - B2: spool은 `runs/dagger/shadow_debug/spool/`, 기록·결과는 `runs/dagger/shadow_debug/<이름>/`에 둔다.

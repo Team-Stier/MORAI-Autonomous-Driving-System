@@ -162,13 +162,25 @@ class Lane:
         return np.stack([np.interp(s, self.S, self.P[:, 0]), np.interp(s, self.S, self.P[:, 1])], -1)
 
 
-def extend(path, vp, lane, s0, v, sec):
-    """a plan that ends before the drive does (it ends ~50 m ahead) goes on along the lane at the curvature speed."""
+def extend(path, vp, lane, s0, v, sec, objs=()):
+    """a plan that ends before the drive does (it ends ~50 m ahead) goes on along the lane at the curvature speed, from
+    the plan end's offset from route.json's lane back to it over 3 s of travel, unless a moving vehicle the model sees at
+    t0 (20 m back to 60 m ahead) is in a lane in between: then on in the plan end's lane (the shadow's gap rule)."""
     L = float(np.sum(np.hypot(*np.diff(path, axis=0).T))) if len(path) > 1 else 0.0
     if L >= 6.4 * max(v, 1.0) + 20.0:
         return path, vp
-    se = lane.project(path[-1, 0], path[-1, 1], s0 + L)[0]
+    se, de, _ = lane.project(path[-1, 0], path[-1, 1], s0 + L)
     ext = lane.ahead(se + 0.5, 6.4 * max(v, 1.0) + 60.0)
+    if abs(de) > 0.5:     # the plan ends in a lane beside route.json's (highway): back to it over a 3 s lane change, as
+        t = np.gradient(ext, axis=0); t /= np.maximum(np.hypot(*t.T), 1e-9)[:, None]   # the shadow would (run h: a snap
+        w = np.clip(1.0 - 0.5 * np.arange(len(ext)) / (3.0 * max(v, 5.0)), 0.0, 1.0)    # crossed 2 lanes in 1 s)
+        lo, hi = sorted((0.0, de))
+        for o in objs:
+            q = lane.project(o[2], o[3], s0, 90.0) if o[1] == "vehicle" and math.hypot(o[5], o[6]) > 0.3 else None
+            if q and lo - 1.8 < q[1] < hi + 1.8 and abs(q[1] - de) >= 1.8 and -22.0 <= q[0] - s0 <= 60.0:
+                w[:] = 1.0
+                break
+        ext = ext + (de * w)[:, None] * np.stack([-t[:, 1], t[:, 0]], -1)
     path, vp = np.vstack([path, ext]), np.r_[vp, curve_speed(ext, vp[-1], sec)]
     return path, approach(path, vp, len(vp) - len(ext))
 
@@ -447,7 +459,7 @@ def one(j):
         i0 = int(np.argmin(np.hypot(P[:, 0] - x, P[:, 1] - y)))
         cs = np.r_[0, np.cumsum(np.hypot(*np.diff(P[i0:], axis=0).T))]
         vp = np.interp(np.arange(len(path)) * 0.5, cs, Pv[i0:])
-    path, vp = extend(path, vp, lane, s0, v, sec)
+    path, vp = extend(path, vp, lane, s0, v, sec, objs)
     # the t0 light and the judged stop line ahead (scorer stop lines, front axle; LabelChecker's own reading)
     chk = c["chk"]
     ego = dict(x=x, y=y, yaw=yaw, v=v, s=steps[j].get("s"))
