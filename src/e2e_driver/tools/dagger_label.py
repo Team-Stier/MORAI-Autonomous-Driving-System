@@ -59,6 +59,14 @@ ROUNDABOUT = (9,)            # path_planner selection.yaml roundabout_merge: the
 # searched horizon; schedule and plan stamps within RB_STAMP_S; with no merge for kinematic reasons only (speed,
 # curvature: not the ring's objects) the newest schedule within RB_REUSE_S before goes on
 RB_LEAD_S, RB_GO_MPS, RB_STAMP_S, RB_REUSE_S = 0.8, 0.5, 0.15, 1.0
+# the ring's traffic circle (Object Info vehicles of 10/28 runs b and d, 8,532 positions: r p5-p95 18.29-18.47 m) and the
+# band counted as ring traffic; label/vehicle boxes grow by RING_PAD_M. roundabout_merge's own predictions let its
+# schedule cut in (10/28 run d expert: struck at s 889.1 by a ring car 11 m away 2 s before; 40 % of its ring labels
+# met a ring car within 6.4 s): before the car enters the band, a label that meets a ring car moved along the circle at
+# its t0 speed yields: the schedule capped to stop RING_STOP_M before the band at RING_DEC_MPS2, if that keeps out of
+# the band and of the ring cars
+RING_C, RING_R, RING_BAND_M, RING_PAD_M, RING_STOP_M, RING_DEC_MPS2 = (-102.36, 343.88), 18.4, 2.5, 0.5, 5.0, 2.5   # 5 m: stop_line_state x_m (pp overshoots ~3 m)
+EGO_BOX = (1.55, 2.35, 0.95)                          # base_link -> box centre, half length, half width (body_m [-0.8, 3.9])
 PLAN_AGE_S, NO_PLAN_S, PLAN_D0_M, PLAN_HE_RAD, LANE_D_M = 0.5, 2.0, 5.0, 0.5, 4.5
 # a plan that keeps the car off the route lane (both > 2 m from it, 30 m ahead too) is the planner following a wrong lane,
 # unless a standing object sits on the route lane ahead: then it is the obstacle bypass (10/28 shadow run: 3-4 m, plan 3 m)
@@ -332,6 +340,64 @@ class Schedule:
         return self.after(nearest)
 
 
+def _corners(x, y, h, hl, hw):
+    c, s = math.cos(h), math.sin(h)
+    return np.array([(x + a * c - b * s, y + a * s + b * c) for a, b in ((hl, hw), (hl, -hw), (-hl, -hw), (-hl, hw))])
+
+
+def _overlap(A, B):
+    """two rectangles (4, 2) overlap: separating axis test."""
+    for P in (A, B):
+        for i in range(2):
+            n = np.array([-(P[i + 1, 1] - P[i, 1]), P[i + 1, 0] - P[i, 0]])
+            pa, pb = A @ n, B @ n
+            if pa.max() < pb.min() or pb.max() < pa.min():
+                return False
+    return True
+
+
+def ring_meet(traj, objs):
+    """first 0.1 s step (or None) where traj (64, 4: x y yaw v) meets a ring car moved along the circle at its t0 speed."""
+    cx, cy = RING_C
+    ring = []
+    for o in objs:
+        r = math.hypot(o[2] - cx, o[3] - cy)
+        if o[1] == "vehicle" and abs(r - RING_R) < RING_BAND_M and math.hypot(o[5], o[6]) > 0.3:
+            w = ((o[2] - cx) * o[6] - (o[3] - cy) * o[5]) / (r * r)      # angular speed, + counter-clockwise
+            ring.append((math.atan2(o[3] - cy, o[2] - cx), w, r, o[7] / 2 + RING_PAD_M, o[8] / 2 + RING_PAD_M))
+    if not ring:
+        return None
+    for k, (x, y, h, _) in enumerate(traj):
+        bx, by = x + EGO_BOX[0] * math.cos(h), y + EGO_BOX[0] * math.sin(h)
+        A = None
+        for a0, w, r, hl, hw in ring:
+            a = a0 + w * 0.1 * (k + 1)
+            ox, oy = cx + r * math.cos(a), cy + r * math.sin(a)
+            if math.hypot(ox - bx, oy - by) > 8.0:
+                continue
+            A = _corners(bx, by, h, EGO_BOX[1] + RING_PAD_M, EGO_BOX[2] + RING_PAD_M) if A is None else A
+            if _overlap(A, _corners(ox, oy, a + math.copysign(math.pi / 2, w), hl, hw)):
+                return k
+    return None
+
+
+def outside_band(traj):
+    """the car's front corners stay outside the ring's traffic band all along traj."""
+    cx, cy = RING_C
+    f = traj[:, :2] + (EGO_BOX[0] + EGO_BOX[1]) * np.stack([np.cos(traj[:, 2]), np.sin(traj[:, 2])], -1)
+    return bool(np.all(np.hypot(f[:, 0] - cx, f[:, 1] - cy) > RING_R + RING_BAND_M))
+
+
+def yield_at_band(path, speed):
+    """speed (a Schedule) capped to stop RING_STOP_M before the path point where the car's front reaches the band."""
+    cum = np.r_[0, np.cumsum(np.hypot(*np.diff(path, axis=0).T))]
+    h = np.arctan2(*np.gradient(path, axis=0).T[::-1])
+    f = path + (EGO_BOX[0] + EGO_BOX[1]) * np.stack([np.cos(h), np.sin(h)], -1)
+    inside = np.flatnonzero(np.hypot(f[:, 0] - RING_C[0], f[:, 1] - RING_C[1]) <= RING_R + RING_BAND_M)
+    end = (cum[inside[0]] if len(inside) else cum[-1]) - RING_STOP_M
+    return lambda n: min(speed(n), math.sqrt(2.0 * RING_DEC_MPS2 * max(end - cum[n], 0.0)))
+
+
 def rollout(path, v_path, x, y, yaw, v, steer, objs, section, gt, speed=None):
     """-> (x, y, yaw, v at 0.1 ... 6.4 s, flags dict): the collection driver from this state along path (M, 2) with
     point speeds v_path, or speed(nearest index) -> target (Speeds); objs from Rec.objects (moved at constant velocity)."""
@@ -527,6 +593,11 @@ def one(j):
         else:
             mode = "plan"                             # no merge (the ring's objects): the planner's stop request
     out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, speed)
+    if mode.startswith("rb_") and outside_band(out[:1]) and ring_meet(out, objs) is not None:
+        speed.k = 0                                   # the same schedule from t0, capped to yield at the band
+        stop, fs = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, yield_at_band(path, speed))
+        if outside_band(stop) and ring_meet(stop, objs) is None:
+            out, fl, mode = stop, fs, "rb_yield"
     r = chk.check(ego, out, signal=sig, objects=objs, steer=steer)
     extra = dict(verdict=r["verdict"], valid=bool(r["valid"]), reasons=" ".join(r["reasons"]), tags=" ".join(r["tags"]),
                  signal=SIGNAL_CODE.get(sig, 0), stop_d=stop_d, mode=mode)
@@ -635,6 +706,17 @@ def selftest():
     assert out[10, 3] < 0.05 and 3.5 < out[-1, 3] < 4.5 and out[-1, 0] > 10.0, out[[10, -1]]   # waits ~2 s (less its lead), goes on at 4 m/s
     out, _ = rollout(straight, np.zeros(len(s)), 0.0, 0.0, 0.0, 0.0, 0.0, [], 9, gt, Schedule(sched[:2], RB_LEAD_S, straight, 16.7))
     assert out[:, 3].max() < 0.05, out[:, 3].max()                                      # still waiting at its horizon: stays
+    cx, cy = RING_C                                    # a straight path into the ring from 30 m out, a ring car 90 deg away
+    a = np.arange(0, 60, 0.5); line = np.stack([np.full_like(a, cx), cy - RING_R - 12.0 + a], -1)
+    a0 = -math.pi / 2 - 0.5                            # 9 m before the entry point, counter-clockwise at 4 m/s
+    car = [(1, "vehicle", cx + RING_R * math.cos(a0), cy + RING_R * math.sin(a0), a0 + math.pi / 2,
+            -4.0 * math.sin(a0), 4.0 * math.cos(a0), 4.6, 1.9)]
+    go, _ = rollout(line, np.full(len(a), 5.0), cx, cy - RING_R - 12.0, math.pi / 2, 5.0, 0.0, [], 9, gt)
+    assert ring_meet(go, car) is not None and ring_meet(go, []) is None and outside_band(go[:1]) and not outside_band(go)
+    sched = Schedule([[0.0, 0.0, 5.0, 0.0], [5.0, 25.0, 5.0, 0.0]], RB_LEAD_S, line, 16.7)
+    yl, _ = rollout(line, np.full(len(a), 5.0), cx, cy - RING_R - 12.0, math.pi / 2, 5.0, 0.0, [], 9, gt, yield_at_band(line, sched))
+    gap = (cy - yl[-1, 1] - EGO_BOX[0] - EGO_BOX[1]) - RING_R - RING_BAND_M       # its front stops this short of the band
+    assert outside_band(yl) and yl[-1, 3] < 0.1 and 0 < gap < RING_STOP_M, (gap, yl[-1])
     print("selftest ok")
 
 
