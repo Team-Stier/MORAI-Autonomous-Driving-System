@@ -3,6 +3,8 @@
 #include <node_pipeline/extension.hpp>
 #include <cmath>
 #include <stdexcept>
+
+namespace integrated_highway_approach_detail {
 namespace path_planner {
 inline PathPlannerMissionParameters loadHighwayApproachMissionParameters(const node_pipeline::ParamReader& params) {
   PathPlannerMissionParameters value;
@@ -104,3 +106,8 @@ inline IntegratedHighwayApproachParameters loadIntegratedHighwayApproachParamete
   p.entry_target_lane_id=r.integer("entry_target_lane_id");return p;
 }
 }
+}  // namespace integrated_highway_approach_detail
+
+namespace path_planner {
+using ::integrated_highway_approach_detail::path_planner::loadIntegratedHighwayApproachParameters;
+}  // namespace path_planner

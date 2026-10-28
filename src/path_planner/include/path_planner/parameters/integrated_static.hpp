@@ -1,11 +1,12 @@
 #pragma once
 #include <path_planner/cores/integrated_static.hpp>
 #include <node_pipeline/extension.hpp>
-
 #include <cmath>
 #include <stdexcept>
 #include <sstream>
 #include <string>
+
+namespace integrated_static_detail {
 namespace path_planner {
 inline IntegratedStaticTrajectoryParameters loadIntegratedStaticTrajectoryParameters(const node_pipeline::ParamReader& r) {
   IntegratedStaticTrajectoryParameters p;
@@ -201,4 +202,9 @@ inline IntegratedStaticParameters loadIntegratedStaticParameters(const node_pipe
   p.trajectory.physical_guard_m=std::max(0.,p.mission.tracking_margin_m-p.trajectory.solver.road_margin_m);
   return p;
 }
+}  // namespace path_planner
+}  // namespace integrated_static_detail
+
+namespace path_planner {
+using ::integrated_static_detail::path_planner::loadIntegratedStaticParameters;
 }  // namespace path_planner

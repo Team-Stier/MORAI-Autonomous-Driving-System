@@ -3,6 +3,8 @@
 #include <node_pipeline/extension.hpp>
 #include <cmath>
 #include <stdexcept>
+
+namespace integrated_final_circle_detail {
 namespace path_planner {
 inline PathPlannerMissionParameters loadFinalCircleMissionParameters(const node_pipeline::ParamReader& params) {
   PathPlannerMissionParameters value;
@@ -105,4 +107,9 @@ inline PathPlannerMissionParameters loadFinalCircleMissionParameters(const node_
 inline IntegratedFinalCircleParameters loadIntegratedFinalCircleParameters(const node_pipeline::ParamReader& reader) {
   return loadFinalCircleMissionParameters(reader);
 }
+}  // namespace path_planner
+}  // namespace integrated_final_circle_detail
+
+namespace path_planner {
+using ::integrated_final_circle_detail::path_planner::loadIntegratedFinalCircleParameters;
 }  // namespace path_planner

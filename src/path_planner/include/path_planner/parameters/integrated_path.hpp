@@ -1,9 +1,10 @@
 #pragma once
 #include <path_planner/cores/integrated_path.hpp>
 #include <node_pipeline/extension.hpp>
-
 #include <cmath>
 #include <stdexcept>
+
+namespace integrated_path_detail {
 namespace path_planner {
 inline IntegratedPathTrajectoryParameters loadIntegratedPathTrajectoryParameters(const node_pipeline::ParamReader& r) {
   IntegratedPathTrajectoryParameters p;
@@ -175,4 +176,9 @@ inline IntegratedPathParameters loadIntegratedPathParameters(const node_pipeline
   p.trajectory=loadIntegratedPathTrajectoryParameters(reader);
   return p;
 }
+}  // namespace path_planner
+}  // namespace integrated_path_detail
+
+namespace path_planner {
+using ::integrated_path_detail::path_planner::loadIntegratedPathParameters;
 }  // namespace path_planner
