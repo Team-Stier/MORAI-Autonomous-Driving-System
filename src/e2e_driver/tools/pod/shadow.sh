@@ -12,6 +12,8 @@
 #   stack n's master (shadow_relay.py, restamped to wall time). shadow_rec.py records what dagger_label.py needs.
 # drive: the collection driver drives world 1 itself (label accuracy check; stack 1 must be down): the fork's own bridge
 #   (make-bridge.py config) and speed_filter, no remaps: the R2 Mac stack's driver.
+# Objects (shadow_objects.py): Object Info velocities in map axes for every node, the highway's moving vehicles for the
+#   planners (frenet_gap.patch), no vehicles for the yield node in the roundabout (roundabout_merge decides the entry).
 # restart: the driver nodes anew (an episode's spawn is a jump the planners must not see; rl_episode --loc-restart),
 #   back once /local_path is out again (25 s at most). Logs: /root/shadow/n/. Env: SHADOW_CPUS (all).
 # TAKEOVER=1 (shadow mode): the start intervention, takeover.py watch (here) + pub (stack n's master, TAKEOVER_S 25):
@@ -85,9 +87,10 @@ nodes() {  # n: the driver nodes as one session (restart kills and starts this s
     st gt_localization python3 -u \$T/gt-localization-node.py
     st tl_gt python3 -u \$T/collect-only-tl-gt-node.py _enable_collect_only:=true _port:=$((7509 + off))
     st tl_gt_driver python3 -u \$T/tl-gt-driver-node.py
-    st objects python3 -u \$T/gt-objects-filter-node.py _object_port:=$((17505 + off))
-    st gt_aeb python3 -u \$T/gt-aeb-node.py /collect_only/objects_all $aeb
-    st gt_yield python3 -u \$T/gt-yield-node.py /collect_only/objects_all $yld
+    st objects python3 -u \$T/gt-objects-filter-node.py _object_port:=$((17505 + off)) /objects:=/shadow/objects_static
+    st shadow_objects python3 -u $HERE/shadow_objects.py
+    st gt_aeb python3 -u \$T/gt-aeb-node.py /shadow/objects_map $aeb
+    st gt_yield python3 -u \$T/gt-yield-node.py /shadow/yield_objects $yld
     st tf rosrun tf_publisher tf_publisher_node
     st static_tf rosrun tf_publisher static_tf_publisher_node
     st section rosrun section_annotator section_annotator_node

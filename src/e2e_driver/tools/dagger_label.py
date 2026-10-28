@@ -52,6 +52,7 @@ CAR = dict(accel=3.56, brake=14.1, a0=0.15, drag=0.029, delay_steps=1)
 # beyond the plan (it ends ~50 m ahead): velocity_planner's curvature speed (curvature_velocity60/100.yaml) on the lane
 CURVE = dict(a_lat=2.6, v_min=4.166666666666667, approach=1.70, cap60=16.666666666666668, cap100=27.77777777777778)
 SPEED_LIMIT_MPS, NO_LIMIT_SECTIONS = 60 / 3.6, (11, 12)   # speed_filter selection.yaml
+ROUNDABOUT = (9,)            # path_planner selection.yaml roundabout_merge: the yield node ignores vehicles there (shadow_objects.py)
 PLAN_AGE_S, NO_PLAN_S, PLAN_D0_M, PLAN_HE_RAD, LANE_D_M = 0.5, 2.0, 5.0, 0.5, 4.5
 # a plan that keeps the car off the route lane (both > 2 m from it, 30 m ahead too) is the planner following a wrong lane,
 # unless a standing object sits on the route lane ahead: then it is the obstacle bypass (10/28 shadow run: 3-4 m, plan 3 m)
@@ -300,7 +301,8 @@ def rollout(path, v_path, x, y, yaw, v, steer, objs, section, gt, speed=None):
     # the speed loop's integral as at steady speed (it holds the car against its drag; 0 at a stop, as pp resets it)
     i0 = (CAR["a0"] + CAR["drag"] * v) * PP["acceleration_gain_mps2"] / (CAR["accel"] * PP["speed_ki"]) if v > 0.5 else 0.0
     st = dict(x=x, y=y, yaw=yaw, v=v, steer=steer, prev_v=v, has_prev=False, integ=min(i0, PP["integral_limit_mps_sec"]))
-    moving = [o for o in objs if math.hypot(o[5], o[6]) >= Y.MIN_SPEED and math.hypot(o[2] - x, o[3] - y) < OBJ_R_M]
+    moving = [o for o in objs if math.hypot(o[5], o[6]) >= Y.MIN_SPEED and math.hypot(o[2] - x, o[3] - y) < OBJ_R_M
+              and not (section in ROUNDABOUT and o[1] == "vehicle")]   # the ring traffic is roundabout_merge's
     aebo = [o for o in objs if o[1] != "vehicle" and math.hypot(o[2] - x, o[3] - y) < OBJ_R_M]
     dt = PP["control_period_sec"]
     out, yb, aeb_until, flags = [], None, -1.0, dict(yield_on=False, aeb_on=False, sf_on=False, yield0=False, aeb0=False)
