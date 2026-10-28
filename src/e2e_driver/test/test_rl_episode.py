@@ -82,14 +82,14 @@ class FakeSim:
         self.s = float(self.S[np.argmin(np.hypot(*(self.P - (x, y)).T))])
 
 
-def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S):
+def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S, returns=False):
     scorer = os.environ.get("SCORER", os.path.join(HERE, *[".."] * 4, "Alpamayo-Cosmos", "tools", "scorer"))
     out, dump = tempfile.mkdtemp(), tempfile.mkdtemp()
     json.dump(dict(version=3), open(os.path.join(out, "latest.json"), "w"))
     a = argparse.Namespace(name="t", start_cp=9, end_cp=12, past_m=100.0, seed=0, limit_s=limit_s, v_ref=80 / 3.6,
                            fail_s=100.0, weather=None, scorer=scorer, out=out, direct=True, loc_restart="true",
                            world=1, dump_dir=dump, objinfo_port=0, lora_latest=os.path.join(out, "latest.json"),
-                           sync=None, red_cap=None, returns=False, return_hook=None)
+                           sync=None, red_cap=None, returns=returns, return_hook=None)
     wall, order = Wall(), []
     wall.t = time.time()                                  # dump mtimes are real: keep the fake wall clock near them
 
@@ -168,6 +168,24 @@ def test_off_road():
     print("off_road", ep["t_sim"], recs[-1]["s"], ep["r"])
 
 
+def test_returns():
+    """--returns (PPO, as the competition): test_off_road's car goes back to the last checkpoint, the rewards take the
+    rules' 15 s at that moment, and the lap drives on to the goal."""
+    seen = dict(s=0.0, back=False)
+
+    def lat(s):
+        seen["back"] |= s < seen["s"] - 50.0              # the return's jump back to the checkpoint
+        seen["s"] = s
+        return -30.0 if s > 1300 and not seen["back"] else 0.0
+    mgr, ep, recs, tl, order = episode(lambda s: 25.0, lat=lat, returns=True)
+    ret = [p for p in tl["penalties"] if p[2] == "return"]
+    assert len(ep["returns"]) == 1 and ep["returns"][0]["to"] >= 10 and ret == [[ep["returns"][0]["tau"], 15.0, "return"]], (ep["returns"], ret)
+    assert ep["end"] == "goal" and ep["terminated"] and ep["r_terminal"] == 0, ep
+    hit = [r for r in recs if any(e["type"] == "return" for e in r["events"])]
+    assert len(hit) == 1 and hit[0]["r_penalty"] <= -15.0, hit
+    print("returns", ep["returns"], ep["t_sim"], {k: ep[k] for k in ("r", "r_time", "r_penalty", "r_shape")})
+
+
 def test_time_limit():
     """5 m/s never reaches CP12 within 150 s of simulator time: truncated, no terminal reward."""
     mgr, ep, recs, tl, order = episode(lambda s: 5.0)
@@ -177,6 +195,6 @@ def test_time_limit():
 
 
 if __name__ == "__main__":
-    for f in (test_slow_exit, test_off_road, test_time_limit):
+    for f in (test_slow_exit, test_off_road, test_returns, test_time_limit):
         f()
     print("ok")
