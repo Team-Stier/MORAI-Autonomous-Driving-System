@@ -366,9 +366,10 @@ def msc(action, option="", timeout=30):
     return out[-1] if out else ""
 
 
-def make_scene(seed):
-    """-> (scene name, shadow test, scenario_variants manifest entry): lap variant generated on bc-250."""
-    out = ssh(f"cd {SCEN} && python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
+def make_scene(seed, preset=""):
+    """-> (scene name, shadow test, scenario_variants manifest entry): lap variant generated on bc-250 (preset:
+    scenario_variants.py SCENE_PRESET)."""
+    out = ssh(f"cd {SCEN} && SCENE_PRESET={preset} python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
               f" > /dev/null && cat ev{seed}_000.json && echo && echo @@ && cat ev{seed}-manifest.json")
     scene, manifest = out.split("\n@@\n")
     name = f"ev{seed}_000"
