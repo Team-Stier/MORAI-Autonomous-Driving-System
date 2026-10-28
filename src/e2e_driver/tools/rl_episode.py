@@ -62,6 +62,7 @@ import rl_critic
 import rl_reward
 
 LIMIT_S = 150.0      # simulator s after play; CP9 -> CP12 + 100 m is 911 m (46.5 s median for the 623 m exemption alone)
+EXEMPT_END_CP = 12   # "slow" (below 60 kph past END_CP) ends only the 고주로's episodes: elsewhere the car is always below it
 # --red-cap LO HI (user 10/28): a red wait at a judged stop line ends after a time drawn from [LO, HI] s: the
 # intersection gets its phase with the route's green (SetIntersectionPhase over Infrastructure gRPC restarts that phase,
 # then the normal cycle; morai-parallel-collect r2_lights). The cycle itself is fixed in the map (MGeo), so a scene can
@@ -191,7 +192,7 @@ class Episodes(em.Manager):
             if end is None and t_play is not None:
                 if passed >= self.a.end_cp and lat < 15.0 and s >= self.s_goal:
                     end = "goal"
-                elif passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
+                elif self.a.end_cp == EXEMPT_END_CP and passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
                     end = "slow"
                 elif not self.a.returns and tau >= grace and off_t is not None and tau - off_t >= self.min_off:
                     end = "off_road"
@@ -219,6 +220,8 @@ class Episodes(em.Manager):
         t0 = rows["ego_status"][0][0] / 1e9               # scorer frame t = 0
         tl = rl_reward.timeline(labels, sm, self.cfg, t0, end, t_end, self.s_goal, clk)
         tl.update(episode=f"{self.a.name}/ep{k:05d}", reward_args=dict(v_ref=self.a.v_ref, fail_s=self.a.fail_s))
+        # --returns: each return costs the rules' 15 s (§3-2) at its time, as the video laps count it
+        tl["penalties"] = sorted(tl["penalties"] + [(x["tau"], em.RETURN_S, "return") for x in ep.get("returns", [])])
         W, T = np.asarray(clk, float).T
         dec, outside = self.decisions(float(np.interp(t_play, T, W)), float(np.interp(t_end, T, W))) if self.a.dump_dir else ([], [])
         for src in outside:                               # this world's decisions while paused or past the end: kept apart

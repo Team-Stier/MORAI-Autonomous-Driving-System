@@ -29,6 +29,10 @@ FIELDS = (["v", "a", "yaw_rate", "s", "d_exit", "d_goal", "in_exempt", "lane_off
            "has_left_lane", "has_right_lane"]
           + [f"{lane}_{side}_{q}" for lane in ("own", "left", "right") for side in ("front", "rear") for q in ("gap", "rel_v", "ttc")]
           + ["lane_touch_s", "over_limit_s", "prev_a", "prev_kappa"])
+# PPO round/hwy (10/28): the NEAR_K nearest cars in the Ego frame, whatever their lane (route offsets mean nothing on the
+# roundabout ring); a missing one is (GAP0, 0, 0, 0)
+NEAR_K = 4
+FIELDS += [f"near{j}_{q}" for j in range(NEAR_K) for q in ("dx", "dy", "dvx", "dvy")]
 
 
 def _wrap(a):
@@ -98,7 +102,7 @@ class Critic:
         self.km, self.cfg, self.lanes, self.s_exit, self.s_goal = kmap, cfg, lanes, s_exit, s_goal
         self.wheels = np.array(list(cfg["vehicle"]["wheels_base_link_m"].values()))
         self.exempt = kmap.speed_exempt_s
-        self.rows, self.ego_hist, self.car_hist = [], deque(), {}
+        self.rows, self.ego_hist, self.car_hist, self.xy_hist = [], deque(), {}, {}
         self.touch0 = self.over0 = None
 
     def route(self, pts, i):
@@ -155,17 +159,29 @@ class Critic:
         self.touch0 = (self.touch0 if self.touch0 is not None else tau) if touch else None
         self.over0 = (self.over0 if self.over0 is not None else tau) if over else None
         vec += [tau - self.touch0 if touch else 0.0, tau - self.over0 if over else 0.0]
-        self.rows.append((tau, vec))
+        rel = []
+        for o in cars:
+            hist = self.xy_hist.setdefault(o[0], deque())
+            hist.append((tau, o[2], o[3]))
+            while hist[0][0] < tau - DIFF_S:
+                hist.popleft()
+            t0, x0, y0 = hist[0]
+            vx, vy = ((o[2] - x0) / (tau - t0), (o[3] - y0) / (tau - t0)) if tau - t0 > 0.05 else (c * v, sn * v)
+            dx, dy, rvx, rvy = o[2] - centre[0], o[3] - centre[1], vx - c * v, vy - sn * v
+            rel.append((math.hypot(dx, dy), [c * dx + sn * dy, -sn * dx + c * dy, c * rvx + sn * rvy, -sn * rvx + c * rvy]))
+        rel = [q for _, q in sorted(rel, key=lambda r: r[0])[:NEAR_K]]
+        extra = sum(rel + [[GAP0, 0.0, 0.0, 0.0]] * (NEAR_K - len(rel)), [])
+        self.rows.append((tau, vec, extra))
 
     def at(self, t_dec, prev):
         """vectors (lists, FIELDS order) at decision times (simulator s): the newest 20 Hz sample at or before each, +
         prev [(a, kappa)] per decision."""
-        ts = np.array([t for t, _ in self.rows])
+        ts = np.array([t for t, _, _ in self.rows])
         out = []
         for t, (pa, pk) in zip(t_dec, prev):
             j = max(int(np.searchsorted(ts, t, side="right")) - 1, 0)
-            out.append([round(float(x), 4) for x in np.nan_to_num(self.rows[j][1] + [pa, pk], nan=0.0, posinf=TTC0, neginf=-TTC0)])
+            out.append([round(float(x), 4) for x in np.nan_to_num(self.rows[j][1] + [pa, pk] + self.rows[j][2], nan=0.0, posinf=TTC0, neginf=-TTC0)])
         return out
 
 
-assert len(FIELDS) == 34, len(FIELDS)
+assert len(FIELDS) == 34 + 4 * NEAR_K, len(FIELDS)

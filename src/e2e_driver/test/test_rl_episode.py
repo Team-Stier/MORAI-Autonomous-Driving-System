@@ -88,7 +88,8 @@ def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S):
     json.dump(dict(version=3), open(os.path.join(out, "latest.json"), "w"))
     a = argparse.Namespace(name="t", start_cp=9, end_cp=12, past_m=100.0, seed=0, limit_s=limit_s, v_ref=80 / 3.6,
                            fail_s=100.0, weather=None, scorer=scorer, out=out, direct=True, loc_restart="true",
-                           world=1, dump_dir=dump, objinfo_port=0, lora_latest=os.path.join(out, "latest.json"))
+                           world=1, dump_dir=dump, objinfo_port=0, lora_latest=os.path.join(out, "latest.json"),
+                           sync=None, red_cap=None, returns=False, return_hook=None)
     wall, order = Wall(), []
     wall.t = time.time()                                  # dump mtimes are real: keep the fake wall clock near them
 
@@ -150,6 +151,10 @@ def test_slow_exit():
     assert abs(o[F["own_front_ttc"]] - gap / 5) < 0.3 and o[F["own_rear_gap"]] == rl_critic.GAP0 and o[F["in_exempt"]] == 1, o
     assert abs(o[F["lane_offset"]]) < 1.0 and abs(o[F["heading_err"]]) < 0.1 and 2.5 < o[F["lane_width"]] < 4.5, o
     assert recs[1]["critic_obs"][F["prev_a"]] > 0 and recs[0]["critic_obs"][F["prev_a"]] == 0, "previous (a, kappa)"
+    d = s_car - s_ego - rl_critic.EGO_CENTRE                 # nearest car in the Ego frame: centre to centre (straight
+    assert abs(math.hypot(o[F["near0_dx"]], o[F["near0_dy"]]) - d) < 1.0 and o[F["near0_dx"]] > 0.9 * d, o   # line, the road bends)
+    assert abs(o[F["near0_dvx"]] + 5) < 0.3, o              # 5 m/s slower
+    assert o[F["near1_dx"]] == rl_critic.GAP0 and o[F["near1_dvx"]] == 0, o
     print("slow", ep["t_sim"], round(expect, 1), {k: ep[k] for k in ("r", "r_time", "r_shape", "r_terminal")},
           dict(zip(rl_critic.FIELDS, o)))
 
