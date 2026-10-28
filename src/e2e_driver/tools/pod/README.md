@@ -357,10 +357,14 @@ Alpamayo-Cosmos `RL_PLAN.md` 3.1의 actor 한 대: MORAI 리눅스 3대, ROS 폐
 
 ## 라벨 (`dagger_label.py`, 에피소드마다 `epK/dagger_labels.npz`)
 - 형식(러너와 약속): `step` int32 (N,) = steps.jsonl 줄 번호, `ak` float32 (N,64,2) a m/s²·κ 1/m(0.1 s), `valid` bool (N,64), `source` int8 (N,) 0 계획기 / 1 공식 차로.
-  - 선택 필드: `signal` int8(t0에 따르는 신호, 0 없음·모름 / 1 적 / 2 황 / 3 녹), `stop_d` float32(앞축에서 다음 판정 정지선까지, m), `intervened` bool(출발 개입 중).
+  - 선택 필드: `signal` int8(t0에 따르는 신호, 0 없음·모름 / 1 적 / 2 황 / 3 녹), `stop_d` float32(앞축에서 다음 판정 정지선까지, m), `intervened` bool(출발 개입 중), `hidden_n` int16(아래 가시성 필터로 뺀 120 m 안의 움직이는 물체 수).
   - `valid=False`: 굴린 라벨이 없을 때, 그리고 채점기(`tools/scorer/label_check.py`)가 fail이나 unrecoverable로 판정할 때. 판정과 이유는 `dagger_debug.npz`에 있다.
   - 파일은 임시 이름으로 쓴 뒤 바꾼다(러너는 생긴 파일만 읽는다).
 - **미래 정보 없음 (사용자 10/28):** t0의 계획, 신호, 물체(등속 예측)만 쓴다. 기록된 이후 계획이나 신호로 다시 계획하지 않는다.
+- **동적 장애물 가시성 (사용자 10/28 "미래누출 방지 필터는 동적에만"):** yield·AEB에는 정지 물체 전부와, 움직이는 물체(0.3 m/s 이상) 가운데 t0에 모델이 볼 수 있던 것만 넣는다.
+  - 판정은 채점기 `visible()`(`tools/scorer/label_check.py`)이고, 기준과 범위가 채점기 `hidden_at_t0`와 같다. LiDAR BEV(뒤 20, 앞 60, 옆 ±20 m) 안이면서 차량이나 2 m 이상 물체에 가리지 않아야 보인다.
+  - 가려진 보행자는 보이는 판단부터 라벨이 반응한다. 계획기 물체(고주로 차량, 정적 장애물)와 채점기 입력은 거르지 않는다.
+  - 라이브 쉐도도 `shadow_objects.py`가 같은 기준으로 yield·AEB 노드 입력을 거른다(채점기 함수를 소스에서 읽어 ROS python에서 쓴다. 같은 답인지는 `test/shadow_objects_check.py`).
 - 경로:
   - 기본은 계획기 경로다(source 0). 단, 0.5 s 안의 계획이 차에서 5 m·0.5 rad 안에서 시작해야 한다(path_planner의 `max_initial_*`와 같다).
   - 계획이 없거나 그 범위를 벗어나면 공식 차로 중심선(`assets/route.json`)을 쓴다(source 1).

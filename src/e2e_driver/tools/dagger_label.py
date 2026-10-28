@@ -12,6 +12,11 @@ Per decision (t_wall, t_sim from steps.jsonl; the shadow's records by host wall 
     and the car is within LANE_D_M of the official route lane: source 0. Otherwise source 1, the official route lane
     centreline (assets/route.json, ft_synth_hist.py's projection) from the car's projection on, with the plan's point
     speeds by distance ahead (no plan within NO_PLAN_S: no label). A plan shorter than the drive goes on along the lane.
+  - yield/AEB objects: the standing GT objects and the moving ones (>= the checker's static_mps) the model could see at
+    t0 (label_check.visible, the label checker's hidden_at_t0 criterion and scope, as shadow_objects.py gives the
+    shadow's yield/AEB nodes; user 10/28: labels braked before a pedestrian was in view, "only on the dynamic ones");
+    the planners' (the bypass test below) and the checker's are all of them (the checker judges a run into a hidden
+    one unavoidable)
   - rollout, 0.05 s steps for 6.4 s from the car's GT pose (shadow GT Ego status, the planners' frame), speed (rows,
     the GT the scorer reads) and steering (competition status): control's pp core as in control/cores/pp.hpp with
     pp.yaml (lookahead clamp(0.6 v, 2, 15) m, wheelbase 3.0, steering rate 1.047 rad/s, PI speed loop kp 1.2 ki 0.25
@@ -23,7 +28,8 @@ Per decision (t_wall, t_sim from steps.jsonl; the shadow's records by host wall 
 Out per episode (the runner's contract, do not change): EP_DIR/dagger_labels.npz step int32 (N,) = steps.jsonl line,
 ak float32 (N, 64, 2) a m/s^2 and kappa 1/m at 0.1 s, valid bool (N, 64), source int8 (N,) 0 planner / 1 official lane;
 optional: signal int8 (N,) t0 light for the next judged stop line (0 none/unknown, 1 red, 2 yellow, 3 green), stop_d
-float32 (N,) front axle to that line along the route (m), intervened bool (N,) inside a takeover.py start intervention.
+float32 (N,) front axle to that line along the route (m), intervened bool (N,) inside a takeover.py start intervention,
+hidden_n int16 (N,) moving GT objects within OBJ_R_M left out as not visible at t0.
 valid is False where the label checker (tools/scorer/label_check.py) says fail or unrecoverable, and where no label
 could be rolled out. No future information: the plan, light and objects of t0 only (user 10/28).
 Debug: EP_DIR/dagger_debug.npz (rollout xy, v, flags, reasons) for dagger_eval.py.
@@ -399,7 +405,7 @@ def one(j):
     c = _C; steps, G, rec, lane, gt = c["steps"], c["G"], c["rec"], c["lane"], c["gt"]
     tw, ts = c["tw"][j], c["ts"][j]
     nan9, f5 = np.full(9, np.nan), np.zeros(5, bool)
-    none = dict(verdict="none", valid=False, reasons="", tags="", signal=0, stop_d=math.inf, mode="")
+    none = dict(verdict="none", valid=False, reasons="", tags="", signal=0, stop_d=math.inf, mode="", hidden_n=0)
     if not c["ok_hist"][j]:
         return REASONS.index("no_history"), 0, False, None, nan9, f5, none
     e = rec.ego_at(tw)
@@ -421,9 +427,15 @@ def one(j):
         he = wrap(math.atan2(P[i1, 1] - P[i_0, 1], P[i1, 0] - P[i_0, 0]) - yaw) if i1 > i_0 else 0.0   # over ~2 m
         k30 = min(i0 + int(np.searchsorted(cs, 30.0)), len(P) - 1)
         dend = lane.project(P[k30, 0], P[k30, 1], s0 + 30.0)[1]
-    objs = rec.objects(tw)
+    chk = c["chk"]
+    from label_check import visible
+    objs_all = rec.objects(tw)
+    keep = visible(x, y, yaw, objs_all, chk.lc["visibility"]) | np.array(
+        [math.hypot(o[5], o[6]) < chk.lc["objects"]["static_mps"] for o in objs_all], bool)
+    objs = [o for o, k_ in zip(objs_all, keep) if k_]          # yield/AEB: moving ones only once the model could see them
+    hidden_n = sum(1 for o, k_ in zip(objs_all, keep) if not k_ and math.hypot(o[2] - x, o[3] - y) < OBJ_R_M)
     bypass = any(math.hypot(o[5], o[6]) < 0.3 and abs(o[2] - x) + abs(o[3] - y) < 120.0 and
-                 -20.0 < (q := lane.project(o[2], o[3], s0 + 20.0, 60.0))[0] - s0 < 80.0 and abs(q[1]) < BYPASS_D_M for o in objs)
+                 -20.0 < (q := lane.project(o[2], o[3], s0 + 20.0, 60.0))[0] - s0 < 80.0 and abs(q[1]) < BYPASS_D_M for o in objs_all)
     sec = rec.last("sec", tw); sec = sec[2] if sec else 0
     # the highway (its route s span; the section id turns 13 before its end): frenet_path picks the lane there and the
     # expert drove up to 6 m off route.json's lane
@@ -449,7 +461,6 @@ def one(j):
         vp = np.interp(np.arange(len(path)) * 0.5, cs, Pv[i0:])
     path, vp = extend(path, vp, lane, s0, v, sec)
     # the t0 light and the judged stop line ahead (scorer stop lines, front axle; LabelChecker's own reading)
-    chk = c["chk"]
     ego = dict(x=x, y=y, yaw=yaw, v=v, s=steps[j].get("s"))
     sig = chk.signal_at(rec.rows.get("tlgt", []), tw, ego)
     sh = chk._s_hint(ego)
@@ -479,9 +490,9 @@ def one(j):
             stop_station = 0.0                        # stopping for a line this map reading does not see: keep it
         speed = Speeds(path, v_t0, cap, stop_station)
     out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, speed)
-    r = chk.check(ego, out, signal=sig, objects=objs, steer=steer)
+    r = chk.check(ego, out, signal=sig, objects=objs_all, steer=steer)
     extra = dict(verdict=r["verdict"], valid=bool(r["valid"]), reasons=" ".join(r["reasons"]), tags=" ".join(r["tags"]),
-                 signal=SIGNAL_CODE.get(sig, 0), stop_d=stop_d, mode=mode)
+                 signal=SIGNAL_CODE.get(sig, 0), stop_d=stop_d, mode=mode, hidden_n=hidden_n)
     return REASONS.index(why), src, True, out, dbg, np.array([fl["yield0"], fl["aeb0"], fl["yield_on"], fl["aeb_on"], fl["sf_on"]]), extra
 
 
@@ -542,7 +553,7 @@ def label_episode(ep, rec_dir, lane, gt, conv, chk, actual=False, jobs=1):
     tmp = ep / "dagger_labels.tmp.npz"                # the runner reads it once it appears: write, then rename
     np.savez(tmp, step=np.arange(N, dtype=np.int32), ak=ak, valid=np.repeat(valid[:, None], N_FUT, 1), source=source,
              signal=np.array([e["signal"] for e in ex], np.int8), stop_d=np.array([e["stop_d"] for e in ex], np.float32),
-             intervened=iv)
+             intervened=iv, hidden_n=np.array([e["hidden_n"] for e in ex], np.int16))
     tmp.replace(ep / "dagger_labels.npz")
     extra = {}
     if actual and ok_act.any():                       # the drive that really happened (expert-drive accuracy runs)
@@ -557,7 +568,8 @@ def label_episode(ep, rec_dir, lane, gt, conv, chk, actual=False, jobs=1):
     return dict(episode=str(ep), n=N, valid=int(valid.sum()), source1=int((source == 1).sum()),
                 reasons={r: int((reason == i).sum()) for i, r in enumerate(REASONS) if (reason == i).any()},
                 verdicts=dict(collections.Counter(e["verdict"] for e in ex)), interventions=n_iv, intervened_rows=int(iv.sum()),
-                modes=dict(collections.Counter(e["mode"] for e in ex if e["mode"])))
+                modes=dict(collections.Counter(e["mode"] for e in ex if e["mode"])),
+                hidden_rows=int(sum(e["hidden_n"] > 0 for e in ex)))
 
 
 def selftest():
