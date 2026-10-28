@@ -63,8 +63,11 @@ RB_LEAD_S, RB_GO_MPS, RB_STAMP_S, RB_REUSE_S = 0.8, 0.5, 0.15, 1.0
 # band counted as ring traffic; label/vehicle boxes grow by RING_PAD_M. roundabout_merge's own predictions let its
 # schedule cut in (10/28 run d expert: struck at s 889.1 by a ring car 11 m away 2 s before; 40 % of its ring labels
 # met a ring car within 6.4 s): before the car enters the band, a label that meets a ring car moved along the circle at
-# its t0 speed yields: the schedule capped to stop RING_STOP_M before the band at RING_DEC_MPS2, if that keeps out of
-# the band and of the ring cars
+# its t0 speed yields: the schedule capped to stop RING_STOP_M before the band at RING_DEC_MPS2, else (too close for
+# that) the planner's stop request, the first that keeps clear of the ring cars. The label checker moves objects in
+# straight lines, which takes a ring car out of the ring into the entry (10/28 run f: 13 go labels behind a passing car
+# failed): it gets no moving ring car in section 9, and a label that meets one there (on the circle) is not valid,
+# except one already in the band that a car comes up to from behind (ring cars brake for a car in their lane)
 RING_C, RING_R, RING_BAND_M, RING_PAD_M, RING_STOP_M, RING_DEC_MPS2 = (-102.36, 343.88), 18.4, 2.5, 0.5, 5.0, 2.5   # 5 m: stop_line_state x_m (pp overshoots ~3 m)
 EGO_BOX = (1.55, 2.35, 0.95)                          # base_link -> box centre, half length, half width (body_m [-0.8, 3.9])
 PLAN_AGE_S, NO_PLAN_S, PLAN_D0_M, PLAN_HE_RAD, LANE_D_M = 0.5, 2.0, 5.0, 0.5, 4.5
@@ -356,15 +359,21 @@ def _overlap(A, B):
     return True
 
 
-def ring_meet(traj, objs):
-    """first 0.1 s step (or None) where traj (64, 4: x y yaw v) meets a ring car moved along the circle at its t0 speed."""
+def ring_cars(objs):
+    """moving vehicles in the ring's band."""
+    return [o for o in objs if o[1] == "vehicle" and math.hypot(o[5], o[6]) > 0.3
+            and abs(math.hypot(o[2] - RING_C[0], o[3] - RING_C[1]) - RING_R) < RING_BAND_M]
+
+
+def ring_meet(traj, objs, behind=True):
+    """first 0.1 s step (or None) where traj (64, 4: x y yaw v) meets a ring car moved along the circle at its t0 speed;
+    behind=False: not counting a car that comes up from behind (more than 1 m back of the car's box centre)."""
     cx, cy = RING_C
     ring = []
-    for o in objs:
+    for o in ring_cars(objs):
         r = math.hypot(o[2] - cx, o[3] - cy)
-        if o[1] == "vehicle" and abs(r - RING_R) < RING_BAND_M and math.hypot(o[5], o[6]) > 0.3:
-            w = ((o[2] - cx) * o[6] - (o[3] - cy) * o[5]) / (r * r)      # angular speed, + counter-clockwise
-            ring.append((math.atan2(o[3] - cy, o[2] - cx), w, r, o[7] / 2 + RING_PAD_M, o[8] / 2 + RING_PAD_M))
+        w = ((o[2] - cx) * o[6] - (o[3] - cy) * o[5]) / (r * r)          # angular speed, + counter-clockwise
+        ring.append((math.atan2(o[3] - cy, o[2] - cx), w, r, o[7] / 2 + RING_PAD_M, o[8] / 2 + RING_PAD_M))
     if not ring:
         return None
     for k, (x, y, h, _) in enumerate(traj):
@@ -376,7 +385,8 @@ def ring_meet(traj, objs):
             if math.hypot(ox - bx, oy - by) > 8.0:
                 continue
             A = _corners(bx, by, h, EGO_BOX[1] + RING_PAD_M, EGO_BOX[2] + RING_PAD_M) if A is None else A
-            if _overlap(A, _corners(ox, oy, a + math.copysign(math.pi / 2, w), hl, hw)):
+            if _overlap(A, _corners(ox, oy, a + math.copysign(math.pi / 2, w), hl, hw)) and \
+                    (behind or (ox - bx) * math.cos(h) + (oy - by) * math.sin(h) > -1.0):
                 return k
     return None
 
@@ -593,12 +603,19 @@ def one(j):
         else:
             mode = "plan"                             # no merge (the ring's objects): the planner's stop request
     out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, speed)
-    if mode.startswith("rb_") and outside_band(out[:1]) and ring_meet(out, objs) is not None:
+    entering = outside_band(out[:1])
+    meet = sec in ROUNDABOUT and ring_meet(out, objs, behind=entering) is not None
+    if mode.startswith("rb_") and meet and entering:
         speed.k = 0                                   # the same schedule from t0, capped to yield at the band
-        stop, fs = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, yield_at_band(path, speed))
-        if outside_band(stop) and ring_meet(stop, objs) is None:
-            out, fl, mode = stop, fs, "rb_yield"
-    r = chk.check(ego, out, signal=sig, objects=objs, steer=steer)
+        for name, sp in (("rb_yield", yield_at_band(path, speed)), ("rb_stop", lambda n: 0.0)):
+            stop, fs = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, sp)
+            if ring_meet(stop, objs) is None:
+                out, fl, mode, meet = stop, fs, name, False
+                break
+    ring = set(map(id, ring_cars(objs))) if sec in ROUNDABOUT else set()
+    r = chk.check(ego, out, signal=sig, objects=[o for o in objs if id(o) not in ring], steer=steer)
+    if meet:                                          # the checker's verdict without ring cars; ours with them
+        r = dict(r, valid=False, verdict="fail", reasons=list(r["reasons"]) + ["ring:meet"])
     extra = dict(verdict=r["verdict"], valid=bool(r["valid"]), reasons=" ".join(r["reasons"]), tags=" ".join(r["tags"]),
                  signal=SIGNAL_CODE.get(sig, 0), stop_d=stop_d, mode=mode)
     return REASONS.index(why), src, True, out, dbg, np.array([fl["yield0"], fl["aeb0"], fl["yield_on"], fl["aeb_on"], fl["sf_on"]]), extra
