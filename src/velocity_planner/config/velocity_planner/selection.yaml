@@ -25,7 +25,7 @@ cutoff:
     "2": integrated_stop_pass.hpp
     "3": integrated_stop_straight.hpp
     "4": integrated_stop_straight.hpp
-    "5": integrated_stop_dynamic.hpp
+    "5": integrated_stop_straight.hpp
     "6": integrated_stop_pass.hpp
     "7": integrated_stop_left.hpp
     "8": stop_line_pass_through.hpp
