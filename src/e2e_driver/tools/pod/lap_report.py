@@ -62,6 +62,10 @@ def report(d, k):
              npcs=dict(roundabout=v.get("roundabout_npcs"), highway=v.get("highway_npcs"), sizes=len(v.get("vehicle_sizes", []))) if v else None)
     if (d.parent / "ENV_INVALID").exists():           # eval3.sh's env guard tripped: kept, never aggregated
         r["env"], r["env_reason"] = "invalid", (d.parent / "ENV_INVALID").read_text().strip()
+    elif clock_rho is not None and r["rho_end"] and abs(clock_rho - r["rho_end"]) > float(os.environ.get("GUARD_CLOCK_DRHO", 0.15)):
+        # SIM_CLOCK's tau ran at another rate than the world (its estimate settling after a stack start): the stack's
+        # timing was off for this lap
+        r["env"], r["env_reason"] = "invalid", f"clock rho {clock_rho} vs world rho {r['rho_end']}"
     json.dump(r, open(d / f"lap_{k + 1:02d}.json", "w"), ensure_ascii=False, indent=1)
     f = lambda x, n=0: "-" if x is None else f"{x:.{n}f}"
     span = f" CP{r['start_cp']}→{('CP' + str(r['end_cp'])) if r['end_cp'] else 'END'}" if r["start_cp"] or r["end_cp"] else ""
