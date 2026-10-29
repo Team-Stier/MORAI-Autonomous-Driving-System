@@ -1,0 +1,4 @@
+stage: roi
+inputs: [cloud, competition, tf]
+validator: road_roi_input.hpp
+allowed_issues: {tf: [Stale]}
