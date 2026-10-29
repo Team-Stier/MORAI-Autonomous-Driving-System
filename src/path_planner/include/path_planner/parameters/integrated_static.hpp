@@ -69,6 +69,9 @@ inline IntegratedStaticTrajectoryParameters loadIntegratedStaticTrajectoryParame
       !std::isfinite(p.borrow_before_m) || p.borrow_before_m<0 || p.borrow_before_m>50 ||
       !std::isfinite(p.borrow_after_m) || p.borrow_after_m<0 || p.borrow_after_m>50)
     throw std::invalid_argument("invalid integrated lane borrow window");
+  if(r.has("integrated_start_snap_m"))p.start_snap_m=r.number("integrated_start_snap_m");
+  if(!std::isfinite(p.start_snap_m) || p.start_snap_m<0 || p.start_snap_m>.5)
+    throw std::invalid_argument("invalid integrated start snap");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
   if(r.has("integrated_recovery_lateral_acceleration_mps2"))p.recovery_lateral_acceleration_mps2=r.number("integrated_recovery_lateral_acceleration_mps2");
