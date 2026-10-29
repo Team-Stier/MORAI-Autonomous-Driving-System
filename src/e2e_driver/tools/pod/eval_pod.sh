@@ -173,8 +173,8 @@ print(round(b, 3), m)'")
 log "CPU: $cpu, bench ${bench:-?} s (max ${CPU_BENCH_MAX_S:-0.80})"
 if [[ -z $bench || $cpu == *EPYC\ 7* || $cpu == *Xeon* ]] || python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2]) else 1)" "$bench" "${CPU_BENCH_MAX_S:-0.80}"; then
   podlog "reject $POD ($NAME): CPU $cpu bench ${bench:-?} s"
-  (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) || { log "CPU gate: $((CPU_RETRY)) pods rejected, giving up"; exit 1; }
-  bye; log "CPU gate: pod rejected, creating another"
+  (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) || { log "CPU gate: $((CPU_RETRY)) pods rejected, giving up"; KEEP=0 bye; exit 1; }
+  KEEP=0 bye; log "CPU gate: pod rejected (deleted even with KEEP=1), creating another"
   CPU_RETRY=$(( ${CPU_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"
 fi
 if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
