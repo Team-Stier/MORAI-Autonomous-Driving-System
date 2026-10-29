@@ -28,6 +28,7 @@ DRIVER=${DRIVER:-stack}; export DRIVER; [[ $DRIVER == stack ]] && { SYNC=0; expo
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@"); (( ${#SEEDS[@]} )) || SEEDS=(7 8 9)
 N=${#SEEDS[@]}; OUT=$V/results/$NAME; FR=/root/frames/$NAME; SCORER=$V/Alpamayo-Cosmos/tools/scorer; PY=$V/venv-rl/bin/python
+for f in /root/frames/*/; do [[ $f == "$FR/" ]] || rm -rf "$f"; done   # earlier runs' frames (their videos are made)
 mkdir -p "$OUT" "$FR" /root/actor
 stamp() { echo "$(date +%s.%N | cut -c1-14) $(date +%T) $*" | tee -a "$OUT/timeline.txt"; }
 wdir() { [[ $1 == 1 ]] && echo /root/Workspaces/scratches/morai || echo /root/inst/$1/morai; }

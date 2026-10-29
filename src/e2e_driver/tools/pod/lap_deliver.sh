@@ -10,6 +10,19 @@ O=$OUT/w$n; FR=/root/frames/$NAME; PY=$V/venv-rl/bin/python; D=$OUT/lap_$K; mkdi
 b2env() { eval "$(tr '\0' '\n' < /proc/1/environ | grep -E '^B2_APPLICATION_KEY(_ID)?=' | sed 's/^/export /')"; }
 $PY $E2E/tools/lap_video.py make "$FR/w$n" "$O/eval_map/lap$k3.clock.json" "$FR/w${n}_lap$K.mp4" 30 > "$D/video.log" 2>&1 &&
   bash "$HERE/phone_video.sh" "$FR/w${n}_lap$K.mp4" "$D/${NAME}_lap$K.mp4" 18 20000000 >> "$D/video.log" 2>&1
+# container disk: the lap's frames go once its video is made (15 fps JPEGs: ~10 GB per hour of driving filled a 100 GB
+# pod in a few hours, 10/29); later laps' frames lie after this lap's end
+$PY - "$FR/w$n" "$O/eval_map/lap$k3.clock.json" <<'PY2' >> "$D/video.log" 2>&1
+import json, sys
+from pathlib import Path
+d, end = Path(sys.argv[1]), json.load(open(sys.argv[2]))[-1][0]
+n = 0
+for l in open(d / "index.txt"):
+    name, t = l.split()
+    if float(t) <= end and (d / name).exists():
+        (d / name).unlink(); n += 1
+print(f"frames removed up to the lap end: {n}")
+PY2
 line=$($PY "$HERE/lap_report.py" "$O" "$k" 2> "$D/report.err")
 [[ -s $D/${NAME}_lap$K.mp4 ]] || line="$line | 영상 없음"
 echo "$line" > "$D/report.txt"

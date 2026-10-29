@@ -17,6 +17,45 @@ from pathlib import Path
 import numpy as np
 
 
+RED = {2, 6, 8, 13}                  # interfaces/TrafficLight: RED, RED_YELLOW, RED_LEFT, RED_YELLOW_LEFT
+GO = {4, 5, 9, 10, 11, 15}           # GREEN, LEFT, YELLOW_GREEN, YELLOW_LEFT, GREEN_LEFT, YELLOW_GREEN_LEFT
+
+
+def signal_detection(d, c, scorer_dir):
+    """the first RED and the first GO the stack's /traffic_light reported on each judged stop line's approach (diag_wN.jsonl
+    within the lap's wall span, ego route progress 120 m before to 5 m past the line): distance to the line in m, per stop
+    line id (the scorer's map); None without a detection there or without diag/scorer."""
+    f = d / f"diag_{d.name}.jsonl"
+    if not f.exists() or not Path(scorer_dir).exists():
+        return None
+    sys.path.insert(0, str(scorer_dir))
+    from scorer import KMap, load_config
+    km = KMap.from_files(load_config())
+    w0, w1 = c[0, 0], c[-1, 0]
+    rows = [r for r in map(json.loads, open(f)) if "ego" in r and "tl" in r and w0 <= r["wall"] <= w1]
+    if not rows:
+        return None
+    xy = np.array([r["ego"][:2] for r in rows])
+    out = {}
+    for sid, s_stop in km.route_stops.items():
+        win = np.flatnonzero((km.s > s_stop - 150) & (km.s < s_stop + 20))
+        if not len(win):
+            continue
+        pts = km.path[win]
+        dd = np.hypot(xy[:, None, 0] - pts[None, :, 0], xy[:, None, 1] - pts[None, :, 1])
+        j = dd.argmin(1)
+        near = dd[np.arange(len(rows)), j] < 6.0
+        s_ego = km.s[win][j]
+        appr = near & (s_ego > s_stop - 120) & (s_ego < s_stop + 5)
+        e = {}
+        for name, states in (("red_m", RED), ("go_m", GO)):
+            hit = [i for i in np.flatnonzero(appr) if rows[i]["tl"] in states]
+            e[name] = round(float(s_stop - s_ego[hit[0]]), 1) if hit else None
+        if appr.any():
+            out[sid] = e
+    return out
+
+
 def report(d, k):
     d = Path(d)
     lap = next(x for x in map(json.loads, open(d / "eval_map/laps.jsonl")) if x["lap"] == k)
@@ -75,6 +114,10 @@ def report(d, k):
             r["env"], r["env_reason"] = "invalid", f"stack clock {stack_rate} vs world {world_rate} sim s per wall s"
         elif rel > 0.15:
             r["clock_flag"] = f"stack clock {stack_rate} vs world {world_rate}"
+    try:                                              # signal workers' metric; never blocks the report
+        r["signal_detect"] = signal_detection(d, c, os.environ.get("SCORER", "/workspace/Alpamayo-Cosmos/tools/scorer"))
+    except Exception as e:
+        r["signal_detect"] = f"error: {e!r}"[:200]
     json.dump(r, open(d / f"lap_{k + 1:02d}.json", "w"), ensure_ascii=False, indent=1)
     f = lambda x, n=0: "-" if x is None else f"{x:.{n}f}"
     span = f" CP{r['start_cp']}→{('CP' + str(r['end_cp'])) if r['end_cp'] else 'END'}" if r["start_cp"] or r["end_cp"] else ""
