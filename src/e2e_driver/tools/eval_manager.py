@@ -502,11 +502,18 @@ class Manager:
         j0 = self.a.start_cp                           # --start-cp J: the lap starts at checkpoint J (a section run)
         if j0:
             lap["start_cp"], lap["start_how"] = j0, self.spawn(j0)
-            for _ in range(50):                           # the transform lands before play, so the move test starts there
-                e0 = self.ego()
-                if math.hypot(e0["x"] - self.cps[j0, 0], e0["y"] - self.cps[j0, 1]) < 3.0:
+            for t in range(4):   # position, then heading: after a lap that ended turned around in the tunnel the spawn
+                for _ in range(50):   # kept the old yaw (-3.10 instead of +0.07 rad at CP9, worker-highway 10/29)
+                    e0 = self.ego()       # the transform lands before play, so the move test starts there
+                    if math.hypot(e0["x"] - self.cps[j0, 0], e0["y"] - self.cps[j0, 1]) < 3.0:
+                        break
+                    time.sleep(0.1)
+                dyaw = (e0["yaw"] - math.radians(self.cps[j0, 3]) + math.pi) % (2 * math.pi) - math.pi
+                if abs(dyaw) < 0.5 or t == 3:
                     break
-                time.sleep(0.1)
+                print(f"spawn CP{j0}: yaw off by {dyaw:.2f} rad, spawning again", flush=True)
+                time.sleep(0.5)
+                lap["start_how"] = f"{self.spawn(j0)} retry {t + 1}"
         if self.a.end_cp:
             lap["end_cp"] = self.a.end_cp
         self.weather(lap, seed, j0, 0.0)
