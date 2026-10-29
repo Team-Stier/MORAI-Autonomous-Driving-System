@@ -156,6 +156,7 @@ struct Parameters {
   double dynamic_zone_min_y_m = -100;
   double dynamic_zone_max_y_m = 85;
   double dynamic_zone_speed_mps = 40.0/3.6;
+  double tunnel_speed_mps = 25.0/3.6;
   double dynamic_zone_approach_m = 30;
 
   LateralParameters lateral;
@@ -1122,6 +1123,7 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
 }}  // namespace control::autoware_ai_mpc
 
 #include <interfaces/Path.h>
+#include <interfaces/LocalizationStatus.h>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <nav_msgs/Odometry.h>
 #include <morai_msgs/CtrlCmd.h>
@@ -1204,7 +1206,8 @@ class MoraiMpc {
                   parameters_.steering_prediction.time_constant_sec) {}
 
   morai_msgs::CtrlCmd process(const interfaces::Path& path, const nav_msgs::Odometry& ego,
-                             const interfaces::CompetitionVehicleStatus& status) {
+                             const interfaces::CompetitionVehicleStatus& status,
+                             const interfaces::LocalizationStatus& localization_status) {
     ROS_INFO_ONCE("[control] executing morai_mpc.hpp");
     const auto stamp = path.header.stamp.toNSec();
     const double dt = has_previous_stamp_ ?
@@ -1252,13 +1255,17 @@ class MoraiMpc {
         position.x >= parameters_.dynamic_zone_min_x_m && position.x <= parameters_.dynamic_zone_max_x_m &&
         position.y >= parameters_.dynamic_zone_min_y_m-parameters_.dynamic_zone_approach_m &&
         position.y <= parameters_.dynamic_zone_max_y_m;
-    const double target_speed = approach ? std::min(nearest->velocity, parameters_.dynamic_zone_speed_mps) : nearest->velocity;
+    const double speed_ceiling = std::min(
+        localization_status.mode == interfaces::LocalizationStatus::IMU_LIDAR ?
+            parameters_.tunnel_speed_mps : std::numeric_limits<double>::infinity(),
+        approach ? parameters_.dynamic_zone_speed_mps : std::numeric_limits<double>::infinity());
+    const double target_speed = std::min(nearest->velocity, speed_ceiling);
     std::vector<double> stations{0},speeds{target_speed};double distance=0;
     for(auto point=nearest+1;point!=path.points.end();++point) {
       const auto& a=(point-1)->pose.pose.position;const auto& b=point->pose.pose.position;
       distance+=std::hypot(b.x-a.x,b.y-a.y);
       if(distance<=stations.back()+1e-6)continue;
-      stations.push_back(distance);speeds.push_back(approach?std::min(point->velocity,parameters_.dynamic_zone_speed_mps):point->velocity);
+      stations.push_back(distance);speeds.push_back(std::min(point->velocity, speed_ceiling));
     }
     const auto pedals = longitudinal_.update(target_speed, status.velocity_x_mps, dt,stations,speeds);
     const bool emergency = dynamic_zone && std::all_of(path.points.begin(), path.points.end(),

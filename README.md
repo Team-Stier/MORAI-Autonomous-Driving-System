@@ -270,6 +270,7 @@ flowchart TD
     i["/sensors/imu/data"]
     c["/vehicle/competition_status"]
     e["/localization/ego"]
+    ls["/localization/status"]
     l["/velodyne_points"]
     if["/image/front/compressed"]
     il["/image/left/compressed"]
@@ -329,6 +330,7 @@ flowchart TD
     C ---> ctrl ---> SF ---> ct ---> B
     ll ---> L
     c ---> L ---> e
+    L --> ls --> C
     sa ---> L
     g ---> L
     i ---> L
@@ -342,7 +344,7 @@ flowchart TD
 | MORAI-ROS_morai_msgs | 커밋 `45c6baf148f2327f4c9fefd48262f25bdfe4b567`에 고정하여 깃 서브모듈 링크. MORAI ROS 메시지 정의. |
 | MORAI-UDP-Bridge-Node | 커밋 `dbd2da34abbd13634304ad20803b17be13228007`(현장 점검에서 검증된 저장소)에 고정하여 깃 서브모듈 링크. MORAI UDP 패킷과 ROS 토픽 사이를 번역. 단순 번역 계층으로 독자적인 로직·판단으로 콘텐츠를 훼손·누락하지 않는다. 센서·차량 상태 수신 및 최종 제어 명령 송신. |
 | velodyne | 커밋 `29abd0e1361cb7f5eda451d2b51c35eeca45e0d5`에 고정하여 깃 서브모듈 링크. velodyne vlp16의 공식 드라이버. LiDAR 데이터를 `/velodyne_points`로 발행. |
-| Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 /localization/ego로 발행한다.         |
+| Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 `/localization/ego`와 실제 추정 모드 `/localization/status`를 발행한다.         |
 | LiDAR_Leveler_Node | 센서 장착 TF와 차체 roll·pitch로 점군을 수평화해 `base_link_level`의 `/velodyne_points/leveled` 발행. |
 | Object_Detector_Node | 수평화 점군을 클러스터링하고 TF로 map 변환한 뒤 bbox 피팅·추적해 `/objects` 발행. |
 | Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 YOLO 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
