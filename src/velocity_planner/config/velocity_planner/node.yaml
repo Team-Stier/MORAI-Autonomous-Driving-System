@@ -13,8 +13,8 @@ inputs:
     topic: /vehicle/competition_status
     frame: base_link
     numbers: [signed_velocity_mps]
-    stale_after_sec: 0.15
-    receive_timeout_sec: 0.15
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   light:
     type: interfaces/TrafficLight
     topic: /traffic_light
