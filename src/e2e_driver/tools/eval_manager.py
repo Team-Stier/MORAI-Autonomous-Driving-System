@@ -83,7 +83,8 @@ FINISH_M = 1.0          # route progress within this of the last waypoint = fini
 # User 10/28: returns at once, not after minutes. 60 s with red time excluded let a car stand 330 s before a light without
 # a return (r2stop lap 1, s 306): now 30 s of no progress, red-light and yield time excluded, and 90 s in all at most
 STUCK_S = 30.0
-WAIT_MAX_S = 90.0       # any stop, red light or yield included (red phases seen: 53-61 s at C1256W000016, 10/27)
+WAIT_MAX_S = 150.0      # any stop, yield included; not judged while the light ahead is red (90 s returned cars waiting
+                        # out 75-78 s reds at S5 4188 after a slow approach, static worker 10/29; red phases 53-78 s)
 YIELD_M, YIELD_LAT_M, YIELD_V = 20.0, 10.0, 0.5   # yield = an object moving > YIELD_V m/s up to YIELD_M ahead, YIELD_LAT_M aside
 CRASH_STUCK_S = 15.0    # "cannot go on after a collision"
 PROGRESS_M = 5.0        # route progress that resets the stuck timers: a car pushing a small box creeps ~0.1 m/s (10/26)
@@ -182,12 +183,15 @@ class Stuck:
         yld = self.yielding(tau, e, objs)
         if hit:
             self.crash = tau
+        red = bool(e["tl"] and e["color"] & 1 and not e["color"] & 16)
         if s > self.s + PROGRESS_M:
             self.s, self.t, self.t0 = s, tau, tau
-        elif (e["tl"] and e["color"] & 1 and not e["color"] & 16) or yld:
+        elif red or yld:
             self.t += dt              # red light or yield: does not count (resetting let a car that let greens pass stand 229 s)
         if self.crash > self.t - 1.0 and tau - self.t >= CRASH_STUCK_S:
             return "stuck_after_collision"
+        if red:                       # waiting at a red light is no stuck, however long the phase (WAIT_MAX_S after it)
+            return None
         return "stuck" if tau - self.t >= STUCK_S or tau - self.t0 >= WAIT_MAX_S else None
 
 
