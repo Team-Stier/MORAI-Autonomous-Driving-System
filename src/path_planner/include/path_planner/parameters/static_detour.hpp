@@ -191,6 +191,7 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   };
   box("detour_object_box_m",d.object_min_x_m,d.object_max_x_m,d.object_min_y_m,d.object_max_y_m);
   box("detour_active_box_m",d.active_min_x_m,d.active_max_x_m,d.active_min_y_m,d.active_max_y_m);
+  box("detour_clear_box_m",d.clear_min_x_m,d.clear_max_x_m,d.clear_min_y_m,d.clear_max_y_m);
   box("detour_approach_box_m",d.approach_min_x_m,d.approach_max_x_m,d.approach_min_y_m,d.approach_max_y_m);
   for(const double id:r.numbers("detour_drivable_lanelet_ids")) {
     if(!std::isfinite(id) || id!=std::floor(id))throw std::invalid_argument("invalid detour lanelet ID");
@@ -219,6 +220,7 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   }
   number("detour_unseen_sec",d.unseen_sec);
   number("detour_match_jump_m",d.match_jump_m);
+  number("detour_forget_range_m",d.forget_range_m);
   number("detour_clearance_m",d.clearance_m);
   number("detour_check_clearance_m",d.check_clearance_m);
   number("detour_in_lane_clearance_m",d.in_lane_clearance_m);
@@ -255,7 +257,7 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   number("detour_deceleration_mps2",d.deceleration_mps2);
   number("detour_timing_margin_m",d.timing_margin_m);
   number("detour_stop_buffer_m",d.stop_buffer_m);
-  for(const double value:{d.lookahead_m,d.stationary_speed_mps,d.unseen_sec,d.match_jump_m,d.clearance_m,d.check_clearance_m,
+  for(const double value:{d.lookahead_m,d.stationary_speed_mps,d.unseen_sec,d.match_jump_m,d.forget_range_m,d.clearance_m,d.check_clearance_m,
       d.face_depth_m,d.face_width_m,d.face_length_m,d.maximum_offset_m,d.maximum_curvature_inv_m,
       d.lateral_acceleration_mps2,d.maximum_speed_mps,d.minimum_speed_mps,d.blend_time_sec,d.minimum_blend_m,
       d.maximum_blend_m,d.sample_step_m,d.area_offset_m,d.keep_lane_offset_m,d.wheel_half_track_m,d.paint_contact_m,d.maximum_paint_contact_m,
