@@ -83,11 +83,15 @@ integrated_minimum_curve_speed_mps: 4.166666666666667
 # Keep the optimized curve close to the Lanelet reference.
 integrated_reference_piece_m: 7.5
 integrated_road_margin_m: 0.05
-# Pedestrian-sized bodies (at most 1.5 m footprint, at least 0.3 m tall) within 3 m beyond our side:
-# approach at most at the speed that stops at 2.5 m/s^2 short of them, pass at 5.5 m/s.
+# Pedestrian-shaped bodies (short side at most 1.0 m, long side at most 2.5 m, at least 0.3 m tall) within 3 m
+# beyond our side: approach at most at the speed that stops at 2.0 m/s^2 short of them, pass at 4.5 m/s.
+tunnel_vulnerable_width_m: 1.0
+tunnel_vulnerable_length_m: 2.5
 tunnel_vulnerable_min_height_m: 0.3
 tunnel_vulnerable_reach_m: 3.0
-tunnel_vulnerable_pass_speed_mps: 5.5
-tunnel_vulnerable_deceleration_mps2: 2.5
+tunnel_vulnerable_pass_speed_mps: 4.5
+tunnel_vulnerable_deceleration_mps2: 2.0
 # Plan around small bodies with at least a 0.6 m footprint.
 tunnel_small_body_min_extent_m: 0.6
+# Box fragments seen at 3.4 Hz carry 0.2-0.8 m/s of false motion: plan bodies slower than 0.9 m/s as standing still.
+tunnel_still_speed_mps: 0.9
