@@ -19,6 +19,11 @@ inline IntegratedStopStraightParameters loadIntegratedStopStraightParameters(con
  if(reader.has("blind_hold_max_sec"))p.blind_hold_max_sec=reader.number("blind_hold_max_sec");
  if(!std::isfinite(p.blind_hold_max_sec) || p.blind_hold_max_sec<0 || p.blind_hold_max_sec>100)
   throw std::invalid_argument("invalid blind_hold_max_sec");
+ if(reader.has("signal_line_ids"))
+  for(const double id:reader.numbers("signal_line_ids")){
+   if(!std::isfinite(id) || id<=0 || id!=std::floor(id))throw std::invalid_argument("invalid signal_line_ids");
+   p.signal_line_ids.push_back(static_cast<std::int64_t>(id));
+  }
  if(reader.has("yellow_stop_deceleration_mps2"))p.yellow_stop_deceleration_mps2=reader.number("yellow_stop_deceleration_mps2");
  if(reader.has("front_axle_m"))p.front_axle_m=reader.number("front_axle_m");
  if(reader.has("yellow_stop_margin_m"))p.yellow_stop_margin_m=reader.number("yellow_stop_margin_m");

@@ -173,3 +173,23 @@ TEST(IntegratedStopDynamic, YellowTooCloseForFrontAxlePasses) {
   core.process(approachFrom(41.0), light(interfaces::TrafficLight::YELLOW, 99.9), moving(7.1), {});
   EXPECT_FALSE(state.stopping);
 }
+
+TEST(IntegratedStopDynamic, UnlistedStopLineGetsNoSignalStop) {
+  velocity_planner::StopLineState state(stopLines());
+  auto parameters = blind();
+  parameters.signal_line_ids = {4188};
+  velocity_planner::IntegratedStopDynamic core(parameters, state);
+  const auto output = core.process(approach(), light(interfaces::TrafficLight::RED, 99.9), {}, {}).first;
+  EXPECT_FALSE(state.stopping);
+  EXPECT_DOUBLE_EQ(output.points[45].velocity, 11.1);
+}
+
+TEST(IntegratedStopDynamic, ListedStopLineKeepsSignalStop) {
+  velocity_planner::StopLineState state(stopLines());
+  auto parameters = blind();
+  parameters.signal_line_ids = {7294};
+  velocity_planner::IntegratedStopDynamic core(parameters, state);
+  core.process(approach(), light(interfaces::TrafficLight::RED, 99.9), {}, {});
+  EXPECT_TRUE(state.stopping);
+  EXPECT_EQ(state.stop_line_id, 7294);
+}

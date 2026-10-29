@@ -22,6 +22,8 @@ struct IntegratedStopLeftParameters {
   double yellow_stop_deceleration_mps2 = 0.0;
   double front_axle_m = 3.0;
   double yellow_stop_margin_m = 0.5;
+  // Stop lines that carry a judged signal for this movement; empty uses every map stop line.
+  std::vector<std::int64_t> signal_line_ids;
 };
 class IntegratedStopLeft {
  public:
@@ -331,6 +333,11 @@ class IntegratedStopLeft {
     return lower <= upper + 1e-9 ? std::min(1.0, lower) : none;
   }
 
+  bool signalLine(std::int64_t id) const {
+    const auto& ids = parameters_.signal_line_ids;
+    return ids.empty() || std::find(ids.begin(), ids.end(), id) != ids.end();
+  }
+
   Contact firstContact(const interfaces::Path& path, const std::vector<double>& station) const {
     Contact contact;
     for (std::size_t i = 1; i < path.points.size(); ++i) {
@@ -338,6 +345,7 @@ class IntegratedStopLeft {
       const auto& to = path.points[i].pose.pose.position;
       for (const auto& line : state_.parameters.stop_lines) {
         if (state_.stopping && line.id != state_.stop_line_id) continue;
+        if (!signalLine(line.id)) continue;
         for (std::size_t j = 1; j < line.points.size(); ++j) {
           auto a=line.points[j-1], b=line.points[j];
           const double dx=b[0]-a[0],dy=b[1]-a[1],length=std::hypot(dx,dy);

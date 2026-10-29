@@ -5,3 +5,5 @@ blind_deceleration_mps2: 2.5
 yellow_stop_deceleration_mps2: 4.5
 front_axle_m: 3.0
 yellow_stop_margin_m: 0.5
+# Stop lines judged by signal for this movement; other map stop lines get no signal stop.
+signal_line_ids: [4188]

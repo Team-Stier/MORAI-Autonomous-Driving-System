@@ -8,3 +8,5 @@ yellow_stop_margin_m: 0.5
 # Lines whose light must be observed before passing; unobserved, the approach stops at the target and holds up to blind_hold_max_sec.
 blind_hold_line_ids: [4188]
 blind_hold_max_sec: 10.0
+# Stop lines judged by signal for this movement; other map stop lines get no signal stop.
+signal_line_ids: [7294, 6254, 4188]

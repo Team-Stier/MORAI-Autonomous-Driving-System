@@ -221,3 +221,23 @@ TEST(IntegratedStopStraight, HoldEndsAfterMaximumTimeAtTarget) {
   output = core.process(path, light(interfaces::TrafficLight::UNKNOWN, 0.0), moving(0.0), {}).first;
   EXPECT_NEAR(output.points[1].velocity, creep(9.0, 5.0), 1e-9);
 }
+
+TEST(IntegratedStopStraight, UnlistedStopLineGetsNoSignalStop) {
+  velocity_planner::StopLineState state(stopLines());
+  auto parameters = blind();
+  parameters.signal_line_ids = {4188};
+  velocity_planner::IntegratedStopStraight core(parameters, state);
+  const auto output = core.process(approach(), light(interfaces::TrafficLight::RED, 99.9), {}, {}).first;
+  EXPECT_FALSE(state.stopping);
+  EXPECT_DOUBLE_EQ(output.points[45].velocity, 11.1);
+}
+
+TEST(IntegratedStopStraight, ListedStopLineKeepsSignalStop) {
+  velocity_planner::StopLineState state(stopLines());
+  auto parameters = blind();
+  parameters.signal_line_ids = {7294};
+  velocity_planner::IntegratedStopStraight core(parameters, state);
+  core.process(approach(), light(interfaces::TrafficLight::RED, 99.9), {}, {});
+  EXPECT_TRUE(state.stopping);
+  EXPECT_EQ(state.stop_line_id, 7294);
+}
