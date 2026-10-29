@@ -217,6 +217,8 @@ done; touch "$OUT/LAPS_DELIVERED") &
 print(round(cmd,1), round(rpm), '-' if 27 <= cmd <= 33 else 'CMD_OUT_OF_30+-3', int(ego < ${GUARD_EGO_HZ:-40} or mrho < $rmin or rpm > ${GUARD_REJECT_PER_MIN:-130}))" \
         $((c1 - c0)) $((r1 - r0)) "$(echo "$t1 - $t0" | bc)" "${srho:-1}" "${mrho:-1}" "${ego:-0}")
       line="w$n ego ${ego:-?} Hz(sim) rho ${mrho:-?} (clock ${srho:-?}) upstream rejected ${rpm}/min cmd ${cmd} Hz(sim) $flag"
+      # a node restart (LAP_RESTART) inside the window: its numbers are the restart's, not the environment's
+      [[ -e $st ]] && (( $(stat -c %Y "$st") >= ${t0%.*} )) && { echo "$(date +%T) $line (discarded: nodes restarted in the window)" >> "$OUT/env_guard.log"; continue; }
       echo "$(date +%T) $line" >> "$OUT/env_guard.log"
       if [[ $bad == 1 ]]; then
         echo "$line at $(date +%T)" > "$OUT/ENV_INVALID"; stamp "ENV_INVALID: $(cat "$OUT/ENV_INVALID")"

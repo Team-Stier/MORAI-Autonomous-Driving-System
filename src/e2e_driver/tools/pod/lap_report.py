@@ -107,8 +107,9 @@ def report(d, k):
              weather=sorted({f"{w[1]}{w[2]}" for w in lap.get("weather", [])}), tunnel=meta.get("tunnel"), dynamic=dict(dyn),
              counts=sc.get("counts"), replay_ok=v["ok"] if v else None, replay_failures=v["failures"] if v else [],
              npcs=dict(roundabout=v.get("roundabout_npcs"), highway=v.get("highway_npcs"), sizes=len(v.get("vehicle_sizes", []))) if v else None)
-    if (d.parent / "ENV_INVALID").exists():           # eval3.sh's env guard tripped: kept, never aggregated
-        r["env"], r["env_reason"] = "invalid", (d.parent / "ENV_INVALID").read_text().strip()
+    inv = d.parent / "ENV_INVALID"
+    if inv.exists() and inv.stat().st_mtime <= c[-1, 0] + 5:   # the guard tripped during this lap (not after its end)
+        r["env"], r["env_reason"] = "invalid", inv.read_text().strip()
     elif stack_rate is not None:
         # SIM_CLOCK's tau against the world's over the lap: both estimates hold while the car stands, so a mostly
         # stuck lap differs by 5-20 % (v0, 10/29) -> flagged; off by > GUARD_CLOCK_DREL (0.30: the estimate settling
