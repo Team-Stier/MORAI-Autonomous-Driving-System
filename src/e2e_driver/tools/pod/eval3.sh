@@ -125,6 +125,20 @@ stamp "engine ready: $(grep -o 'loaded in.*' "$OUT/server.log" | cut -c1-120)"
 for n in $(seq "$N"); do until inrosn "$n" "rosnode list 2> /dev/null" | grep -q e2e_driver; do sleep 2; done; done
 fi
 stamp "stacks ready"
+# RVIZ=1: the repo's visualizer nodes and RViz (its config at RVIZ_FPS, 5) per world on Xvfb :20+n in the stack's ROS
+# master, CPUs of the stacks; outside the competition chain (/visualizer/* only feeds RViz). Captured next to the world.
+if [[ $DRIVER == stack && ${RVIZ:-0} == 1 ]]; then
+  for n in $(seq "$N"); do
+    rd=:$((20 + n)); pgrep -f "^Xvfb $rd " > /dev/null || { setsid Xvfb $rd -screen 0 960x720x24 > /root/stack/$n/xvfb_rviz.log 2>&1 < /dev/null & sleep 1; }
+    sed -E "s/^( *Frame Rate:).*/\1 ${RVIZ_FPS:-5}/" "${DRIVE_WS:-$V/drive}/src/visualizer/rviz/visualizer.rviz" > /root/stack/$n/visualizer.rviz
+    for cmd in "roslaunch visualizer visualizer.launch rviz:=false" "rosrun rviz rviz -d /root/stack/$n/visualizer.rviz"; do
+      setsid bash -c "$(declare -f inrosn); WS=${DRIVE_WS:-$V/drive} inrosn $n 'export DISPLAY=$rd LIBGL_ALWAYS_SOFTWARE=1; exec taskset -c $STACK_CPUS $cmd'" \
+        >> /root/stack/$n/rviz.log 2>&1 < /dev/null &
+      echo $! >> /root/actor/rviz.pids
+    done
+  done
+  stamp "visualizer + RViz up (${RVIZ_FPS:-5} fps, displays :21..)"
+fi
 
 for n in $(seq "$N"); do
   O=$OUT/w$n; mkdir -p "$O"
@@ -132,6 +146,12 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/rec.pids
   setsid $PY $E2E/tools/lap_video.py record http://127.0.0.1:$((8090 + n))/ "$FR/w$n" > /dev/null 2>&1 < /dev/null &
   echo $! >> /root/actor/rec.pids
+  if [[ $DRIVER == stack && ${RVIZ:-0} == 1 ]]; then   # the RViz window, recorded like the world (lap_deliver.sh puts them side by side)
+    VIEW_CLASS=rviz DISPLAY=:$((20 + n)) setsid python3 $E2E/tools/viewer.py 127.0.0.1 $((8190 + n)) "${VIEW_FPS:-10}" 960 > "$O/viewer_rviz.log" 2>&1 < /dev/null &
+    echo $! >> /root/actor/rec.pids
+    setsid $PY $E2E/tools/lap_video.py record http://127.0.0.1:$((8190 + n))/ "$FR/r$n" > /dev/null 2>&1 < /dev/null &
+    echo $! >> /root/actor/rec.pids
+  fi
   if [[ $DRIVER == stack ]]; then
   WS=${DRIVE_WS:-$V/drive} inrosn "$n" "PYTHONUNBUFFERED=1 exec rostopic echo -p /morai_udp_bridge/control_cmd" > "$O/cmd_w$n.csv" 2> /dev/null < /dev/null &
   echo $! >> /root/actor/rec.pids
@@ -209,6 +229,7 @@ for p in $(cat /root/actor/managers.pids); do wait "$p"; done
 stamp "laps done"
 
 kill $(cat /root/actor/rec.pids /root/actor/gpu.pid) 2> /dev/null; pkill -f "[r]ostopic echo" ; sleep 2
+for p in $(cat /root/actor/rviz.pids 2> /dev/null); do pkill -INT -s "$p" 2> /dev/null; done; rm -f /root/actor/rviz.pids
 [[ ${KEEP_UP:-0} == 1 ]] || { bash "$HERE/stacks.sh" down > /dev/null; kill "$(cat /root/actor/server.pids)" 2> /dev/null; bash "$HERE/worlds.sh" down; }
 for n in $(seq "$N"); do cp /root/stack/$n/stack.log "$OUT/w$n/stack.log" 2> /dev/null; cp /root/inst/$n/Player.log "$OUT/w$n/Player.log" 2> /dev/null; done
 mv /root/actor/managers.pids /root/actor/managers.pids.old; mv /root/actor/rec.pids /root/actor/rec.pids.old

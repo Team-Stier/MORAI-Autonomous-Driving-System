@@ -22,10 +22,14 @@ REF=$(cat "$D/REF" 2> /dev/null || echo "?")
 cd "$D" || { log "no $D"; exit 1; }
 set +u; source /opt/ros/noetic/setup.bash; set -u
 log "rosdep ($REF)"
+if [[ ${RVIZ:-0} == 1 ]] && ! dpkg -s ros-noetic-rviz > /dev/null 2>&1; then   # RVIZ=1: visualizer + RViz (lap videos)
+  [[ -e /tmp/apt.updated ]] || { apt-get update -qq && touch /tmp/apt.updated; }
+  apt-get install -y -qq --no-install-recommends ros-noetic-rviz libgl1-mesa-dri qtbase5-dev > $V/drive_rviz_apt.log 2>&1 || log "rviz apt failed ($V/drive_rviz_apt.log)"
+fi
 if ! rosdep check --from-paths src --ignore-src --rosdistro noetic --skip-keys visualizer > /dev/null 2>&1; then
   [[ -e /tmp/apt.updated ]] || { apt-get update -qq && touch /tmp/apt.updated; }
   rosdep update --rosdistro noetic > /dev/null 2>&1 || true
-  rosdep install -y -q --from-paths src --ignore-src --rosdistro noetic --skip-keys "rviz visualizer" > $V/drive_rosdep.log 2>&1 ||
+  rosdep install -y -q --from-paths src --ignore-src --rosdistro noetic --skip-keys "$([[ ${RVIZ:-0} == 1 ]] || echo rviz) visualizer" > $V/drive_rosdep.log 2>&1 ||
     log "rosdep install reported errors ($V/drive_rosdep.log); building anyway"
 fi
 log "catkin_make ($REF)"
@@ -33,7 +37,7 @@ rm -f BUILT
 find build -type f -name '*.o' -size 0c -delete 2> /dev/null
 # --force-cmake: an incremental build over another ref does not regenerate np_generated/<pkg>/cores/<core>.cpp when a
 # parameters/<core>.hpp loader is added, so the Core builds silently without parameters (worker-control-transition 10/29)
-build() { ONNXRUNTIME_ROOT=$ORT catkin_make --force-cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT=$ORT -DCATKIN_BLACKLIST_PACKAGES=visualizer \
+build() { ONNXRUNTIME_ROOT=$ORT catkin_make --force-cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT=$ORT -DCATKIN_BLACKLIST_PACKAGES="$([[ ${RVIZ:-0} == 1 ]] || echo visualizer)" \
   -j"$(nproc --all | awk '{print ($1 > 16) ? 16 : $1}')" >> $V/drive_build.log 2>&1; }
 : > $V/drive_build.log
 # one retry: parallel CMake generation of node_pipeline's generated files can race (BROADCAST-16)

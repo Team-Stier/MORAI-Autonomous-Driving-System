@@ -8,16 +8,26 @@ HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; E2E=$V/MORAI-Autonomous
 OUT=$1; n=$2; k=$3; NAME=$4; K=$(printf %02d $((k + 1))); k3=$(printf %03d "$k")
 O=$OUT/w$n; FR=/root/frames/$NAME; PY=$V/venv-rl/bin/python; D=$OUT/lap_$K; mkdir -p "$D"
 b2env() { eval "$(tr '\0' '\n' < /proc/1/environ | grep -E '^B2_APPLICATION_KEY(_ID)?=' | sed 's/^/export /')"; }
-$PY $E2E/tools/lap_video.py make "$FR/w$n" "$O/eval_map/lap$k3.clock.json" "$FR/w${n}_lap$K.mp4" 30 > "$D/video.log" 2>&1 &&
-  bash "$HERE/phone_video.sh" "$FR/w${n}_lap$K.mp4" "$D/${NAME}_lap$K.mp4" 18 20000000 >> "$D/video.log" 2>&1
+$PY $E2E/tools/lap_video.py make "$FR/w$n" "$O/eval_map/lap$k3.clock.json" "$FR/w${n}_lap$K.mp4" 30 > "$D/video.log" 2>&1
+src=$FR/w${n}_lap$K.mp4
+if [[ -s $FR/r$n/index.txt ]] && $PY $E2E/tools/lap_video.py make "$FR/r$n" "$O/eval_map/lap$k3.clock.json" "$FR/r${n}_lap$K.mp4" 30 >> "$D/video.log" 2>&1; then
+  # RVIZ=1: simulator | RViz, both 540 high, same lap clock (equal length)
+  ffmpeg -y -loglevel error -i "$FR/w${n}_lap$K.mp4" -i "$FR/r${n}_lap$K.mp4" -filter_complex \
+    "[0:v]scale=-2:540[a];[1:v]scale=-2:540[b];[a][b]hstack=inputs=2" -c:v libx264 -crf 23 -preset veryfast -pix_fmt yuv420p \
+    "$FR/wr${n}_lap$K.mp4" >> "$D/video.log" 2>&1 && src=$FR/wr${n}_lap$K.mp4
+fi
+[[ -s $src ]] && bash "$HERE/phone_video.sh" "$src" "$D/${NAME}_lap$K.mp4" 18 20000000 >> "$D/video.log" 2>&1
+rm -f "$FR/w${n}_lap$K.mp4" "$FR/r${n}_lap$K.mp4" "$FR/wr${n}_lap$K.mp4"
 # container disk: the lap's frames go once its video is made (15 fps JPEGs: ~10 GB per hour of driving filled a 100 GB
 # pod in a few hours, 10/29); later laps' frames lie after this lap's end
-$PY - "$FR/w$n" "$O/eval_map/lap$k3.clock.json" <<'PY2' >> "$D/video.log" 2>&1
+$PY - "$O/eval_map/lap$k3.clock.json" "$FR/w$n" "$FR/r$n" <<'PY2' >> "$D/video.log" 2>&1
 import json, sys
 from pathlib import Path
-d, end = Path(sys.argv[1]), json.load(open(sys.argv[2]))[-1][0]
-n = 0
-for l in open(d / "index.txt"):
+end, n = json.load(open(sys.argv[1]))[-1][0], 0
+for d in map(Path, sys.argv[2:]):
+  if not (d / "index.txt").exists():
+    continue
+  for l in open(d / "index.txt"):
     name, t = l.split()
     if float(t) <= end and (d / name).exists():
         (d / name).unlink(); n += 1

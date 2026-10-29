@@ -31,6 +31,8 @@
 #   Defaults: GPUS RTX 4090 / 5080 / 3090 / A5000 / 3080 / 3070 (Vulkan; 3080 late: no-Vulkan hosts), CLOUD=COMMUNITY, VCPU 12, MEM_GB 28, DISK_GB 100. Pod create and
 #   terminate are logged to PODS_LOG (/home/opc/morai-campaign/shared/pods.log). VERSION=vN: Discord prefix "[vN] "
 #   (before MSG_PREFIX) and every delivered lap's lap_KK.json to RESULTS_DIR/vN/ (campaign_results.py aggregates).
+#   RVIZ=1: the repo's visualizer + RViz (RVIZ_FPS 5) on a second display, side by side with the simulator in each
+#   lap video (drive_setup.sh builds visualizer; the competition stack is unchanged).
 #   NO_EVAL=1: stop after the deploy (pod kept, as CREATE_ONLY). START_CP=J END_CP=K: section laps (eval3.sh).
 #   HARNESS v2: ~/morai-eval/pod/<name>/driver.pid = this driver's PID (stop a run with kill "$(cat .../driver.pid)" only;
 #   never pkill/pgrep patterns: other sessions' drivers run on this host). CPU gate after ssh up (a new pod): CPU model
@@ -222,7 +224,7 @@ if [[ $DRIVER == stack && -n $BRANCH ]]; then   # the drive checkout: prepared h
   rsync -rlt --delete -e "ssh -F $SSHC" --exclude .git --exclude /build --exclude /devel --exclude /REF --exclude /BUILT \
     "$SNAPDIR/" pod:/workspace/drive/ && P "echo '$BRANCH' > /workspace/drive/REF" || { log "drive sync failed"; exit 1; }
   log "drive $BRANCH (${SHA:0:10}) synced, building"
-  P "touch /workspace/keepalive; (while sleep 120; do touch /workspace/keepalive; done) & k=\$!; bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/drive_setup.sh > /workspace/drive_setup.log 2>&1; r=\$?; kill \$k; exit \$r" ||
+  P "touch /workspace/keepalive; (while sleep 120; do touch /workspace/keepalive; done) & k=\$!; RVIZ=${RVIZ:-0} bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/drive_setup.sh > /workspace/drive_setup.log 2>&1; r=\$?; kill \$k; exit \$r" ||
     { log "drive build failed: $(P "tail -3 /workspace/drive_setup.log")"; exit 1; }
   BUILT=$(P "cat /workspace/drive/BUILT"); log "drive built: $BUILT"
   [[ ${BUILT%% *} == "$SHA" ]] || { log "built sha ${BUILT%% *} is not $SHA"; exit 1; }
@@ -268,7 +270,7 @@ redraw=${REDRAW:-1}
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   wave=("${SEEDS[@]:w:N}"); WN=$RUN; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${RUN}_wave$((w / N + 1))
   P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$RUN/timeline.txt /workspace/results/$WN/ && \
-     (DRIVER=$DRIVER START_CP=${START_CP:-0} END_CP=${END_CP:-0} SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
+     (DRIVER=$DRIVER RVIZ=${RVIZ:-0} RVIZ_FPS=${RVIZ_FPS:-5} START_CP=${START_CP:-0} END_CP=${END_CP:-0} SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
       KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
   sleep 10   # setsid may not have exec'd eval3 yet when the next ssh looks for it
