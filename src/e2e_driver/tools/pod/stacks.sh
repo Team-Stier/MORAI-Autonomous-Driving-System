@@ -71,7 +71,7 @@ EOF
     fi
     wait' > "$d/stack.log" 2>&1 < /dev/null &
   echo $! > "$d/stack.pid"
-  (cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && env $env bash -c '
+  (set +u; cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && env $env bash -c '
     # /run_id too: roslaunch processes started before roscore set it each declare their own (RLException run_id mismatch)
     for i in $(seq 200); do rosnode list > /dev/null 2>&1 && rosparam get /run_id > /dev/null 2>&1 && break; sleep 0.1; done
     [[ ${SIM_CLOCK:-1} == 1 ]] && for i in $(seq 200); do rostopic list 2> /dev/null | grep -q "^/clock$" && break; sleep 0.1; done')
@@ -117,7 +117,7 @@ renodes() {  # n: a fresh start of stack n's nodes between laps (the competition
   local n=$1 d=$R/$1 i l miss
   touch "$d/restart.stamp"; nodesdown1 "$n"; nodes1 "$n"
   for i in $(seq 60); do
-    l=$(cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode list 2> /dev/null); miss=
+    l=$(set +u; cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode list 2> /dev/null); miss=
     for x in morai_udp_bridge velodyne tf_publisher_node lidar_leveler_node localization_node section_annotator_node object_detector_node \
              traffic_light_node path_planner_node velocity_planner_node control_node speed_filter_node; do echo "$l" | grep -q "$x" || miss+=" $x"; done
     [[ -z $miss ]] && break; sleep 2
