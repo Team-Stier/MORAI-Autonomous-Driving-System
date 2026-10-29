@@ -57,7 +57,12 @@ inline IntegratedDynamicTrajectoryParameters loadIntegratedDynamicTrajectoryPara
   p.vulnerable_extent_m=r.number("integrated_vulnerable_extent_m");
   p.vulnerable_uncertainty_mps=r.number("integrated_vulnerable_uncertainty_mps");
   p.vulnerable_uncertainty_max_m=r.number("integrated_vulnerable_uncertainty_max_m");
-  for(double value:{p.dynamic_zone_moving_speed_mps,p.vulnerable_extent_m,p.vulnerable_uncertainty_mps,p.vulnerable_uncertainty_max_m})
+  if(r.has("integrated_unknown_walker_speed_mps")) {
+    p.unknown_walker_speed_mps=r.number("integrated_unknown_walker_speed_mps");
+    p.unknown_walker_max_m=r.number("integrated_unknown_walker_max_m");
+  }
+  for(double value:{p.dynamic_zone_moving_speed_mps,p.vulnerable_extent_m,p.vulnerable_uncertainty_mps,p.vulnerable_uncertainty_max_m,
+                    p.unknown_walker_speed_mps,p.unknown_walker_max_m})
     if(!std::isfinite(value) || value<0)throw std::invalid_argument("invalid integrated dynamic interaction parameter");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");

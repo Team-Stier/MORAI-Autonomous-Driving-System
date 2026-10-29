@@ -6974,6 +6974,9 @@ struct IntegratedDynamicTrajectoryParameters {
   // Footprints up to this extent are treated as vulnerable road users whose
   // forecast body grows with prediction time, capped at the maximum.
   double vulnerable_extent_m=1.5,vulnerable_uncertainty_mps=.3,vulnerable_uncertainty_max_m=1.;
+  // Inside the dynamic zone a small body whose motion is not yet measured or
+  // inferred may be walking: its forecast body grows at this speed, capped.
+  double unknown_walker_speed_mps=0,unknown_walker_max_m=0;
 };
 
 
@@ -7068,7 +7071,7 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
-      auto native=convert(objects,predictions,p_);
+      auto native=convert(objects,predictions,p_,dynamic_zone);
 
       std::vector<bool> coverage;
 
@@ -7227,15 +7230,17 @@ class IntegratedTrajectory {
     return o;
   }
   static integrated_native::Predictions convert(const interfaces::Objects& current,const PredictedObjects& future,
-      const IntegratedDynamicTrajectoryParameters& parameters) {
+      const IntegratedDynamicTrajectoryParameters& parameters,bool dynamic_zone) {
     integrated_native::Predictions result;result.reference_stamp_sec=current.header.stamp.toSec();
     for(const auto& input:current.objects) {
       auto o=object(input);o.source_stamp_sec=result.reference_stamp_sec;
+      bool measured=input.velocity_available;
       if(!input.velocity_available) {
         const auto inferred=std::find_if(future[0].objects.begin(),future[0].objects.end(),
             [&](const interfaces::Object& q){return q.id==input.id && q.velocity_available;});
-        if(inferred!=future[0].objects.end())o.velocity_mps={inferred->velocity.x,inferred->velocity.y};
+        if(inferred!=future[0].objects.end()){o.velocity_mps={inferred->velocity.x,inferred->velocity.y};measured=true;}
       }
+      const bool unknown_walker=dynamic_zone && !measured && std::max(o.length_m,o.width_m)<=parameters.vulnerable_extent_m;
       result.current.push_back(o);
       for(std::size_t i=0;i<10;++i) {
         const auto found=std::find_if(future[i].objects.begin(),future[i].objects.end(),
@@ -7250,6 +7255,9 @@ class IntegratedTrajectory {
         // small body with prediction time so a pass is planned with clearance.
         if(std::max(o.length_m,o.width_m)<=parameters.vulnerable_extent_m && std::hypot(o.velocity_mps.x,o.velocity_mps.y)>=.3)
           p.radius_error_m+=std::min(parameters.vulnerable_uncertainty_max_m,parameters.vulnerable_uncertainty_mps*.5*(i+1));
+        // A walker seen standing before its motion is measured is not a static
+        // obstacle to steer around: it may step into either side of the lane.
+        if(unknown_walker)p.radius_error_m+=std::min(parameters.unknown_walker_max_m,parameters.unknown_walker_speed_mps*.5*(i+1));
         result.future[i].push_back(p);
       }
     }
