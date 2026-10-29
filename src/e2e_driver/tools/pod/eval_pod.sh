@@ -250,15 +250,27 @@ deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and r
   for f in $(P "ls $R/lap_*.ready 2> /dev/null"); do
     [[ -e $LOCAL/${1}_$(basename "$f").sent ]] && continue   # per run: a lap_KK of an earlier run on this NAME is another lap
     IFS=$'\t' read -r line url vid < <(P "cat $f")
-    mkdir -p "$LOCAL/laps"; scp -q -F "$SSHC" "pod:$vid" "$LOCAL/laps/" 2> /dev/null
-    line="${MSG_PREFIX:-}$line"
-    code=$( [[ -s $LOCAL/laps/$(basename "$vid") ]] && dm "$line" "$LOCAL/laps/$(basename "$vid")" || echo none)
-    [[ $code == 200 ]] || code="$code, link: $(dm "$line
-영상(7일 링크): $url")"
-    if [[ -n ${VERSION:-} ]]; then   # the lap's numbers for campaign_results.py
-      local K; K=$(basename "$f" .ready); mkdir -p "$RESULTS_DIR/$VERSION"
-      scp -q -F "$SSHC" "pod:$R/$K/$K.json" "$RESULTS_DIR/$VERSION/${RUN}_$K.json" 2> /dev/null &&
+    local K; K=$(basename "$f" .ready); mkdir -p "$LOCAL/laps"
+    scp -q -F "$SSHC" "pod:$R/$K/$K.json" "$LOCAL/laps/${1}_$K.json" 2> /dev/null
+    if [[ -n ${VERSION:-} && -s $LOCAL/laps/${1}_$K.json ]]; then   # the lap's numbers for campaign_results.py
+      mkdir -p "$RESULTS_DIR/$VERSION" && cp "$LOCAL/laps/${1}_$K.json" "$RESULTS_DIR/$VERSION/${RUN}_$K.json" &&
         python3 "$HERE/campaign_results.py" "$RESULTS_DIR" "$VERSION" >> "$LOCAL/eval_pod.log" 2>&1
+    fi
+    # only laps that drove go to the DM (user 10/29): not env-invalid, not a start failure, past CP1 or 50 m of driving
+    read -r drove summary < <(python3 -c 'import json,sys
+try: r=json.load(open(sys.argv[1]))
+except Exception: print(1, "-"); sys.exit()
+ok = r.get("env") != "invalid" and r.get("end") != "start_fail" and (r.get("cps", 1) > (r.get("start_cp") or 0) or (r.get("lap_s") or 0) > 60)
+f = lambda x: "-" if x is None else f"{x:.0f}"
+print(int(ok), "%s score %s s, 패널티 %s s" % (r.get("end"), f(r.get("score_s")), f(r.get("penalty_s"))))' "$LOCAL/laps/${1}_$K.json")
+    line="${MSG_PREFIX:-}[$summary] $line"
+    if [[ $drove == 1 ]]; then
+      scp -q -F "$SSHC" "pod:$vid" "$LOCAL/laps/" 2> /dev/null
+      code=$( [[ -s $LOCAL/laps/$(basename "$vid") ]] && dm "$line" "$LOCAL/laps/$(basename "$vid")" || echo none)
+      [[ $code == 200 ]] || code="$code, link: $(dm "$line
+영상(7일 링크): $url")"
+    else
+      code="not sent (no drive: $summary)"
     fi
     rm -f "$LOCAL/laps/$(basename "$vid")"   # host disk: the video lives on in B2 and in the DM
     echo "$code" > "$LOCAL/${1}_$(basename "$f").sent"; log "lap $(basename "$f" .ready) sent to Discord ($code)"

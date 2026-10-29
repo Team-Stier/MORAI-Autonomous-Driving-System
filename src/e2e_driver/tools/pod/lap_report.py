@@ -93,7 +93,7 @@ def report(d, k):
     dyn = Counter(a.get("cls") for a in meta.get("actors", []) if a.get("zone", "").endswith("_dynamic"))
     r = dict(lap=k + 1, seed=lap["seed"], scene=lap["scene"], end=lap["end"], lap_s=lap["lap_s"], penalty_s=sc.get("penalty_s"),
              returns=len(lap["returns"]), total_s=lap["total_s"], score_s=lap["total_s"], steps=len(dbg), cmd_hz=cmd_hz,
-             start_cp=lap.get("start_cp", 0), end_cp=lap.get("end_cp", 0),
+             start_cp=lap.get("start_cp", 0), end_cp=lap.get("end_cp", 0), cps=len(lap.get("checkpoints", [])),
              # a section lap (--start-cp / --end-cp) finishes at its end CP; the scorer's CP judgment covers the whole route
              finished=(lap["end"] == (f"cp{lap['end_cp']}" if lap.get("end_cp") else "finish")) and
                       (bool(lap.get("start_cp")) or (bool(sc.get("finished")) and not sc.get("competition_failed"))),
