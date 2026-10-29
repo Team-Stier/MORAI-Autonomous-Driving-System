@@ -1,5 +1,6 @@
 #pragma once
 #include <interfaces/Path.h>
+#include <interfaces/LocalizationStatus.h>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <nav_msgs/Odometry.h>
 #include <morai_msgs/CtrlCmd.h>
@@ -167,6 +168,7 @@ struct Parameters {
   double dynamic_zone_min_y_m = -100;
   double dynamic_zone_max_y_m = 85;
   double dynamic_zone_speed_mps = 40.0/3.6;
+  double tunnel_speed_mps = 25.0/3.6;
   double dynamic_zone_approach_m = 30;
 
   LateralParameters lateral;
@@ -1275,7 +1277,8 @@ class IntegratedMpc {
   }
 
   morai_msgs::CtrlCmd process(const interfaces::Path& path, const nav_msgs::Odometry& ego,
-                             const interfaces::CompetitionVehicleStatus& status,const ros::Time& control_stamp) {
+                             const interfaces::CompetitionVehicleStatus& status,
+                             const interfaces::LocalizationStatus& localization_status, const ros::Time& control_stamp) {
     ROS_INFO_ONCE("[control] executing integrated_mpc.hpp (current lateral tuning, timed longitudinal reference)");
     const auto stamp = control_stamp.toNSec();
     if(has_previous_stamp_ && (stamp<previous_stamp_ ||
@@ -1354,18 +1357,26 @@ class IntegratedMpc {
         position.x >= parameters_.dynamic_zone_min_x_m && position.x <= parameters_.dynamic_zone_max_x_m &&
         position.y >= parameters_.dynamic_zone_min_y_m-parameters_.dynamic_zone_approach_m &&
         position.y <= parameters_.dynamic_zone_max_y_m;
+    const double tunnel_ceiling = localization_status.mode == interfaces::LocalizationStatus::IMU_LIDAR ?
+        parameters_.tunnel_speed_mps : std::numeric_limits<double>::infinity();
+    const double speed_ceiling = std::min(tunnel_ceiling,
+        approach ? parameters_.dynamic_zone_speed_mps : std::numeric_limits<double>::infinity());
     const bool timed=path.points.size()>1 && path.points.back().time_from_start.toSec()>0;
     auto time_reference=timed?referenceHorizon(path,std::max(0.,control_stamp.toSec()-path.header.stamp.toSec()),parameters_.longitudinal):std::vector<integrated_ai_mpc::LongitudinalReference>{};
-    if(approach)for(auto& point:time_reference)point.speed_mps=std::min(point.speed_mps,parameters_.dynamic_zone_speed_mps);
+    for (auto& point : time_reference) {
+      if (point.speed_mps >= tunnel_ceiling)
+        point.acceleration_mps2 = std::min(0.0, point.acceleration_mps2);
+      point.speed_mps = std::min(point.speed_mps, speed_ceiling);
+    }
     const double time_target=time_reference.empty()?nearest->velocity:time_reference.front().speed_mps;
     longitudinal_.setTimedReference(std::move(time_reference));
-    const double target_speed = approach ? std::min(time_target, parameters_.dynamic_zone_speed_mps) : time_target;
+    const double target_speed = std::min(time_target, speed_ceiling);
     std::vector<double> stations{0},speeds{target_speed};double distance=0;
     for(auto point=nearest+1;point!=path.points.end();++point) {
       const auto& a=(point-1)->pose.pose.position;const auto& b=point->pose.pose.position;
       distance+=std::hypot(b.x-a.x,b.y-a.y);
       if(distance<=stations.back()+1e-6)continue;
-      stations.push_back(distance);speeds.push_back(approach?std::min(point->velocity,parameters_.dynamic_zone_speed_mps):point->velocity);
+      stations.push_back(distance);speeds.push_back(std::min(point->velocity, speed_ceiling));
     }
     const auto pedals = longitudinal_.update(target_speed, status.velocity_x_mps, dt,stations,speeds);
     const bool emergency = dynamic_zone && std::all_of(path.points.begin(), path.points.end(),

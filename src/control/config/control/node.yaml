@@ -29,6 +29,14 @@ inputs:
     frame: imu_link
     stale_after_sec: 0.5
     receive_timeout_sec: 0.5
+  localization_status:
+    type: interfaces/LocalizationStatus
+    topic: /localization/status
+    frame: map
+    numbers: [mode]
+    range: [1, 2]
+    stale_after_sec: 0.1
+    receive_timeout_sec: 0.1
 stages:
   - name: track
     outputs:

@@ -362,8 +362,15 @@ RosSettings loadRosConfig(ros::NodeHandle& nh, const NodeParams& params, std::ve
         throw std::invalid_argument(selection.where() + ": unknown stage '" + key + "'");
   }
   const auto output = node["output"];
-  settings.output_topic = nh.resolveName(output["topic"].text());
-  settings.output_frame = textOr(output, "frame_id");
+  const auto add_output = [&](const ConfigNode& declaration) {
+    settings.outputs.push_back({nh.resolveName(declaration["topic"].text()), textOr(declaration, "frame_id")});
+    settings.stages.back().output_frames.push_back(textOr(declaration, "frame_id"));
+  };
+  if (output.isList()) {
+    for (std::size_t i = 0; i < output.size(); ++i) add_output(output.at(i));
+  } else add_output(output);
+  settings.output_topic = settings.outputs.front().topic;
+  settings.output_frame = settings.outputs.front().frame;
   settings.stages.back().last = true;
   settings.stages.back().output_frame = settings.output_frame;
   for (const auto& entry : params.loaders) {

@@ -1,3 +1,4 @@
+tunnel_speed_mps: 6.944444444444445  # 25 km/h during IMU_LIDAR estimation
 # Experimental map-coordinate envelope around the depicted dynamic-obstacle area.
 # These are local test bounds, not organizer-published mission boundaries.
 dynamic_zone_enabled: true

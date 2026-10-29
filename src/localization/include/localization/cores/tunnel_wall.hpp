@@ -2,6 +2,8 @@
 #include <localization/banks/ekf_state.hpp>
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <nav_msgs/Odometry.h>
+#include <interfaces/LocalizationStatus.h>
+#include <tuple>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <Eigen/Dense>
@@ -54,7 +56,7 @@ class TunnelWall {
         tangent_(std::cos(parameters.axis_yaw_rad), std::sin(parameters.axis_yaw_rad), 0),
         normal_(-std::sin(parameters.axis_yaw_rad), std::cos(parameters.axis_yaw_rad), 0) {}
 
-  nav_msgs::Odometry process(const sensor_msgs::Imu& imu,
+  std::tuple<nav_msgs::Odometry, interfaces::LocalizationStatus> process(const sensor_msgs::Imu& imu,
                             const interfaces::CompetitionVehicleStatus& status,
                             const sensor_msgs::PointCloud2& cloud) {
     const Eigen::Quaterniond orientation =
@@ -154,7 +156,9 @@ class TunnelWall {
     message.twist.twist.angular.x = status.angular_velocity_x_radps;
     message.twist.twist.angular.y = status.angular_velocity_y_radps;
     message.twist.twist.angular.z = status.angular_velocity_z_radps;
-    return message;
+    interfaces::LocalizationStatus estimation;
+    estimation.mode = interfaces::LocalizationStatus::IMU_LIDAR;
+    return std::make_tuple(std::move(message), estimation);
   }
 
  private:

@@ -21,7 +21,7 @@ Pipeline은 공통 실행기로 봉인한다. 노드는 YAML로 구성하고, �
 - Core가 의존하는 입력 내용 전제(예: 특정 transform의 존재, 점군 필드 구성)는 `node.yaml`의 입력 한도나 연결한 Validator로 선언한다. Core는 실행 중 예외(`throw`·`.at()`·`.value()` 등)로 실패를 알리지 않는다.
 - Core는 직접 작성한 커스텀 라이브러리를 사용하지 않는다. 자체 계산 함수·상태는 Core 파일 안에 둔다. 외부에서 제공받은 라이브러리는 참조할 수 있으며 그 내부 구현은 Core 계약 검사 대상이 아니다. 직접 작성한 코드를 라이브러리로 옮겨 검사에서 제외하지 않는다.
 - Core 이식 준비는 원본 `process()`의 인자·반환 계약을 보존해 Core 본체와 파라미터 로더를 작성하고, 필요한 외부 라이브러리·에셋을 패키지 안에 복사한다. 등록과 Stage 연결은 별도 작업이다.
-- Core 하나당 파일 하나를 둔다. 첫 Core는 실제 구독 메시지를 `process()`의 개별 인자로 받고, 후속 Core는 이전 Core의 반환값을 개별 인자로 받는다. 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있으며, 개수·타입·순서는 `node.yaml`의 Stage 출력 계약으로 정한다. 마지막 Core는 목표 발행 메시지 타입의 payload를 완성해 반환하며, 출력 헤더 주입과 발행은 Pipeline이 담당한다.
+- Core 하나당 파일 하나를 둔다. 첫 Core는 실제 구독 메시지를 `process()`의 개별 인자로 받고, 후속 Core는 이전 Core의 반환값을 개별 인자로 받는다. 중간 Core는 다음 Core의 계산에 필요한 하나 이상의 변수를 반환할 수 있으며, 개수·타입·순서는 `node.yaml`의 Stage 출력 계약으로 정한다. 마지막 Core는 선언된 ROS 메시지 payload를 완성해 반환하며, 복수 출력은 선언 순서의 tuple로 반환한다. 출력별 헤더 주입과 발행은 Pipeline이 담당한다.
 
 구체적인 입출력 계약과 작성 방식은 [node_pipeline 가이드](src/node_pipeline/README.md)를 참고한다.
 
@@ -270,6 +270,7 @@ flowchart TD
     i["/sensors/imu/data"]
     c["/vehicle/competition_status"]
     e["/localization/ego"]
+    ls["/localization/status"]
     l["/velodyne_points"]
     if["/image/front/compressed"]
     il["/image/left/compressed"]
@@ -329,6 +330,7 @@ flowchart TD
     C ---> ctrl ---> SF ---> ct ---> B
     ll ---> L
     c ---> L ---> e
+    L --> ls --> C
     sa ---> L
     g ---> L
     i ---> L
@@ -342,7 +344,7 @@ flowchart TD
 | MORAI-ROS_morai_msgs | 커밋 `45c6baf148f2327f4c9fefd48262f25bdfe4b567`에 고정하여 깃 서브모듈 링크. MORAI ROS 메시지 정의. |
 | MORAI-UDP-Bridge-Node | 커밋 `dbd2da34abbd13634304ad20803b17be13228007`(현장 점검에서 검증된 저장소)에 고정하여 깃 서브모듈 링크. MORAI UDP 패킷과 ROS 토픽 사이를 번역. 단순 번역 계층으로 독자적인 로직·판단으로 콘텐츠를 훼손·누락하지 않는다. 센서·차량 상태 수신 및 최종 제어 명령 송신. |
 | velodyne | 커밋 `29abd0e1361cb7f5eda451d2b51c35eeca45e0d5`에 고정하여 깃 서브모듈 링크. velodyne vlp16의 공식 드라이버. LiDAR 데이터를 `/velodyne_points`로 발행. |
-| Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 /localization/ego로 발행한다.         |
+| Localization_Node | gps,imu,LiDAR센서 데이터를 이용하여 차량의 글로벌 위치를 추정하고 `/localization/ego`와 실제 추정 모드 `/localization/status`를 발행한다.         |
 | LiDAR_Leveler_Node | 센서 장착 TF와 차체 roll·pitch로 점군을 수평화해 `base_link_level`의 `/velodyne_points/leveled` 발행. |
 | Object_Detector_Node | 수평화 점군을 클러스터링하고 TF로 map 변환한 뒤 bbox 피팅·추적해 `/objects` 발행. |
 | Traffic_Light_Node | 목표 5 Hz로 최신 camera_7 영상을 YOLO 추론해 `/traffic_light` 발행. 추론은 중첩하지 않으며 대기 영상은 ROS 구독 큐(`queue_size=1`)에서 관리. |
@@ -396,6 +398,7 @@ flowchart TD
 | `/velodyne_points` | 원본 점군 | `sensor_msgs/PointCloud2` | `velodyne` | 드라이버 scan stamp 유지; 현재 설정은 마지막 패킷 시각 | 10 Hz (100 ms); scan 수신마다 |
 | `/velodyne_points/leveled` | 수평화 차량 기준 점군 | `sensor_msgs/PointCloud2` | `base_link_level` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
 | `/localization/ego` | 차량 위치·자세·3축 선속도·각속도 | `nav_msgs/Odometry` | pose: `map`, twist: `base_link`; 차량 뒷차축 중심 | 추정 상태가 나타내는 시각; 발행 시각으로 대체하지 않음 | 50 Hz |
+| `/localization/status` | 실제 위치 추정 모드 | `interfaces/LocalizationStatus` | `map` | 같은 계산 회차의 ego stamp | ego와 함께 50 Hz |
 | `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `map`; 속도·가속도는 지면 기준 절대값 | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
 | `/traffic_light` | 신호등 인식 결과 | `interfaces/TrafficLight` | `camera_7_optical_frame` | 판정에 사용한 영상 stamp 유지 | 목표 5 Hz (200 ms); 최신 미처리 영상 사용 |
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |

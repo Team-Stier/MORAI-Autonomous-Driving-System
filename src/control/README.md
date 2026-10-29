@@ -10,10 +10,11 @@
 | 구독 | `/local_path/velocity_injected` | `interfaces/Path` | base_link 경로·주입된 목표속도·가속도 |
 | 구독 | `/localization/ego` | `nav_msgs/Odometry` | map pose, base_link 횡속도·yaw rate; 공분산 미사용 |
 | 구독 | `/vehicle/competition_status` | `interfaces/CompetitionVehicleStatus` | base_link 전방 속도 `velocity_x_mps` |
+| 구독 | `/localization/status` | interfaces/LocalizationStatus | 실제 추정 모드, map frame |
 | 구독 | `/section_annotation` | `interfaces/SectionAnnotation` | section 선택 |
 | 발행 | `/control_cmd` | `morai_msgs/CtrlCmd` | 페달 [0,1], 최대 조향각으로 나눈 조향 [−1,1], longlCmdType=1 |
 
-`integrated_mpc.hpp`의 `process(path, ego, competition, stamp)`는 실제 입력 메시지를 개별 인자로 받고 완성한
+`integrated_mpc.hpp`의 `process(path, ego, competition, localization_status, stamp)`는 실제 입력 메시지를 개별 인자로 받고 완성한
 CtrlCmd를 반환한다. Core는 ROS 통신·입력 검사·fallback·발행을 수행하지 않는다.
 계산 상태는 Core가 소유하며 입력 오류 시 자동 reset하지 않는다.
 
@@ -42,8 +43,8 @@ MPC의 모델 속도 제약과 페달·조향 제약은 Core 계산에 적용한
 
 | Core | 입력 |
 | --- | --- |
-| `integrated_mpc.hpp` | path·ego·competition·stamp |
-| `morai_mpc.hpp` | path·ego·competition |
+| `integrated_mpc.hpp` | path·ego·competition·localization_status·stamp |
+| `morai_mpc.hpp` | path·ego·competition·localization_status |
 | `path_tracking.hpp` | path·ego·competition |
 | `autoware_universe.hpp` | path·ego·competition·imu |
 | `safe_stop.hpp` | 없음 |
@@ -58,3 +59,12 @@ CtrlCmd에는 Header가 없으므로 헤더를 주입하지 않는다. 출력 �
 `docs/`와 bag 분석 도구는 기존 데모의 설계·측정 기록을 보존한다.
 
 기존 횡방향 MPC와 차량 보정값은 유지한다. 통합 MPC는 장시간 선택되지 않았다가 다시 사용될 때 현재 실측 조향으로 예측·필터·입력 이력을 초기화한다.
+
+## 추정 모드에 따른 속도 상한
+
+선택된 `integrated_mpc.hpp`와 `morai_mpc.hpp`는 `IMU_LIDAR` 동안 종방향 목표와
+미래 속도 참조를 `tunnel_speed_mps`(25 km/h) 이하로 제한한다. 더 낮은 속도와 정지는 유지한다.
+시간 참조가 터널 속도 상한 이상이면 속도를 상한 이하로 낮추고 양의 가속도는 0으로 제한한다.
+`GPS_FUSED`에서는 기존 속도 계획을 사용하며 GPS 원본을 다시 판정하지 않는다.
+상태의 UNKNOWN·frame·stamp·만료·수신 timeout은 공통 검사와 기존 Policy로 처리한다.
+필수 상태 입력이 없으면 해당 Core 호출·명령 발행을 거부한다.

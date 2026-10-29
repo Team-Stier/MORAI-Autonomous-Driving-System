@@ -202,6 +202,9 @@ inline integrated_ai_mpc::Parameters loadIntegratedMpcParameters(const node_pipe
   p.longitudinal.acceleration_weight = params.number("longitudinal/acceleration_weight");
   p.longitudinal.jerk_weight = params.number("longitudinal/jerk_weight");
   p.longitudinal.command_weight = params.number("longitudinal/command_weight");
+  p.tunnel_speed_mps = params.number("tunnel_speed_mps");
+  if (!std::isfinite(p.tunnel_speed_mps) || p.tunnel_speed_mps <= 0)
+    throw std::invalid_argument("invalid tunnel_speed_mps");
   p.longitudinal.command_rate_weight = params.number("longitudinal/command_rate_weight");
   p.longitudinal.terminal_speed_weight = params.number("longitudinal/terminal_speed_weight");
   if(params.has("longitudinal/stop_position_weight"))p.longitudinal.stop_position_weight=params.number("longitudinal/stop_position_weight");
