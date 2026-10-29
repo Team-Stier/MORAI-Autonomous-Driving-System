@@ -6,19 +6,30 @@
 # Stack n: ROS master 11310+n, every UDP port +(n-1)*1000 (as mk-clone.sh shifts world n's presets: the bridge config and
 # the VLP-16 port), model server port 47011 (one batched engine) or 47011+n-1 with ENGINE_PORT_STEP=1, CPU affinity
 # STACK_CPUS (all stacks share it), node param world = n (in its requests). Logs and pids: /root/stack/n/.
+# DRIVER=stack (campaign default): the competition stack of the drive workspace DRIVE_WS (drive_setup.sh; run.sh's
+# chain without visualizer: bridge, velodyne, tf_publisher, lidar_leveler, localization, section_annotator,
+# object_detector, traffic_light, path_planner, velocity_planner, control, speed_filter) on wall time (no /use_sim_time,
+# no sim_clock), the bridge config from DRIVE_WS's bridge submodule with same-PC addresses. No GT topic reaches it.
+# DRIVER=e2e: the old e2e_driver chain of WS.
 # E2E_FAKE_FOLLOW_ROUTE_M passes through (fake backend).
 # SYNC=1 (MORAI synchronous mode, eval_manager.py --sync): sync_clock_node.py instead of sim_clock (manager port
 # 47100+n), the node in sync mode, and the bridge's command timeout off
 # (30 s: a step can take longer than 0.25 s of wall time) with sends at 500 Hz (the command reaches MORAI within 2 ms).
 set -uo pipefail
 V=${V:-/workspace}; WS=${WS:-$V/MORAI-Autonomous-Driving-System}; R=${STACK_ROOT:-/root/stack}
+DRIVER=${DRIVER:-stack}; DRIVE_WS=${DRIVE_WS:-$V/drive}
+DRIVE_PKGS="tf_publisher lidar_leveler localization section_annotator object_detector traffic_light path_planner velocity_planner control speed_filter"
 
 config() {  # n -> $R/n/bridge.yaml: the same-PC bridge config with world n's ports
   local n=$1 d=$R/$1; mkdir -p "$d/ros" "$d/tmp"
-  python3 - "$WS/src/e2e_driver/config/bridge_same_pc.yaml" "$d/bridge.yaml" $(( (n - 1) * 1000 )) "${SYNC:-0}" <<'PY'
+  local src=$WS/src/e2e_driver/config/bridge_same_pc.yaml
+  [[ $DRIVER == stack ]] && src=$DRIVE_WS/src/MORAI-UDP-Bridge-Node/config/config.yaml
+  python3 - "$src" "$d/bridge.yaml" $(( (n - 1) * 1000 )) "${SYNC:-0}" <<'PY'
 import sys, yaml
 src, dst, off, sync = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4] == "1"
 c = yaml.safe_load(open(src))
+c["network_launch"]["launch_option"] = 1                   # same PC: the world runs on this host
+c["network_launch"]["same_pc"].update(bridge_ip="127.0.0.1", simulator_ip="127.0.0.1")
 if sync:
     c["control"].update(command_timeout_sec=30.0, send_rate_hz=500.0)
 for cam in c["cameras"].values():
@@ -34,6 +45,20 @@ up1() {
   local n=$1 d=$R/$1 off=$(( ($1 - 1) * 1000 ))
   config "$n"
   [[ -e $d/stack.pid ]] && kill -0 "$(cat "$d/stack.pid")" 2>/dev/null && { echo "stack $n already up"; return; }
+  if [[ $DRIVER == stack ]]; then
+  ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=$d/ros TMPDIR=$d/tmp MORAI_BRIDGE_CONFIG=$d/bridge.yaml \
+  ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT:-/opt/onnxruntime-gpu/1.19.2} VLP_PORT=$((2368 + off)) MASTER_PORT=$((11310 + n)) PKGS="$DRIVE_PKGS" \
+  setsid taskset -c "${STACK_CPUS:-0-$(($(nproc) - 1))}" bash -c '
+    cd "'"$DRIVE_WS"'" && source /opt/ros/noetic/setup.bash && source devel/setup.bash
+    roscore -p $MASTER_PORT & for i in $(seq 100); do rosnode list > /dev/null 2>&1 && break; sleep 0.1; done
+    bash src/MORAI-UDP-Bridge-Node/launch.sh &
+    roslaunch velodyne_pointcloud VLP16_points.launch port:=$VLP_PORT &
+    for p in $PKGS; do bash src/$p/launch.sh & done
+    wait' > "$d/stack.log" 2>&1 < /dev/null &
+  echo $! > "$d/stack.pid"
+  echo "stack $n ($DRIVER $(cat "$DRIVE_WS/REF" 2> /dev/null)): master $((11310 + n)), udp +$off, log $d/stack.log"
+  return
+  fi
   # TMPDIR: the bridge writes its runtime config to $TMPDIR/morai-udp-bridge-<uid>.yaml, one name for every stack
   ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=$d/ros TMPDIR=$d/tmp MORAI_BRIDGE_CONFIG=$d/bridge.yaml \
   E2E_SERVER_PORT=$((47011 + (n - 1) * ${ENGINE_PORT_STEP:-0})) E2E_WORLD=$n OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \
@@ -49,7 +74,7 @@ up1() {
     for p in vlp16_bev tf_publisher lidar_leveler localization section_annotator e2e_driver speed_filter; do bash src/$p/launch.sh & done
     wait' > "$d/stack.log" 2>&1 < /dev/null &
   echo $! > "$d/stack.pid"
-  echo "stack $n: master $((11310 + n)), udp +$off, server $((47011 + (n - 1) * ${ENGINE_PORT_STEP:-0})), log $d/stack.log"
+  echo "stack $n ($DRIVER): master $((11310 + n)), udp +$off, server $((47011 + (n - 1) * ${ENGINE_PORT_STEP:-0})), log $d/stack.log"
 }
 
 down1() {

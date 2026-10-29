@@ -15,7 +15,12 @@
 # (--gather GATHER 0.1 s, --prep PREP process). SIMS: engine slots (N). Parts already up (worlds, stacks, an engine
 # from sync_bench.sh or an earlier KEEP_UP=1 run) are reused; KEEP_UP=1 leaves them up at the end (another wave).
 # CPU_LAYOUT=shared (SYNC default): worlds and stacks share all CPUs but the engine's 8, every world's camera spinners on 4 CPUs.
+# DRIVER=stack (campaign default; DELIVER is ignored, give -): the competition stack of DRIVE_WS (stacks.sh, built by
+# drive_setup.sh) drives instead of e2e_driver + engine, on wall time (free run, SYNC=0 only). No engine; each stack's
+# /morai_udp_bridge/control_cmd is recorded (cmd_wN.csv, the first-steps signal) and the CPUs are split between the
+# worlds (12 each, half of a small host) and the stacks (the rest).
 set -uo pipefail
+DRIVER=${DRIVER:-stack}; export DRIVER; [[ $DRIVER == stack ]] && SYNC=0
 [[ ${SYNC:-0} == 1 ]] && CPU_LAYOUT=${CPU_LAYOUT:-shared}            # sync_bench 10/28: shared + pinned spinners
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@"); (( ${#SEEDS[@]} )) || SEEDS=(7 8 9)
@@ -33,7 +38,11 @@ stamp "eval3 $NAME: $DELIVER, seeds ${SEEDS[*]}, SIM_FPS ${SIM_FPS:-60}, apply d
 T=$(nproc --all); PER=12; S=8; (( T < 12 * N + 16 )) && { S=4; PER=$(( (T - 8) / N )); }   # 16 CPUs, 1 world: 8 + 4 + 4
 for n in $(seq "$N"); do export CPUS_$n=$(( (n - 1) * PER ))-$(( n * PER - 1 )); done
 export STACK_CPUS=$((PER * N))-$((PER * N + S - 1)) ENGINE_CPUS=$((PER * N + S))-$((PER * N + 2 * S - 1))
-if [[ ${CPU_LAYOUT:-split} == shared ]]; then
+if [[ $DRIVER == stack ]]; then
+  PER=$(( T >= 12 * N + 8 ? 12 : T / (2 * N) )); (( PER > 0 )) || PER=1
+  for n in $(seq "$N"); do export CPUS_$n=$(( (n - 1) * PER ))-$(( n * PER - 1 )); done
+  export STACK_CPUS=$((PER * N))-$((T - 1))
+elif [[ ${CPU_LAYOUT:-split} == shared ]]; then
   for n in $(seq "$N"); do export CPUS_$n=0-$((T - 9)); done
   export STACK_CPUS=0-$((T - 9)) ENGINE_CPUS=$((T - 8))-$((T - 1)) SKIP_PIN=1
 fi
@@ -44,7 +53,7 @@ if [[ ${SYNC:-0} == 1 ]]; then
   SYNC_ARGS=(--tick-ms "${TICK_MS:-100}"); [[ ${SERIAL:-0} == 1 ]] && SYNC_ARGS+=(--serial)
 fi
 
-if [[ $DELIVER == b2:* ]]; then
+if [[ $DRIVER != stack && $DELIVER == b2:* ]]; then
   src=${DELIVER#b2:}; DELIVER=$V/models/$(basename "$src"); mkdir -p "$DELIVER"
   ( b2env; $V/venv-tools/bin/b2 sync --threads 32 --no-progress "b2://morai2026-alpamayo/${src%/}/" "$DELIVER/" > "$OUT/b2_deliver.log" 2>&1 ) &
   DSYNC=$!
@@ -53,7 +62,9 @@ bash "$HERE/worlds.sh" up "$N" > "$OUT/worlds.log" 2>&1 &
 WORLDS=$!
 E2E_APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} bash "$HERE/stacks.sh" up "$N" > "$OUT/stacks.log" 2>&1
 [[ -n ${DSYNC:-} ]] && { wait $DSYNC && stamp "delivery synced from B2 ($(du -sh "$DELIVER" | cut -f1))" || { stamp "B2 sync failed"; exit 1; }; }
-if [[ -e /root/actor/server.pids ]] && kill -0 "$(cat /root/actor/server.pids)" 2> /dev/null; then
+if [[ $DRIVER == stack ]]; then
+  : > /root/actor/server.pids; ENGINE=
+elif [[ -e /root/actor/server.pids ]] && kill -0 "$(cat /root/actor/server.pids)" 2> /dev/null; then
   ENGINE=$(cat /root/actor/server.pids); ln -sf "$(readlink -f /proc/$ENGINE/fd/1)" "$OUT/server.log"
   stamp "engine already up (pid $ENGINE): $(tr '\0' ' ' < /proc/$ENGINE/cmdline | grep -o -- '--sims.*')"
 else
@@ -69,6 +80,18 @@ stamp "worlds, stacks and engine starting"
 
 wait $WORLDS || { stamp "worlds failed"; tail -5 "$OUT/worlds.log"; bash "$HERE/stacks.sh" down; kill "$(cat /root/actor/server.pids)"; exit 1; }
 stamp "worlds ready"
+if [[ $DRIVER == stack ]]; then
+  [[ ${CPU_LAYOUT:-split} == shared ]] && SPIN_CPUS=$((T - 12))-$((T - 9)) bash "$HERE/pin.sh" >> "$OUT/worlds.log" 2>&1
+  for n in $(seq "$N"); do   # every node of the chain registered (2 min at most: a node that died is in stack.log)
+    for i in $(seq 60); do
+      l=$(inrosn "$n" "rosnode list 2> /dev/null"); miss=
+      for x in morai_udp_bridge velodyne tf_publisher_node lidar_leveler_node localization_node section_annotator_node object_detector_node \
+               traffic_light_node path_planner_node velocity_planner_node control_node speed_filter_node; do echo "$l" | grep -q "$x" || miss+=" $x"; done
+      [[ -z $miss ]] && break; sleep 2
+    done
+    stamp "stack $n $(cat "${DRIVE_WS:-$V/drive}/BUILT" 2> /dev/null): ${miss:+missing$miss}${miss:-all nodes up}"
+  done
+else
 if ! grep -q "listening on" "$OUT/server.log"; then   # idle worlds burn ~3.8 cores each: the engine gets the CPU quota (10/28)
   sims=$(pgrep -f "[S]imulator.real"); kill -STOP $sims
   until grep -q "listening on" "$OUT/server.log" || ! kill -0 $ENGINE 2> /dev/null; do sleep 1; done
@@ -79,6 +102,7 @@ fi
 grep -q "listening on" "$OUT/server.log" || { stamp "engine failed"; tail -20 "$OUT/server.log"; bash "$HERE/stacks.sh" down; bash "$HERE/worlds.sh" down; exit 1; }
 stamp "engine ready: $(grep -o 'loaded in.*' "$OUT/server.log" | cut -c1-120)"
 for n in $(seq "$N"); do until inrosn "$n" "rosnode list 2> /dev/null" | grep -q e2e_driver; do sleep 2; done; done
+fi
 stamp "stacks ready"
 
 for n in $(seq "$N"); do
@@ -87,10 +111,15 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/rec.pids
   setsid $PY $E2E/tools/lap_video.py record http://127.0.0.1:$((8090 + n))/ "$FR/w$n" > /dev/null 2>&1 < /dev/null &
   echo $! >> /root/actor/rec.pids
+  if [[ $DRIVER == stack ]]; then
+  WS=${DRIVE_WS:-$V/drive} inrosn "$n" "PYTHONUNBUFFERED=1 exec rostopic echo -p /morai_udp_bridge/control_cmd" > "$O/cmd_w$n.csv" 2> /dev/null < /dev/null &
+  echo $! >> /root/actor/rec.pids
+  else
   inrosn "$n" "PYTHONUNBUFFERED=1 exec rostopic echo -p /e2e_driver/debug/data" > "$O/dbg_w$n.csv" 2> /dev/null < /dev/null &
   echo $! >> /root/actor/rec.pids
   inrosn "$n" "exec rostopic echo -p /sim_clock/state" > "$O/clk_w$n.csv" 2> /dev/null < /dev/null &
   echo $! >> /root/actor/rec.pids
+  fi
   (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
     --port $((8094 + n)) --no-view --direct --host local --grpc 127.0.0.1:$((7788 + n)) --launcher "$(wdir "$n")/MoraiLauncher_Lin_Data" \
     --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
@@ -110,7 +139,8 @@ stamp "drives started ($N managers)"
 done; touch "$OUT/LAPS_DELIVERED") &
 (for i in $(seq 900); do   # every world's first model step (sync: steps.jsonl; real time: a /e2e_driver/debug row)
   ok=1; for n in $(seq "$N"); do
-    if [[ ${SYNC:-0} == 1 ]]; then [[ -s $OUT/w$n/eval_map/steps.jsonl ]] || ok=0; else (( $(wc -l < "$OUT/w$n/dbg_w$n.csv") > 1 )) || ok=0; fi
+    if [[ $DRIVER == stack ]]; then (( $(wc -l < "$OUT/w$n/cmd_w$n.csv") > 1 )) || ok=0
+    elif [[ ${SYNC:-0} == 1 ]]; then [[ -s $OUT/w$n/eval_map/steps.jsonl ]] || ok=0; else (( $(wc -l < "$OUT/w$n/dbg_w$n.csv") > 1 )) || ok=0; fi
   done; (( ok )) && break; sleep 1; done
   stamp "first steps") &
 (sleep 240; bash "$HERE/measure.sh" 120 > "$OUT/cpu.txt" 2>&1) &
@@ -132,7 +162,7 @@ for n in $(seq "$N"); do
   O=$OUT/w$n
   $PY $E2E/tools/lap_video.py make "$FR/w$n" "$O/eval_map/lap000.clock.json" "$FR/w$n.mp4" 30 > "$O/video.json" 2>&1 &&
     bash "$HERE/phone_video.sh" "$FR/w$n.mp4" "$O/${NAME}_w$n.mp4" >> "$O/video.json" 2>&1 &
-  $PY $E2E/test/plan_overlay.py "$O" "w$n" "$SCORER" 0 > "$O/plans.log" 2>&1 &
+  [[ $DRIVER == stack ]] || $PY $E2E/test/plan_overlay.py "$O" "w$n" "$SCORER" 0 > "$O/plans.log" 2>&1 &
 done
 wait
 fi
