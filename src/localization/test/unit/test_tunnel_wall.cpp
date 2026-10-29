@@ -91,6 +91,12 @@ TEST(TunnelWall, DisagreeingSideNearWallFallsBackToNearerSide) {
   EXPECT_NEAR(lateralAfterScan(points), 0.0, 0.02);
 }
 
+TEST(TunnelWall, AgreeingWallsRecoverOffsetBeyondGate) {
+  std::vector<Point> points;
+  addWalls(points, 1.0);  // 1 m from the estimate: outside the 0.6 m gate
+  EXPECT_NEAR(lateralAfterScan(points), 1.0, 0.02);
+}
+
 TEST(TunnelWall, SingleWallStillCorrects) {
   std::vector<Point> points;
   addWalls(points, 0.2, false);
