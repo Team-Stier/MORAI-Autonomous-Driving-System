@@ -108,7 +108,7 @@ early="${BUNDLE:+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get i
 mkdir -p ~/.ssh /run/sshd && chmod 700 ~/.ssh && echo \"\$PUBLIC_KEY\" >> ~/.ssh/authorized_keys && service ssh start) > /workspace/early.log 2>&1; }"
 start="${BUNDLE:+mkdir -p /workspace && $early python3 -c \"\$(echo $boot | base64 -d)\" && STREAMS=${FETCH_STREAMS:-16} python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
 ACCOUNT_WAIT_S=$([[ -s ~/.morai-secrets/config.tar ]] && echo 600 || echo 4) bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
-${wdprep}DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 &$hold"
+${wdprep}DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} IDLE_MIN=${IDLE_MAX_MIN:-15} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 &$hold"
 if [[ -n ${ATTACH:-} ]]; then   # a box this script started before (its eval3 died early): POD, ssh config and setup are there
   POD=$ATTACH; T0=${ATTACH_T0:-$T0}
   if [[ ${PROVIDER:-runpod} == vast ]]; then price() { vastai show instance "$POD" --raw | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["dph_total"], 3))'; }
@@ -166,7 +166,16 @@ for i in $(seq 120); do
   [[ $ip != - && $port != - ]] && break; sleep 5
 done
 fi
-[[ -z ${ATTACH:-} ]] && printf 'Host pod\n  HostName %s\n  Port %s\n  User root\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n  ServerAliveInterval 30\n' "$ip" "$port" > "$SSHC"
+if [[ -n ${ATTACH:-} && ${PROVIDER:-runpod} == runpod ]]; then   # ssh of an attached pod from its id (a pod pool or another
+  # session's pod has no ssh_config under this NAME; a restarted pod has a new port); the old file only if the API fails
+  read -r ip port < <(curl -s -m 30 "https://rest.runpod.io/v1/pods/$POD" -H "Authorization: Bearer $KEY" |
+    python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("publicIp") or "-", (d.get("portMappings") or {}).get("22", "-"))' 2> /dev/null)
+  if [[ ${ip:--} == - || ${port:--} == - ]]; then
+    [[ -s $SSHC ]] || { log "ATTACH $POD: no public ssh port from the API and no $SSHC"; KEEP=1; exit 1; }   # never delete it
+    ip=
+  fi
+fi
+[[ -z ${ATTACH:-} || -n ${ip:-} ]] && printf 'Host pod\n  HostName %s\n  Port %s\n  User root\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n  ServerAliveInterval 30\n' "$ip" "$port" > "$SSHC"
 P() { ssh -F "$SSHC" pod "$@"; }
 late() { (( $(date +%s) - ${T0%.*} > $1 )) && { log "$2: gave up"; exit 1; }; true; }   # the trap terminates the pod
 [[ -z ${ATTACH:-} ]] && {
