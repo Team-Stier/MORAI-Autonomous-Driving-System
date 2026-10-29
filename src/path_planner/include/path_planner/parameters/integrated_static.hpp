@@ -72,6 +72,9 @@ inline IntegratedStaticTrajectoryParameters loadIntegratedStaticTrajectoryParame
   if(r.has("integrated_start_snap_m"))p.start_snap_m=r.number("integrated_start_snap_m");
   if(!std::isfinite(p.start_snap_m) || p.start_snap_m<0 || p.start_snap_m>.5)
     throw std::invalid_argument("invalid integrated start snap");
+  if(r.has("integrated_detour_clearance_m"))p.detour_clearance_m=r.number("integrated_detour_clearance_m");
+  if(!std::isfinite(p.detour_clearance_m) || p.detour_clearance_m<0 || p.detour_clearance_m>1.)
+    throw std::invalid_argument("invalid integrated detour clearance");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
   if(r.has("integrated_recovery_lateral_acceleration_mps2"))p.recovery_lateral_acceleration_mps2=r.number("integrated_recovery_lateral_acceleration_mps2");
