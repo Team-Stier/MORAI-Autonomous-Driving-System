@@ -1,63 +1,69 @@
-#include <gtest/gtest.h>
 #include <velocity_planner/cores/stop_line_pass_through.hpp>
+#include <velocity_planner/cores/stop_line_cutoff_straight.hpp>
+#include <gtest/gtest.h>
 
-namespace {
-velocity_planner::StopLineStateParameters stopLines() {
-  velocity_planner::StopLineStateParameters parameters;
-  parameters.intersection_speed_mps = 0.0;
-  parameters.stop_lines.push_back({7294, {{{50.0, -3.0}}, {{50.0, 3.0}}}, false});
-  return parameters;
+TEST(StopLinePassThrough, KeepsTheMapPathAndTfOutsideSignalMissions) {
+  velocity_planner::StopLineState state({});
+  velocity_planner::StopLinePassThrough core(state);
+  interfaces::Path path;
+  path.header.frame_id = "map";
+  path.points.resize(1);
+  path.points.front().velocity = 10;
+  tf2_msgs::TFMessage tf;
+  tf.transforms.resize(1);
+  const auto output = core.process(path, tf);
+  EXPECT_EQ(path, output.first);
+  EXPECT_EQ(tf, output.second);
 }
 
-interfaces::Path path(double origin_x_m, double stamp_sec) {
-  interfaces::Path message;
-  message.header.stamp = ros::Time(stamp_sec);
-  for (int i = 0; i <= 20; ++i) {
-    interfaces::PathPoint point;
-    point.pose.pose.position.x = origin_x_m + i;
-    point.pose.pose.orientation.w = 1.0;
-    point.velocity = 8.0;
-    message.points.push_back(point);
-  }
-  return message;
-}
-
-void latch(velocity_planner::StopLineState& state) {
+TEST(StopLinePassThrough, KeepsAnExistingStopWhenTheSectionChanges) {
+  velocity_planner::StopLineState state({});
   state.stopping = true;
-  state.stop_line_id = 7294;
-  state.stopping_started_sec = 100.0;
-}
-}  // namespace
-
-TEST(StopLinePassThrough, HoldsLatchedStopWhileDriving) {
-  velocity_planner::StopLineState state(stopLines());
-  latch(state);
+  state.green_frames = 2;
   velocity_planner::StopLinePassThrough core(state);
-  core.process(path(30.0, 100.0), {});
-  const auto output = core.process(path(30.3, 100.033), {}).first;
+  interfaces::Path path;
+  path.points.resize(2);
+  for (auto& point : path.points) {
+    point.velocity = 10;
+    point.acceleration = 1;
+  }
+  const auto output = core.process(path, {});
+  for (const auto& point : output.first.points) {
+    EXPECT_DOUBLE_EQ(0, point.velocity);
+    EXPECT_DOUBLE_EQ(0, point.acceleration);
+  }
   EXPECT_TRUE(state.stopping);
-  EXPECT_DOUBLE_EQ(output.points[5].velocity, 0.0);
+  EXPECT_EQ(0, state.green_frames);
 }
 
-TEST(StopLinePassThrough, JumpReleasesLatchedStop) {
-  velocity_planner::StopLineState state(stopLines());
-  latch(state);
-  velocity_planner::StopLinePassThrough core(state);
-  core.process(path(30.0, 100.0), {});
-  // Teleport back to the start, 230 m behind, on the next call.
-  const auto output = core.process(path(-200.0, 100.033), {}).first;
+TEST(StopLinePassThrough, ReleasesTheSharedStopAtTimeoutAfterTheSectionChanges) {
+  velocity_planner::StopLineStateParameters parameters;
+  parameters.stop_lines = {{1, {{{25, -1}}, {{25, 1}}}}};
+  velocity_planner::StopLineState state(parameters);
+  velocity_planner::StopLineCutoffStraight straight(state);
+  velocity_planner::StopLinePassThrough pass(state);
+  interfaces::Path path;
+  path.header.stamp.fromSec(10);
+  path.points.resize(2);
+  path.points.back().pose.pose.position.x = 40;
+  for (auto& point : path.points) {
+    point.velocity = 10;
+    point.acceleration = 1;
+  }
+  interfaces::TrafficLight red;
+  red.state = interfaces::TrafficLight::RED;
+  red.header.stamp.fromSec(1);
+  interfaces::CompetitionVehicleStatus competition;
+  straight.process(path, red, competition, {});
+  ASSERT_TRUE(state.stopping);
+  path.header.stamp.fromSec(109.999);
+  EXPECT_DOUBLE_EQ(0, pass.process(path, {}).first.points.front().velocity);
+  EXPECT_TRUE(state.stopping);
+  path.header.stamp.fromSec(110);
+  EXPECT_EQ(path, pass.process(path, {}).first);
   EXPECT_FALSE(state.stopping);
-  EXPECT_EQ(state.stop_line_id, 0);
-  EXPECT_DOUBLE_EQ(output.points[5].velocity, 8.0);
-}
-
-TEST(StopLinePassThrough, BackwardStampReleasesLatchedStop) {
-  velocity_planner::StopLineState state(stopLines());
-  latch(state);
-  state.last_light_stamp_ns = 99900000000ULL;
-  velocity_planner::StopLinePassThrough core(state);
-  core.process(path(30.0, 100.0), {});
-  core.process(path(30.0, 50.0), {});
+  EXPECT_EQ(1, state.released_stop_line_id);
+  path.header.stamp.fromSec(111);
+  EXPECT_EQ(path, straight.process(path, red, competition, {}).first);
   EXPECT_FALSE(state.stopping);
-  EXPECT_EQ(state.last_light_stamp_ns, 0ULL);
 }

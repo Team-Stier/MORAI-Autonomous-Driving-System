@@ -20,22 +20,22 @@ inject:
   health_core_map: []
 cutoff:
   section_core_map:
-    "0": integrated_stop_pass.hpp
-    "1": integrated_stop_pass.hpp
-    "2": integrated_stop_pass.hpp
-    "3": integrated_stop_straight.hpp
-    "4": integrated_stop_straight.hpp
-    "5": integrated_stop_straight.hpp
-    "6": integrated_stop_pass.hpp
-    "7": integrated_stop_left.hpp
+    "0": stop_line_pass_through.hpp
+    "1": stop_line_pass_through.hpp
+    "2": stop_line_pass_through.hpp
+    "3": stop_line_cutoff_straight.hpp
+    "4": stop_line_cutoff_straight.hpp
+    "5": stop_line_cutoff_straight.hpp
+    "6": stop_line_pass_through.hpp
+    "7": stop_line_cutoff_left.hpp
     "8": stop_line_pass_through.hpp
     "9": stop_line_pass_through.hpp
     "10": stop_line_pass_through.hpp
-    "11": integrated_stop_pass.hpp
-    "12": integrated_stop_pass.hpp
-    "13": integrated_stop_pass.hpp
-    "14": integrated_stop_pass.hpp
-    "15": integrated_stop_pass.hpp
+    "11": stop_line_pass_through.hpp
+    "12": stop_line_pass_through.hpp
+    "13": stop_line_pass_through.hpp
+    "14": stop_line_pass_through.hpp
+    "15": stop_line_pass_through.hpp
     "16": stop_line_pass_through.hpp
   health_core_map: []
 transform:
