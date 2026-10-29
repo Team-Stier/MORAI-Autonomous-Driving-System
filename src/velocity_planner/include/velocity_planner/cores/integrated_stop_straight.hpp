@@ -21,6 +21,11 @@ struct IntegratedStopStraightParameters {
   double yellow_stop_deceleration_mps2 = 0.0;
   double front_axle_m = 3.0;
   double yellow_stop_margin_m = 0.5;
+  // Lines whose light must be observed before passing: while it is unobserved and no GO was seen,
+  // the approach stops at the rear-axle target at blind_deceleration_mps2 and holds there for up to
+  // blind_hold_max_sec, then falls back to the blind-approach limit.
+  std::vector<std::int64_t> blind_hold_line_ids;
+  double blind_hold_max_sec = 10.0;
 };
 class IntegratedStopStraight {
  public:
@@ -42,7 +47,11 @@ class IntegratedStopStraight {
       const interfaces::Path& path, const interfaces::TrafficLight& light,
       const interfaces::CompetitionVehicleStatus& competition, const tf2_msgs::TFMessage& tf) {
     interfaces::Path output = path;
-    if (releaseAfterJump(path)) go_line_id_ = 0;
+    if (releaseAfterJump(path)) {
+      go_line_id_ = 0;
+      hold_line_id_ = 0;
+      hold_started_sec_ = -1.0;
+    }
     releasePassedLine(path);
     const auto& parameters = state_.parameters;
     if (state_.stopping &&
@@ -107,8 +116,9 @@ class IntegratedStopStraight {
     // A GO observed on the current approach lifts the blind-approach limit until that line changes.
     if (go_line_id_ != contact.id) go_line_id_ = 0;
     if (contact.id != 0 && signal == Signal::Go) go_line_id_ = contact.id;
+    const bool hold = holdBlindLine(contact, path.header.stamp.toSec(), speed_mps, stop_station_m);
     if (!state_.stopping) {
-      limitBlindApproach(output, station, contact, signal, stop_offset_m);
+      limitBlindApproach(output, station, contact, signal, stop_offset_m, hold);
       return {std::move(output), tf};
     }
     if (contact.id == 0) {
@@ -220,27 +230,56 @@ class IntegratedStopStraight {
            line_station_m - parameters_.front_axle_m - parameters_.yellow_stop_margin_m;
   }
 
+  // Whether the approached line is a blind_hold line still within its hold time. The hold time starts
+  // when the vehicle stands within 2 m of the rear-axle target; a line change or stamp rewind restarts it.
+  bool holdBlindLine(const Contact& contact, double stamp_sec, double speed_mps, double target_station_m) {
+    const auto& ids = parameters_.blind_hold_line_ids;
+    const bool listed = contact.id != 0 && std::find(ids.begin(), ids.end(), contact.id) != ids.end();
+    if (!listed || contact.id != hold_line_id_ || stamp_sec < hold_started_sec_) {
+      hold_line_id_ = listed ? contact.id : 0;
+      hold_started_sec_ = -1.0;
+    }
+    if (!listed) return false;
+    if (hold_started_sec_ < 0 && speed_mps < 0.3 && target_station_m <= 2.0) hold_started_sec_ = stamp_sec;
+    return hold_started_sec_ < 0 || stamp_sec - hold_started_sec_ <= parameters_.blind_hold_max_sec;
+  }
+
   // While the light of the approached line is unobserved (UNKNOWN/OFF) and no GO was seen for it,
   // reach blind_detection_distance_m before the line no faster than the stop profile allows for a
-  // target at that distance, so a RED first observed there still stops before the line.
+  // target at that distance, so a RED first observed there still stops before the line. A held line
+  // (holdBlindLine) instead stops at the rear-axle target.
   void limitBlindApproach(interfaces::Path& path, const std::vector<double>& station, const Contact& contact,
-                          Signal signal, double stop_offset_m) const {
+                          Signal signal, double stop_offset_m, bool hold) const {
     const auto& p = state_.parameters;
     const double detection_m = parameters_.blind_detection_distance_m;
-    if (detection_m <= 0 || contact.id == 0 || contact.id == state_.released_stop_line_id ||
+    if ((detection_m <= 0 && !hold) || contact.id == 0 || contact.id == state_.released_stop_line_id ||
         contact.id == go_line_id_ || signal != Signal::Ignore) return;
+    const double deceleration = parameters_.blind_deceleration_mps2;
     const double response = p.z_mps2 * p.stop_response_time_sec;
     const double braking = 2 * p.z_mps2 * std::max(0.0, detection_m - stop_offset_m);
     const double creep_mps = braking / (std::sqrt(response * response + braking) + response);
     for (std::size_t i = 0; i < path.points.size(); ++i) {
       const double remaining_m = contact.station_m - station[i];
       if (remaining_m <= 0) continue;
-      const double beyond_m = std::max(0.0, remaining_m - detection_m);
-      const double limit = std::sqrt(creep_mps * creep_mps + 2 * parameters_.blind_deceleration_mps2 * beyond_m);
+      double limit = std::numeric_limits<double>::infinity();
+      double acceleration = 0.0;
+      if (detection_m > 0) {
+        const double beyond_m = std::max(0.0, remaining_m - detection_m);
+        limit = std::sqrt(creep_mps * creep_mps + 2 * deceleration * beyond_m);
+        acceleration = beyond_m > 0 ? -deceleration : 0.0;
+      }
+      if (hold) {
+        const double target_m = remaining_m - stop_offset_m;
+        const double held = target_m <= p.stop_position_tolerance_m ? 0.0 : std::sqrt(2 * deceleration * target_m);
+        if (held < limit) {
+          limit = held;
+          acceleration = held > 0 ? -deceleration : 0.0;
+        }
+      }
       auto& point = path.points[i];
       if (limit < point.velocity) {
         point.velocity = limit;
-        point.acceleration = std::min(point.acceleration, beyond_m > 0 ? -parameters_.blind_deceleration_mps2 : 0.0);
+        point.acceleration = std::min(point.acceleration, acceleration);
       }
     }
   }
@@ -362,5 +401,7 @@ class IntegratedStopStraight {
   IntegratedStopStraightParameters parameters_;
   StopLineState& state_;
   std::int64_t go_line_id_ = 0;
+  std::int64_t hold_line_id_ = 0;
+  double hold_started_sec_ = -1.0;
 };
 }  // namespace velocity_planner

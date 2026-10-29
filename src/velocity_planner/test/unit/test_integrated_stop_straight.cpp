@@ -173,3 +173,51 @@ TEST(IntegratedStopStraight, YellowTooCloseForFrontAxlePasses) {
   core.process(approachFrom(41.0), light(interfaces::TrafficLight::YELLOW, 99.9), moving(7.1), {});
   EXPECT_FALSE(state.stopping);
 }
+
+namespace {
+velocity_planner::IntegratedStopStraightParameters hold(std::int64_t line_id) {
+  auto parameters = blind();
+  parameters.blind_hold_line_ids = {line_id};
+  parameters.blind_hold_max_sec = 10.0;
+  return parameters;
+}
+}  // namespace
+
+TEST(IntegratedStopStraight, HeldLineStopsAtTargetWhileUnobserved) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopStraight core(hold(7294), state);
+  const auto output = core.process(approach(), light(interfaces::TrafficLight::UNKNOWN, 0.0), {}, {}).first;
+  EXPECT_DOUBLE_EQ(output.points[45].velocity, 0.0);  // rear-axle target 5 m before the line at x=50
+  EXPECT_LT(output.points[44].velocity, creep(9.0, 5.0));
+  EXPECT_DOUBLE_EQ(output.points[60].velocity, 11.1);
+  EXPECT_FALSE(state.stopping);
+}
+
+TEST(IntegratedStopStraight, ObservedGoReleasesHeldLine) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopStraight core(hold(7294), state);
+  const auto output = core.process(approach(), light(interfaces::TrafficLight::GREEN, 99.9), {}, {}).first;
+  EXPECT_DOUBLE_EQ(output.points[45].velocity, 11.1);
+}
+
+TEST(IntegratedStopStraight, UnlistedLineKeepsBlindCreep) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopStraight core(hold(9999), state);
+  const auto output = core.process(approach(), light(interfaces::TrafficLight::UNKNOWN, 0.0), {}, {}).first;
+  EXPECT_NEAR(output.points[45].velocity, creep(9.0, 5.0), 1e-9);
+}
+
+TEST(IntegratedStopStraight, HoldEndsAfterMaximumTimeAtTarget) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopStraight core(hold(7294), state);
+  // Standing 6 m before the line (1 m behind the target): the hold starts at 100 s.
+  auto path = approachFrom(44.0);
+  auto output = core.process(path, light(interfaces::TrafficLight::UNKNOWN, 0.0), moving(0.0), {}).first;
+  EXPECT_DOUBLE_EQ(output.points[1].velocity, 0.0);
+  path.header.stamp = ros::Time(109.0);
+  output = core.process(path, light(interfaces::TrafficLight::UNKNOWN, 0.0), moving(0.0), {}).first;
+  EXPECT_DOUBLE_EQ(output.points[1].velocity, 0.0);
+  path.header.stamp = ros::Time(110.5);
+  output = core.process(path, light(interfaces::TrafficLight::UNKNOWN, 0.0), moving(0.0), {}).first;
+  EXPECT_NEAR(output.points[1].velocity, creep(9.0, 5.0), 1e-9);
+}
