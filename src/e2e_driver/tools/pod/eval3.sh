@@ -79,7 +79,7 @@ stamp "worlds, stacks and engine starting"
 (nvidia-smi --query-gpu=timestamp,utilization.gpu,memory.used --format=csv,noheader,nounits -lms 1000 > "$OUT/gpu.csv" 2>&1 &
  echo $! > /root/actor/gpu.pid)
 
-wait $WORLDS || { stamp "worlds failed"; tail -5 "$OUT/worlds.log"; bash "$HERE/stacks.sh" down; kill "$(cat /root/actor/server.pids)"; exit 1; }
+wait $WORLDS || { stamp "worlds failed"; tail -5 "$OUT/worlds.log"; bash "$HERE/stacks.sh" down; [[ -s /root/actor/server.pids ]] && kill "$(cat /root/actor/server.pids)" 2> /dev/null; exit 1; }
 stamp "worlds ready"
 if [[ $DRIVER == stack ]]; then   # a world kept up from an earlier run may hold another sensor preset
   for n in $(seq "$N"); do

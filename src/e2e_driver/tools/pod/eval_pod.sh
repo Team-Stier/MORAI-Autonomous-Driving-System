@@ -35,7 +35,7 @@
 #   HARNESS v2: ~/morai-eval/pod/<name>/driver.pid = this driver's PID (stop a run with kill "$(cat .../driver.pid)" only;
 #   never pkill/pgrep patterns: other sessions' drivers run on this host). CPU gate after ssh up (a new pod): CPU model
 #   not EPYC 7xxx / Xeon and a 10 M-iteration python loop (best of 3) <= CPU_BENCH_MAX_S (0.80; i5-13600K 0.52) or the
-#   pod is deleted and another created (CPU_RETRIES, 6). ENV_INVALID from eval3.sh (its guard): the run ends; a new
+#   pod is deleted and another created (CPU_RETRIES, 6); likewise without the NVIDIA Vulkan ICD / vulkaninfo driver. ENV_INVALID from eval3.sh (its guard): the run ends; a new
 #   pod (not ATTACH) is then replaced the same way.
 set -uo pipefail
 # run from a private copy: an edit of this file (git checkout, another session) cannot break a run in progress
@@ -94,7 +94,7 @@ h={'Authorization':'Basic '+base64.b64encode((e['B2_APPLICATION_KEY_ID'].strip()
 a=json.load(u.urlopen(u.Request('https://api.backblazeb2.com/b2api/v2/b2_authorize_account',headers=h)))
 open('/bundle.py','wb').write(zlib.decompress(base64.b64decode('$(python3 -c 'import base64,sys,zlib; print(base64.b64encode(zlib.compress(open(sys.argv[1],"rb").read(),9)).decode())' "$HERE/bundle.py")')))" | base64 | tr -d '\n')
 # sshd before the bundle (ssh and the fetch log are watchable while ~27 GB come in; setup.sh starts it again)
-early="${BUNDLE:+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server rsync > /dev/null; \
+early="${BUNDLE:+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server rsync vulkan-tools libvulkan1 > /dev/null; \
 mkdir -p ~/.ssh /run/sshd && chmod 700 ~/.ssh && echo \"\$PUBLIC_KEY\" >> ~/.ssh/authorized_keys && service ssh start) > /workspace/early.log 2>&1; }"
 start="${BUNDLE:+mkdir -p /workspace && $early python3 -c \"\$(echo $boot | base64 -d)\" && STREAMS=${FETCH_STREAMS:-16} python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
 ACCOUNT_WAIT_S=$([[ -s ~/.morai-secrets/config.tar ]] && echo 600 || echo 4) bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
@@ -175,6 +175,16 @@ if [[ -z $bench || $cpu == *EPYC\ 7* || $cpu == *Xeon* ]] || python3 -c "import 
   podlog "reject $POD ($NAME): CPU $cpu bench ${bench:-?} s"
   (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) || { log "CPU gate: $((CPU_RETRY)) pods rejected, giving up"; KEEP=0 bye; exit 1; }
   KEEP=0 bye; log "CPU gate: pod rejected (deleted even with KEEP=1), creating another"
+  CPU_RETRY=$(( ${CPU_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"
+fi
+# Vulkan gate (a pod without the NVIDIA Vulkan ICD exits MORAI with "Forced renderer 21 is not supported"): the ICD file
+# and vulkaninfo naming an NVIDIA driver, or the pod is replaced like a CPU reject (same retry budget)
+vk=$(P "ls /etc/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/icd.d/nvidia_icd.json 2> /dev/null | head -1; timeout 30 vulkaninfo 2>&1 | grep -m2 -E 'deviceName|driverName'")
+log "Vulkan: $(echo "$vk" | tr '\n' ' ' | tr -s ' ' | cut -c1-160)"
+if ! grep -q "nvidia_icd.json" <<< "$vk" || ! grep -qiE "nvidia|geforce|rtx" <<< "$vk"; then
+  podlog "reject $POD ($NAME): no NVIDIA Vulkan ($(echo "$vk" | tr '\n' ' ' | cut -c1-80))"
+  (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) || { log "Vulkan gate: giving up"; KEEP=0 bye; exit 1; }
+  KEEP=0 bye; log "Vulkan gate: pod rejected (deleted), creating another"
   CPU_RETRY=$(( ${CPU_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"
 fi
 if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
