@@ -46,7 +46,7 @@ integrated_reference_weight: 12.0
 integrated_previous_weight: 0.5
 integrated_corridor_half_width_m: 1.8
 integrated_horizon_sec: 5.0
-integrated_maximum_speed_mps: 16.666666666666668
+integrated_maximum_speed_mps: 16.38888888888889
 integrated_maximum_lateral_acceleration_mps2: 5.5
 integrated_preferred_lateral_acceleration_mps2: 2.8
 integrated_following_gap_m: 1.5

@@ -1,7 +1,7 @@
 # Team-Stier/MOLIT2026-stier1 @ d71cadc7f1bb040ae026f95d0a19292d16ca8978
 # src/morai_path_tracking/config/controllers/molit_2026_path_tracking.yaml의 곡률 속도 계수.
-# 속도 상한은 60 km/h, 나머지 계수는 원본을 유지한다.
-configured_target_speed_mps: 16.666666666666668
+# 속도 상한은 59 km/h, 나머지 계수는 원본을 유지한다.
+configured_target_speed_mps: 16.38888888888889
 minimum_curve_speed_mps: 4.166666666666667
 maximum_lateral_acceleration_mps2: 2.6
 curvature_speed_reduction_gain_m: 0.0
