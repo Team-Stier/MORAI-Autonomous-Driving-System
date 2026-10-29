@@ -49,6 +49,7 @@ template<class Value> CoreResult wrapResult(Value&& value, std::vector<int> orig
 
 // 설정 단계에서 읽은 Core·Bank 파라미터 값이다. 생성된 로더 진입점이 실제 타입으로 만든다.
 using ParameterLoader = std::shared_ptr<const void> (*)(const ParamReader&);
+using ParameterValues = std::map<std::string, std::shared_ptr<const void>>;
 template<class Entry> std::shared_ptr<const void> loadErased(const ParamReader& reader) {
   using Parameters = decltype(Entry::loadParameters(reader));
   return std::make_shared<const Parameters>(Entry::loadParameters(reader));

@@ -427,20 +427,69 @@ def cpp_list(values):
     return "{" + ", ".join(str(value) for value in values) + "}"
 
 
+def core_includes(model, core):
+    package = model.package
+    includes = {f"{package}/cores/{core.stem}.hpp"}
+    for kind, stem in (("validators", core.validator), ("policies", core.policy)):
+        if stem:
+            includes.add(f"{package}/{kind}/{stem}.hpp")
+    if core.parameters:
+        includes.add(f"{package}/parameters/{core.stem}.hpp")
+    return includes
+
+
+def generate_core(model, stage_index, core):
+    """Core 하나의 번역 단위다. Core·Validator·Policy·파라미터 헤더는 이 파일만 포함한다."""
+    package = model.package
+    stage = model.stages[stage_index]
+    s = stage_index
+    core_type = f"::{package}::{pascal(core.stem)}"
+    validator = f"::{package}::{pascal(core.validator)}" if core.validator else "npd::NoValidator"
+    policy = f"::{package}::{pascal(core.policy)}" if core.policy else "npd::NoPolicy"
+    bank_arguments = f", *std::get<std::shared_ptr<::{package}::{pascal(core.bank)}>>(banks)" if core.bank else ""
+    parameter_argument = ""
+    arguments = ", ".join("stamp" if arg < 0 else f"data.message<{stage.slots[arg].type.cpp}>({arg})" for arg in core.args)
+    indices = ", ".join("npd::kStampInput" if arg < 0 else str(arg) for arg in core.args)
+    lines = ["// node_pipeline 생성 파일이다. 수정하지 않는다.", '#include "np_registry.hpp"']
+    lines += [f"#include <{include}>" for include in sorted(core_includes(model, core))]
+    lines += ["", "namespace np_generated {", f"namespace core_{core.stem} {{", f"using Core = {core_type};", ""]
+    if core.parameters:
+        lines += [f"using Parameters = decltype(::{package}::load{pascal(core.stem)}Parameters(std::declval<const node_pipeline::ParamReader&>()));",
+                  "std::shared_ptr<const void> loadParameters(const node_pipeline::ParamReader& params) {",
+                  f"  return std::make_shared<const Parameters>(::{package}::load{pascal(core.stem)}Parameters(params));",
+                  "}", ""]
+        parameter_argument = f"*static_cast<const Parameters*>(parameters.at({cpp_string(core.name)}).get())"
+    constructor_arguments = parameter_argument + bank_arguments if parameter_argument else bank_arguments[2:]
+    lines += ["std::shared_ptr<void> make(const Banks& banks, const npd::ParameterValues& parameters) {",
+              "  static_cast<void>(banks);", "  static_cast<void>(parameters);",
+              f"  return std::make_shared<Core>({constructor_arguments});", "}", ""]
+    lines += [f"npd::CoreProfile<Stage_{s}> profile() {{",
+              f"  return npd::makeProfile<Stage_{s}, {validator}, {policy}>(CoreId::{pascal(core.stem)}, {cpp_string(core.name)}, "
+              f"{cpp_list('npd::kStampInput' if arg < 0 else arg for arg in core.args)}, "
+              f"{cpp_string(core.validator + '.hpp' if core.validator else '')}, {cpp_string(core.policy + '.hpp' if core.policy else '')});",
+              "}", ""]
+    lines += ["bool process(void* object, const npd::StageData& data, const std::int64_t& stamp_ns, npd::CoreResult& result) {",
+              f"  static_assert(npd::requireProcessContract<Core, Stage_{s}, std::index_sequence<{indices}>>(), \"process() contract\");",
+              "  static_cast<void>(stamp_ns);",
+              f"  const std::vector<int> origins = Stage_{s}::origins();",
+              f"  const std::vector<std::size_t> required{cpp_list(arg for arg in core.args if arg >= 0)};",
+              "  if (!data.hasInputs(required)) return false;",
+              "  auto& core = *static_cast<Core*>(object);"]
+    if -1 in core.args:
+        lines += ["  ros::Time stamp;", "  stamp.fromNSec(static_cast<std::uint64_t>(stamp_ns));"]
+    lines += [f"  auto value = core.process({arguments});",
+              "  result = npd::wrapResult(std::move(value), origins);",
+              "  return true;", "}", f"}}  // namespace core_{core.stem}", "}  // namespace np_generated", ""]
+    return "\n".join(lines)
+
+
 def generate(model):
-    """노드별 타입 연결 헤더다. include·타입 목록·Core ID별 case·Core profile만 담는다."""
+    """노드별 타입 연결 헤더다. Core 헤더는 포함하지 않는다. Core마다 별도 번역 단위가 Core 객체 생성·profile·process를 제공한다."""
     package = model.package
     includes = {"node_pipeline/detail/stages.hpp", "cstddef", "map", "memory", "stdexcept", "string", "utility", "vector"}
     for stage in model.stages:
         for slot in stage.slots + stage.outputs:
             includes.add(slot.type.include)
-        for core in stage.cores:
-            includes.add(f"{package}/cores/{core.stem}.hpp")
-            for kind, stem in (("validators", core.validator), ("policies", core.policy), ("banks", core.bank)):
-                if stem:
-                    includes.add(f"{package}/{kind}/{stem}.hpp")
-            if core.parameters:
-                includes.add(f"{package}/parameters/{core.stem}.hpp")
     for bank in model.banks():
         includes.add(f"{package}/banks/{bank}.hpp")
         if model.bank_parameters.get(bank):
@@ -452,6 +501,7 @@ def generate(model):
     lines += [f"#include <{include}>" for include in sorted(includes)]
     lines += ["", "namespace np_generated {", "namespace npd = node_pipeline::detail;", ""]
     lines.append(f"enum class CoreId : std::size_t {{{', '.join(pascal(core.stem) for core in cores)}}};")
+    lines.append(f"using Banks = npd::BankSet<{', '.join(f'::{package}::{pascal(bank)}' for bank in banks)}>;")
     lines.append("")
 
     for bank in banks:
@@ -462,19 +512,10 @@ def generate(model):
             lines.append("  static auto loadParameters(const node_pipeline::ParamReader& params) "
                          f"{{ return ::{package}::load{pascal(bank)}Parameters(params); }}")
         lines += ["};", ""]
-    for core in cores:
-        bank_types = f"::{package}::{pascal(core.bank)}" if core.bank else ""
-        lines += [f"struct Core_{core.stem} {{", f"  using Type = ::{package}::{pascal(core.stem)};",
-                  f"  using Banks = npd::Types<{bank_types}>;",
-                  f"  static constexpr bool has_parameters = {'true' if core.parameters else 'false'};",
-                  f"  static const char* name() {{ return {cpp_string(core.name)}; }}"]
-        if core.parameters:
-            lines.append("  static auto loadParameters(const node_pipeline::ParamReader& params) "
-                         f"{{ return ::{package}::load{pascal(core.stem)}Parameters(params); }}")
-        lines += ["};", ""]
+    # Core 객체는 타입을 지운 채 보관한다. 실제 타입은 Core별 번역 단위만 안다.
     lines.append("struct CoreSet {")
-    lines.append(f"  npd::BankSet<{', '.join(f'::{package}::{pascal(bank)}' for bank in banks)}> banks;")
-    lines += [f"  ::{package}::{pascal(core.stem)} {core.stem};" for core in cores]
+    lines.append("  Banks banks;")
+    lines += [f"  std::shared_ptr<void> {core.stem};" for core in cores]
     lines += ["};", ""]
 
     for s, stage in enumerate(model.stages):
@@ -503,50 +544,38 @@ def generate(model):
         ]
 
     for s, stage in enumerate(model.stages):
-        profiles = []
         for core in stage.cores:
-            validator = f"::{package}::{pascal(core.validator)}" if core.validator else "npd::NoValidator"
-            policy = f"::{package}::{pascal(core.policy)}" if core.policy else "npd::NoPolicy"
-            validator_name = f"{core.validator}.hpp" if core.validator else ""
-            policy_name = f"{core.policy}.hpp" if core.policy else ""
-            profiles.append(f"      npd::makeProfile<Stage_{s}, {validator}, {policy}>(CoreId::{pascal(core.stem)}, "
-                            f"{cpp_string(core.name)}, {cpp_list('npd::kStampInput' if arg < 0 else arg for arg in core.args)}, "
-                            f"{cpp_string(validator_name)}, "
-                            f"{cpp_string(policy_name)}),")
+            lines += [f"namespace core_{core.stem} {{",
+                      "std::shared_ptr<void> make(const Banks& banks, const npd::ParameterValues& parameters);"]
+            if core.parameters:
+                lines.append("std::shared_ptr<const void> loadParameters(const node_pipeline::ParamReader& params);")
+            lines += [f"npd::CoreProfile<Stage_{s}> profile();",
+                      "bool process(void* object, const npd::StageData& data, const std::int64_t& stamp_ns, npd::CoreResult& result);",
+                      f"}}  // namespace core_{core.stem}"]
+    lines.append("")
+    for core in cores:
+        lines += [f"struct Core_{core.stem} {{",
+                  "  using Type = std::shared_ptr<void>;",
+                  f"  static const char* name() {{ return {cpp_string(core.name)}; }}",
+                  f"  static Type make(const Banks& banks, const npd::ParameterValues& parameters) {{ return core_{core.stem}::make(banks, parameters); }}",
+                  "};", ""]
+
+    for s, stage in enumerate(model.stages):
         lines += [f"inline std::vector<npd::CoreProfile<Stage_{s}>> Stage_{s}::coreProfiles() {{", "  return {"]
-        lines += profiles
+        lines += [f"      core_{core.stem}::profile()," for core in stage.cores]
         lines += ["  };", "}", ""]
         if stage.cores:
-            stamp_parameter = "const std::int64_t& stamp_ns" if any(-1 in core.args for core in stage.cores) else "const std::int64_t&"
             lines.append(f"inline bool Stage_{s}::processCore(CoreSet& cores, CoreId id, const npd::StageData& data, "
-                         f"{stamp_parameter}, npd::CoreResult& result) {{")
-            lines.append(f"  const std::vector<int> origins = Stage_{s}::origins();")
+                         "const std::int64_t& stamp_ns, npd::CoreResult& result) {")
         else:
             lines.append(f"inline bool Stage_{s}::processCore(CoreSet&, CoreId id, const npd::StageData&, "
                          "const std::int64_t&, npd::CoreResult&) {")
         lines.append("  switch (id) {")
         for core in stage.cores:
-            arguments = ", ".join("stamp" if arg < 0 else f"data.message<{stage.slots[arg].type.cpp}>({arg})" for arg in core.args)
-            indices = ", ".join("npd::kStampInput" if arg < 0 else str(arg) for arg in core.args)
-            lines += [
-                f"    case CoreId::{pascal(core.stem)}: {{",
-                f"      static_assert(npd::requireProcessContract<::{package}::{pascal(core.stem)}, Stage_{s}, "
-                f"std::index_sequence<{indices}>>(), \"process() contract\");",
-                f"      const std::vector<std::size_t> required_{core.stem}{cpp_list(arg for arg in core.args if arg >= 0)};",
-                f"      const bool present = data.hasInputs(required_{core.stem});",
-                "      if (!present) return false;",
-                f"      auto& core = cores.{core.stem};",
-            ]
-            if -1 in core.args:
-                lines += ["      ros::Time stamp;", "      stamp.fromNSec(static_cast<std::uint64_t>(stamp_ns));"]
-            lines += [f"      auto value = core.process({arguments});",
-                "      result = npd::wrapResult(std::move(value), origins);",
-                "      break;",
-                "    }",
-            ]
-        lines += ["    default:", "      throw std::invalid_argument(\"unregistered core id\");", "  }", "  return true;", "}", ""]
+            lines.append(f"    case CoreId::{pascal(core.stem)}: return core_{core.stem}::process(cores.{core.stem}.get(), data, stamp_ns, result);")
+        lines += ["    default:", "      throw std::invalid_argument(\"unregistered core id\");", "  }", "}", ""]
 
-    loaders = [f"{{{cpp_string(core.name)}, &npd::loadErased<Core_{core.stem}>}}" for core in cores if core.parameters]
+    loaders = [f"{{{cpp_string(core.name)}, &core_{core.stem}::loadParameters}}" for core in cores if core.parameters]
     loaders += [f"{{{cpp_string(bank + '.hpp')}, &npd::loadErased<Bank_{bank}>}}" for bank in banks if model.bank_parameters.get(bank)]
     input_types = ", ".join(slot.type.cpp for slot in model.stages[0].slots)
     registry = ", ".join(f"{{{cpp_string(slot.name)}, {i}}}" for i, slot in enumerate(model.stages[0].slots))
@@ -572,6 +601,19 @@ def generate(model):
         "",
     ]
     return "\n".join(lines)
+
+
+def write_cores(model, cores_dir):
+    """Core별 번역 단위를 쓰고 더 이상 등록되지 않은 Core의 파일은 지운다."""
+    os.makedirs(cores_dir, exist_ok=True)
+    keep = set()
+    for s, stage in enumerate(model.stages):
+        for core in stage.cores:
+            keep.add(f"{core.stem}.cpp")
+            write_if_changed(os.path.join(cores_dir, f"{core.stem}.cpp"), generate_core(model, s, core))
+    for name in os.listdir(cores_dir):
+        if name.endswith(".cpp") and name not in keep:
+            os.remove(os.path.join(cores_dir, name))
 
 
 def write_if_changed(path, text):
@@ -608,6 +650,7 @@ def main():
     parser.add_argument("--node", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--config-copy", required=True)
+    parser.add_argument("--cores-dir", required=True)
     args = parser.parse_args()
     try:
         model = load_node(args.package_dir, args.package, args.node)
@@ -615,6 +658,7 @@ def main():
         print(f"node_pipeline: {error}", file=sys.stderr)
         return 1
     write_if_changed(args.output, generate(model))
+    write_cores(model, args.cores_dir)
     copy_config(args.package_dir, args.node, model, args.config_copy)
     return 0
 

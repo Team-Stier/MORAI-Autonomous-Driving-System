@@ -17,6 +17,10 @@
 생성 코드는 include·타입 목록·Core ID별 case·Core profile만 담는다. 객체 생성·설정 로드·Bank 주입은
 공통 실행기가 수행한다. 생성 파일은 빌드 디렉터리에만 두며 커밋하지 않는다.
 
+생성 코드는 노드당 `np_registry.hpp` 하나와 Core당 `cores/<core>.cpp` 하나다. `np_registry.hpp`는 입력·출력
+메시지와 Bank 타입만 포함하고 Core 객체는 타입을 지운 채 보관한다. Core·Validator·Policy·파라미터 헤더는
+그 Core의 `.cpp`만 포함하므로 Core 하나를 고치면 그 번역 단위만 다시 컴파일되고, Core들은 병렬로 컴파일된다.
+
 ## 실행 패키지 구성
 
 ```text

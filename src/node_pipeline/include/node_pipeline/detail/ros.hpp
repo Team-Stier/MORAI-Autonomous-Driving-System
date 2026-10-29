@@ -176,38 +176,23 @@ std::tuple<Stage<Schemas, CoreSet>...> makeStages(Types<Schemas...>, Fn&& fn) {
   return std::tuple<Stage<Schemas, CoreSet>...>{fn(TypeTag<Schemas>{})...};
 }
 
-// 설정 단계에서 읽은 파라미터 값으로 Bank와 Core 객체를 만든다. Core는 파라미터 값, Bank 참조 순서로 받는다.
-template<class Entry> const auto& parametersOf(const std::map<std::string, std::shared_ptr<const void>>& parameters) {
+// 설정 단계에서 읽은 파라미터 값으로 Bank와 Core 객체를 만든다. Core는 생성된 Core별 번역 단위가 타입을 지운 채 만든다.
+template<class Entry> const auto& parametersOf(const ParameterValues& parameters) {
   using Parameters = decltype(Entry::loadParameters(std::declval<const ParamReader&>()));
   return *static_cast<const Parameters*>(parameters.at(Entry::name()).get());
 }
-template<class Entry> std::shared_ptr<typename Entry::Type> makeBank(const std::map<std::string, std::shared_ptr<const void>>& parameters,
-                                                                     std::true_type) {
+template<class Entry> std::shared_ptr<typename Entry::Type> makeBank(const ParameterValues& parameters, std::true_type) {
   return std::make_shared<typename Entry::Type>(parametersOf<Entry>(parameters));
 }
-template<class Entry> std::shared_ptr<typename Entry::Type> makeBank(const std::map<std::string, std::shared_ptr<const void>>&,
-                                                                     std::false_type) {
+template<class Entry> std::shared_ptr<typename Entry::Type> makeBank(const ParameterValues&, std::false_type) {
   return std::make_shared<typename Entry::Type>();
 }
-template<class Entry, class Banks, class... Bank>
-typename Entry::Type makeCore(const Banks& banks, const std::map<std::string, std::shared_ptr<const void>>& parameters,
-                              std::true_type, Types<Bank...>) {
-  return typename Entry::Type(parametersOf<Entry>(parameters), *std::get<std::shared_ptr<Bank>>(banks)...);
-}
-template<class Entry, class Banks, class... Bank>
-typename Entry::Type makeCore(const Banks& banks, const std::map<std::string, std::shared_ptr<const void>>&, std::false_type,
-                              Types<Bank...>) {
-  static_cast<void>(banks);
-  return typename Entry::Type(*std::get<std::shared_ptr<Bank>>(banks)...);
-}
-// Bank와 Core 객체를 만들어 fn에 넘긴다. fn이 CoreSet{core objects}를 구성한다.
+// Bank와 Core 객체를 만들어 fn에 넘긴다. fn이 CoreSet{banks, core objects}를 구성한다.
 template<class... BankEntries, class... CoreEntries, class Fn>
-auto createCoreObjects(Types<BankEntries...>, Types<CoreEntries...>,
-                       const std::map<std::string, std::shared_ptr<const void>>& parameters, Fn&& fn) {
+auto createCoreObjects(Types<BankEntries...>, Types<CoreEntries...>, const ParameterValues& parameters, Fn&& fn) {
   const BankSet<typename BankEntries::Type...> banks{
       makeBank<BankEntries>(parameters, std::integral_constant<bool, BankEntries::has_parameters>{})...};
-  return fn(banks, makeCore<CoreEntries>(banks, parameters, std::integral_constant<bool, CoreEntries::has_parameters>{},
-                                         typename CoreEntries::Banks{})...);
+  return fn(banks, CoreEntries::make(banks, parameters)...);
 }
 
 template<class Message> struct RosIO {

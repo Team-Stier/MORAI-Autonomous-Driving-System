@@ -52,16 +52,23 @@ macro(np_add_nodes)
     set(_np_registry_dir "${_np_build_dir}/${_np_node}")
     # node.yaml·등록 YAML은 재빌드 때만 반영되도록 빌드 디렉터리 사본을 실행 시 읽는다.
     set(_np_config_copy "${_np_registry_dir}/config")
+    # Core마다 번역 단위를 하나씩 생성해 병렬 컴파일하고 TU당 메모리를 줄인다. 등록 YAML 하나가 Core 하나다.
+    set(_np_core_sources)
+    foreach(_np_registration ${_np_registrations})
+      get_filename_component(_np_core_stem "${_np_registration}" NAME_WE)
+      list(APPEND _np_core_sources "${_np_registry_dir}/cores/${_np_core_stem}.cpp")
+    endforeach()
     add_custom_command(
-      OUTPUT "${_np_registry_dir}/np_registry.hpp" "${_np_config_copy}/node.yaml"
+      OUTPUT "${_np_registry_dir}/np_registry.hpp" "${_np_config_copy}/node.yaml" ${_np_core_sources}
       COMMAND ${PYTHON_EXECUTABLE} "${node_pipeline_SCRIPTS_DIR}/np_generate.py"
         --package-dir "${_np_package_dir}" --package "${PROJECT_NAME}" --node "${_np_node}"
         --output "${_np_registry_dir}/np_registry.hpp" --config-copy "${_np_config_copy}"
+        --cores-dir "${_np_registry_dir}/cores"
       DEPENDS "${_np_node_file}" ${_np_registrations} ${_np_watched} "${node_pipeline_SCRIPTS_DIR}/np_generate.py"
       COMMENT "node_pipeline registry: ${PROJECT_NAME}/${_np_node}"
       VERBATIM)
-    add_executable(${_np_node}_node "${node_pipeline_MAIN_SOURCE}" "${_np_registry_dir}/np_registry.hpp"
-      "${_np_config_copy}/node.yaml")
+    add_executable(${_np_node}_node "${node_pipeline_MAIN_SOURCE}" ${_np_core_sources}
+      "${_np_registry_dir}/np_registry.hpp" "${_np_config_copy}/node.yaml")
     target_include_directories(${_np_node}_node PRIVATE "${_np_registry_dir}" "${_np_package_dir}/include"
       ${catkin_INCLUDE_DIRS} ${NP_INCLUDE_DIRS})
     target_compile_definitions(${_np_node}_node PRIVATE "NP_NODE_CONFIG_DIR=\"${_np_config_copy}\"")
