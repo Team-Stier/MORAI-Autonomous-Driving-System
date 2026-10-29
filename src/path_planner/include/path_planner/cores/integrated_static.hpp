@@ -6890,6 +6890,8 @@ struct IntegratedStaticTrajectoryParameters {
   double paint_release_m=0.,paint_release_lateral_m=2.,paint_release_speed_mps=1.;
   double borrow_width_m=0.,borrow_before_m=20.,borrow_after_m=12.;
   double start_snap_m=0.,detour_clearance_m=0.;
+  double static_zone_speed_mps=0.,static_zone_min_x_m=0.,static_zone_max_x_m=0.,static_zone_min_y_m=0.,
+      static_zone_max_y_m=0.,static_zone_approach_m=0.;
 };
 
 
@@ -7021,16 +7023,19 @@ class IntegratedTrajectory {
       // A passed box leaves the LiDAR view while the body is still beside it.
       // Stationary in-lane obstacles seen on earlier calls stay in the scene,
       // as anchors and as collision objects, until the vehicle is
-      // borrow_after_m past them.
+      // borrow_after_m past them. One that should be in view, ahead of the
+      // front bumper, but is not observed has moved away, such as a vehicle
+      // that waited at a stop line, and is dropped.
+      const integrated_native::Vec2 axis{std::cos(state.pose.yaw_rad),std::sin(state.pose.yaw_rad)};
       interfaces::Objects scene=objects;
       for(const auto& kept:remembered_) {
         bool seen=false;
         for(const auto& object:objects.objects)
           seen=seen || std::hypot(kept.position.x-object.position.x,kept.position.y-object.position.y)<2.;
-        if(!seen)scene.objects.push_back(kept);
+        const double ahead=(kept.position.x-state.pose.position.x)*axis.x+(kept.position.y-state.pose.position.y)*axis.y;
+        if(!seen && ahead<=p_.solver.vehicle.front_m+3.)scene.objects.push_back(kept);
       }
       const auto anchors=stationaryInLane(reference,scene);
-      const integrated_native::Vec2 axis{std::cos(state.pose.yaw_rad),std::sin(state.pose.yaw_rad)};
       remembered_.clear();
       for(const auto& anchor:anchors)
         if((anchor.center.x-state.pose.position.x)*axis.x+(anchor.center.y-state.pose.position.y)*axis.y>=-p_.borrow_after_m)
@@ -7522,6 +7527,8 @@ class IntegratedTrajectory {
  public:
   IntegratedStatic(IntegratedStaticParameters p,SharedMap& map):mission_parameters_(p.mission),
       dynamic_zone_speed_mps_(p.trajectory.dynamic_zone_speed_mps),dynamic_zone_approach_m_(p.trajectory.dynamic_zone_approach_m),
+      static_zone_{p.trajectory.static_zone_speed_mps,p.trajectory.static_zone_min_x_m,p.trajectory.static_zone_max_x_m,
+                   p.trajectory.static_zone_min_y_m,p.trajectory.static_zone_max_y_m,p.trajectory.static_zone_approach_m},
       trajectory_(p.trajectory,*map.map) {}
   const char* planningOutcome()const{return trajectory_.outcome();}
   std::string planningDiagnostics()const{return trajectory_.diagnostics();}
@@ -7537,12 +7544,21 @@ class IntegratedTrajectory {
     const double speed=std::abs(status.velocity_x_mps);
     const double detection=std::max(p.dynamic_zone_minimum_detection_m,speed*p.dynamic_zone_reaction_sec+
         speed*speed/(2*p.dynamic_zone_braking_mps2)+p.vehicle_front_m+p.stop_buffer_m);
+    // In the official static-obstacle box zone, and from static_zone_approach_m
+    // before it, the planned speed is capped so that a box first seen late
+    // (a small one appears about 20 m ahead) still leaves room to pass it.
+    const auto& z=static_zone_;
+    const bool static_zone=z.speed_mps>0 && q.x>=z.min_x_m && q.x<=z.max_x_m &&
+        q.y>=z.min_y_m-z.approach_m && q.y<=z.max_y_m;
+    double ceiling=approach?dynamic_zone_speed_mps_:std::numeric_limits<double>::infinity();
+    if(static_zone)ceiling=std::min(ceiling,z.speed_mps);
     return trajectory_.calculate(ego,status,objects,imu,route,predictions,stamp,
-        approach?dynamic_zone_speed_mps_:std::numeric_limits<double>::infinity(),inside,detection,p.dynamic_zone_clear_sec,p.avoidance_speed_mps);
+        ceiling,inside,detection,p.dynamic_zone_clear_sec,p.avoidance_speed_mps);
   }
  private:
   PathPlannerStaticMissionParameters mission_parameters_;
   double dynamic_zone_speed_mps_,dynamic_zone_approach_m_;
+  struct StaticZone {double speed_mps,min_x_m,max_x_m,min_y_m,max_y_m,approach_m;} static_zone_;
   IntegratedTrajectory trajectory_;
 };
 }
