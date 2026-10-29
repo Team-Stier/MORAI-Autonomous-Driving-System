@@ -68,7 +68,7 @@ bbox_fitting:
     "5": obb.hpp
     "6": obb.hpp
     "7": empty_objects.hpp
-    "8": obb.hpp
+    "8": guardrail_obb.hpp
     "9": viewpoint_bbox.hpp
     "10": obb.hpp
     "11": acquisition_bbox.hpp
