@@ -7300,6 +7300,14 @@ class IntegratedTrajectory {
             [&](const interfaces::Object& q){return q.id==input.id && q.velocity_available;});
         if(inferred!=future[0].objects.end())o.velocity_mps={inferred->velocity.x,inferred->velocity.y};
       }
+      // A vehicle-sized body moves along its long side: the sideways motion a
+      // partly seen box shows as its outline grows is dropped.
+      const bool vehicle=std::max(o.length_m,o.width_m)>parameters.vulnerable_length_m;
+      const double axis=o.pose.yaw_rad+(o.length_m>=o.width_m?0.:std::acos(0.));
+      if(vehicle) {
+        const double along=o.velocity_mps.x*std::cos(axis)+o.velocity_mps.y*std::sin(axis);
+        o.velocity_mps={along*std::cos(axis),along*std::sin(axis)};
+      }
       // Fragments of a partly seen static body carry false motion below this
       // speed: plan around them, and their forecasts, as standing still.
       const bool still=std::hypot(o.velocity_mps.x,o.velocity_mps.y)<parameters.still_speed_mps;
@@ -7313,6 +7321,11 @@ class IntegratedTrajectory {
         const auto found=std::find_if(future[i].objects.begin(),future[i].objects.end(),
             [&](const interfaces::Object& q){return q.id==input.id;});
         auto p=found==future[i].objects.end() || still?o:object(*found);
+        if(vehicle && !still) {
+          // Its forecast follows that axis from the observed pose.
+          p=o;const double t=.5*(i+1);
+          p.pose.position={o.pose.position.x+o.velocity_mps.x*t,o.pose.position.y+o.velocity_mps.y*t};
+        }
         p.source_stamp_sec=result.reference_stamp_sec;
         // The upstream solver models one rigid physical body. An enclosing
         // forecast OBB is uncertainty, not a different car at each time slice.

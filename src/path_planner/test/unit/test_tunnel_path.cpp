@@ -173,6 +173,23 @@ TEST(TunnelPath, PlansSlowFragmentsAsStandingStill) {
   }
 }
 
+TEST(TunnelPath, DropsSidewaysMotionOfVehicleSizedBody) {
+  // A box 5 x 2 m 15 m ahead half in our lane whose outline drifts 1.2 m/s across the road plans like a standing one.
+  Scene drifting(8.0), standing(8.0);
+  auto box = drifting.body(15.0, -1.8, 5.0, 2.0, 2.4);
+  box.velocity.x = -1.2 * std::sin(drifting.yaw_rad);
+  box.velocity.y = 1.2 * std::cos(drifting.yaw_rad);
+  const auto moved = drifting.plan({box});
+  const auto still = standing.plan({standing.body(15.0, -1.8, 5.0, 2.0, 2.4)});
+  ASSERT_GT(still.points.size(), 2u);
+  ASSERT_EQ(moved.points.size(), still.points.size());
+  for (std::size_t i = 0; i < still.points.size(); ++i) {
+    EXPECT_NEAR(moved.points[i].pose.pose.position.x, still.points[i].pose.pose.position.x, 1e-6);
+    EXPECT_NEAR(moved.points[i].pose.pose.position.y, still.points[i].pose.pose.position.y, 1e-6);
+    EXPECT_NEAR(moved.points[i].velocity, still.points[i].velocity, 1e-6);
+  }
+}
+
 TEST(TunnelPath, PassesPedestrianNoFasterThanPassSpeedUntilBumperIsBy) {
   Scene beside(4.0);
   const auto passing = beside.plan({beside.body(4.5, -2.3, 0.5, 0.5, 1.7)});
