@@ -1,0 +1,26 @@
+path_length_m: 50.0
+sample_step_m: 0.25
+primitive_length_m: 1.0
+grid_resolution_m: 0.5
+yaw_bins: 72
+max_expansions: 800
+max_steer_rad: 0.698132
+wheelbase_m: 3.0
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+collision_margin_m: 0.6
+road_margin_m: 0.05
+prediction_acceleration_mps2: 6.0
+emergency_deceleration_mps2: 6.0
+occupancy_history_sec: 0.8
+transition_lengths_m: [8.0, 12.0, 16.0]
+lateral_offsets_m: [0.0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5, -6.0, 6.0, -7.5]
+steering_candidates_deg: [-40, -30, -20, -10, 0, 10, 20, 30, 40]
+# Objects measured or forecast at least this fast are not avoided (the e-stop handles them).
+moving_object_speed_mps: 0.3
+# Tunnel walls: both tunnel lanes (3.5 m each, 7.0 m together; the GPS shadow is 7.42 m wide, so about 0.2 m of
+# shoulder each side). Inside them the ego box grown by wall_margin_m stays within shoulder_width_m of the lanes.
+tunnel_lanelet_ids: [102071, 104944]
+shoulder_width_m: 0.2
+wall_margin_m: 0.2
