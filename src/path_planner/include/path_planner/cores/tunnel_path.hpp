@@ -6974,13 +6974,18 @@ struct TunnelPathTrajectoryParameters {
   // Footprints up to this extent are treated as vulnerable road users whose
   // forecast body grows with prediction time, capped at the maximum.
   double vulnerable_extent_m=1.5,vulnerable_uncertainty_mps=.3,vulnerable_uncertainty_max_m=1.;
-  // A small body at least this tall within the reach beyond our side can step
-  // into the corridor at any time: approach it no faster than a speed from
-  // which a stop still fits, and pass it no faster than the pass speed.
-  double vulnerable_min_height_m=.3,vulnerable_reach_m=3.,vulnerable_pass_speed_mps=5.5,
-      vulnerable_deceleration_mps2=2.5;
+  // A pedestrian-shaped body (short side and long side within these limits;
+  // a walker's scan smears along its path) at least this tall within the reach
+  // beyond our side can step into the corridor at any time: approach it no
+  // faster than a speed from which a stop still fits, and pass it no faster
+  // than the pass speed.
+  double vulnerable_width_m=1.,vulnerable_length_m=2.5;
+  double vulnerable_min_height_m=.3,vulnerable_reach_m=3.,vulnerable_pass_speed_mps=4.5,
+      vulnerable_deceleration_mps2=2.;
   // LiDAR sees one face of a small body; plan around at least this footprint.
   double small_body_min_extent_m=.6;
+  // Bodies measured slower than this are planned as standing still.
+  double still_speed_mps=.9;
 };
 
 
@@ -7193,7 +7198,8 @@ class IntegratedTrajectory {
     }
     for(const auto& object:current.objects) {
       const double extent=std::max(object.bbox_size.x,object.bbox_size.y);
-      if(extent>p_.vulnerable_extent_m || object.bbox_size.z<p_.vulnerable_min_height_m)continue;
+      if(std::min(object.bbox_size.x,object.bbox_size.y)>p_.vulnerable_width_m || extent>p_.vulnerable_length_m ||
+          object.bbox_size.z<p_.vulnerable_min_height_m)continue;
       double nearest=std::numeric_limits<double>::infinity(),along=0,lateral=0;
       for(std::size_t i=1;i<reference.size();++i) {
         const auto a=reference[i-1].position,b=reference[i].position;const double dx=b.x-a.x,dy=b.y-a.y,length=std::hypot(dx,dy);
@@ -7283,6 +7289,10 @@ class IntegratedTrajectory {
             [&](const interfaces::Object& q){return q.id==input.id && q.velocity_available;});
         if(inferred!=future[0].objects.end())o.velocity_mps={inferred->velocity.x,inferred->velocity.y};
       }
+      // Fragments of a partly seen static body carry false motion below this
+      // speed: plan around them, and their forecasts, as standing still.
+      const bool still=std::hypot(o.velocity_mps.x,o.velocity_mps.y)<parameters.still_speed_mps;
+      if(still)o.velocity_mps={};
       if(std::max(o.length_m,o.width_m)<=parameters.vulnerable_extent_m) {
         o.length_m=std::max(o.length_m,parameters.small_body_min_extent_m);
         o.width_m=std::max(o.width_m,parameters.small_body_min_extent_m);
@@ -7291,7 +7301,7 @@ class IntegratedTrajectory {
       for(std::size_t i=0;i<10;++i) {
         const auto found=std::find_if(future[i].objects.begin(),future[i].objects.end(),
             [&](const interfaces::Object& q){return q.id==input.id;});
-        auto p=found==future[i].objects.end()?o:object(*found);
+        auto p=found==future[i].objects.end() || still?o:object(*found);
         p.source_stamp_sec=result.reference_stamp_sec;
         // The upstream solver models one rigid physical body. An enclosing
         // forecast OBB is uncertainty, not a different car at each time slice.

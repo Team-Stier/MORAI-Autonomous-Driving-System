@@ -123,9 +123,9 @@ TEST(TunnelPath, CapsSpeedThroughTunnel) {
 
 TEST(TunnelPath, ApproachesWalkwayPedestrianAtStoppableSpeed) {
   // A standing pedestrian 22 m ahead on the right walkway, 2.3 m right of our lane centre.
-  // Stop at 2.5 m/s^2 short of its near face (22 - 0.25 - 3.845 m) from at most sqrt(5.5^2 + 5 * 17.905) m/s.
+  // Stop at 2.0 m/s^2 short of its near face (22 - 0.25 - 3.845 m) from at most sqrt(4.5^2 + 4 * 17.905) m/s.
   Scene scene(9.0);
-  const double ceiling = std::sqrt(5.5 * 5.5 + 2 * 2.5 * (22.0 - 0.25 - 3.845008));
+  const double ceiling = std::sqrt(4.5 * 4.5 + 2 * 2.0 * (22.0 - 0.25 - 3.845008));
   const auto path = scene.plan({scene.body(22.0, -2.3, 0.5, 0.5, 1.7)});
   ASSERT_GT(path.points.size(), 2u);
   EXPECT_LE(maximumSpeed(path), ceiling + 1e-6);
@@ -155,16 +155,43 @@ TEST(TunnelPath, DoesNotHoldForBodyMovingAlongRoad) {
   EXPECT_STRNE(scene.core.planningOutcome(), "dynamic-zone-stop");
 }
 
+TEST(TunnelPath, PlansSlowFragmentsAsStandingStill) {
+  // A box fragment in our lane 15 m ahead whose box drifts 0.6 m/s along the road plans exactly like a standing one
+  // (not as a slow car to follow).
+  Scene drifting(8.0), standing(8.0);
+  auto fragment = drifting.body(15.0, -0.6, 2.0, 0.4, 2.4);
+  fragment.velocity.x = 0.6 * std::cos(drifting.yaw_rad);
+  fragment.velocity.y = 0.6 * std::sin(drifting.yaw_rad);
+  const auto moved = drifting.plan({fragment});
+  const auto still = standing.plan({standing.body(15.0, -0.6, 2.0, 0.4, 2.4)});
+  ASSERT_GT(still.points.size(), 2u);
+  ASSERT_EQ(moved.points.size(), still.points.size());
+  for (std::size_t i = 0; i < still.points.size(); ++i) {
+    EXPECT_NEAR(moved.points[i].pose.pose.position.x, still.points[i].pose.pose.position.x, 1e-6);
+    EXPECT_NEAR(moved.points[i].pose.pose.position.y, still.points[i].pose.pose.position.y, 1e-6);
+    EXPECT_NEAR(moved.points[i].velocity, still.points[i].velocity, 1e-6);
+  }
+}
+
 TEST(TunnelPath, PassesPedestrianNoFasterThanPassSpeedUntilBumperIsBy) {
-  Scene beside(5.0);
+  Scene beside(4.0);
   const auto passing = beside.plan({beside.body(4.5, -2.3, 0.5, 0.5, 1.7)});
   ASSERT_GT(passing.points.size(), 2u);
-  EXPECT_LE(maximumSpeed(passing), std::sqrt(5.5 * 5.5 + 2 * 2.5 * (4.5 - 0.25 - 3.845008)) + 1e-6);
+  EXPECT_LE(maximumSpeed(passing), std::sqrt(4.5 * 4.5 + 2 * 2.0 * (4.5 - 0.25 - 3.845008)) + 1e-6);
   // Once our bumper is past its near face the body no longer limits the speed.
-  Scene passed(5.0);
+  Scene passed(4.0);
   const auto after = passed.plan({passed.body(3.0, -2.3, 0.5, 0.5, 1.7)});
   ASSERT_GT(after.points.size(), 2u);
   EXPECT_GT(maximumSpeed(after), 6.5);
+}
+
+TEST(TunnelPath, CountsWalkerSmearedAlongItsPathAsPedestrian) {
+  // A walker's scan seen 1.8 m long and 0.35 m wide, 22 m ahead on the right walkway.
+  Scene scene(9.0);
+  const double ceiling = std::sqrt(4.5 * 4.5 + 2 * 2.0 * (22.0 - 0.9 - 3.845008));
+  const auto path = scene.plan({scene.body(22.0, -2.3, 1.8, 0.35, 1.7)});
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_LE(maximumSpeed(path), ceiling + 1e-6);
 }
 
 TEST(TunnelPath, IgnoresLowBodiesAndBodiesBeyondReach) {
