@@ -14,6 +14,7 @@
 # competition PC at ~1), so the stack runs on the simulator time instead: /use_sim_time true and WS's
 # e2e_driver sim_clock_node.py (/clock = tau estimated from /vehicle/competition_status speed and /sensors/gps/fix, both
 # stack inputs; ~state = [wall, tau, rho, n]). The bridge stamps receipts with ros::Time::now, so every node follows tau.
+# stacks.sh renodes n: restart stack n's nodes only (eval3.sh LAP_RESTART, before every lap after the first).
 # DRIVER=e2e: the old e2e_driver chain of WS.
 # E2E_FAKE_FOLLOW_ROUTE_M passes through (fake backend).
 # SYNC=1 (MORAI synchronous mode, eval_manager.py --sync): sync_clock_node.py instead of sim_clock (manager port
@@ -50,23 +51,31 @@ up1() {
   config "$n"
   [[ -e $d/stack.pid ]] && kill -0 "$(cat "$d/stack.pid")" 2>/dev/null && { echo "stack $n already up"; return; }
   if [[ $DRIVER == stack ]]; then
-  ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=$d/ros TMPDIR=$d/tmp MORAI_BRIDGE_CONFIG=$d/bridge.yaml \
-  ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT:-/opt/onnxruntime-gpu/1.19.2} VLP_PORT=$((2368 + off)) MASTER_PORT=$((11310 + n)) PKGS="$DRIVE_PKGS" \
-  SIM_CLOCK=${SIM_CLOCK:-1} HWS=$WS \
+  local env="ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=$d/ros TMPDIR=$d/tmp"
+  # nodes.sh: the competition nodes alone (renodes restarts them between laps; roscore, sim_clock and the recorders stay)
+  cat > "$d/nodes.sh" <<EOF
+export $env MORAI_BRIDGE_CONFIG=$d/bridge.yaml ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT:-/opt/onnxruntime-gpu/1.19.2}
+cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && source devel/setup.bash
+bash src/MORAI-UDP-Bridge-Node/launch.sh &
+roslaunch velodyne_pointcloud VLP16_points.launch port:=$((2368 + off)) &
+for p in $DRIVE_PKGS; do bash src/\$p/launch.sh & done
+wait
+EOF
+  env $env MASTER_PORT=$((11310 + n)) SIM_CLOCK=${SIM_CLOCK:-1} HWS=$WS \
   setsid taskset -c "${STACK_CPUS:-0-$(($(nproc) - 1))}" bash -c '
     cd "'"$DRIVE_WS"'" && source /opt/ros/noetic/setup.bash && source devel/setup.bash
     roscore -p $MASTER_PORT & for i in $(seq 100); do rosnode list > /dev/null 2>&1 && break; sleep 0.1; done
     if [[ $SIM_CLOCK == 1 ]]; then
       rosparam set /use_sim_time true
       (source "$HWS/devel/setup.bash" && exec rosrun e2e_driver sim_clock_node.py) &
-      for i in $(seq 100); do rostopic list 2> /dev/null | grep -q "^/clock$" && break; sleep 0.1; done
     fi
-    bash src/MORAI-UDP-Bridge-Node/launch.sh &
-    roslaunch velodyne_pointcloud VLP16_points.launch port:=$VLP_PORT &
-    for p in $PKGS; do bash src/$p/launch.sh & done
     wait' > "$d/stack.log" 2>&1 < /dev/null &
   echo $! > "$d/stack.pid"
-  echo "stack $n ($DRIVER $(cat "$DRIVE_WS/REF" 2> /dev/null)): master $((11310 + n)), udp +$off, log $d/stack.log"
+  (cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && env $env bash -c '
+    for i in $(seq 200); do rosnode list > /dev/null 2>&1 && break; sleep 0.1; done
+    [[ ${SIM_CLOCK:-1} == 1 ]] && for i in $(seq 200); do rostopic list 2> /dev/null | grep -q "^/clock$" && break; sleep 0.1; done')
+  nodes1 "$n"
+  echo "stack $n ($DRIVER $(cat "$DRIVE_WS/REF" 2> /dev/null)): master $((11310 + n)), udp +$off, log $d/stack.log, nodes $d/nodes.log"
   return
   fi
   # TMPDIR: the bridge writes its runtime config to $TMPDIR/morai-udp-bridge-<uid>.yaml, one name for every stack
@@ -87,8 +96,37 @@ up1() {
   echo "stack $n ($DRIVER): master $((11310 + n)), udp +$off, server $((47011 + (n - 1) * ${ENGINE_PORT_STEP:-0})), log $d/stack.log"
 }
 
+nodes1() {  # n: the competition nodes of stack n in a session of their own (pids in nodes.pids, log nodes.log)
+  local d=$R/$1
+  setsid taskset -c "${STACK_CPUS:-0-$(($(nproc) - 1))}" bash "$d/nodes.sh" >> "$d/nodes.log" 2>&1 < /dev/null &
+  echo $! >> "$d/nodes.pids"
+}
+
+nodesdown1() {
+  local d=$R/$1 w
+  [[ -e $d/nodes.pids ]] || return 0
+  for w in $(cat "$d/nodes.pids"); do pkill -INT -s "$w" 2> /dev/null; done
+  for i in $(seq 30); do alive=0; for w in $(cat "$d/nodes.pids"); do pgrep -s "$w" > /dev/null && alive=1; done; (( alive )) || break; sleep 0.5; done
+  for w in $(cat "$d/nodes.pids"); do pkill -KILL -s "$w" 2> /dev/null; done
+  rm -f "$d/nodes.pids"
+}
+
+renodes() {  # n: a fresh start of stack n's nodes between laps (the competition starts each run from a fresh stack;
+  # Cores keep state over a lap end, e.g. the highway mission's completed lane changes), then all nodes registered (2 min)
+  local n=$1 d=$R/$1 i l miss
+  touch "$d/restart.stamp"; nodesdown1 "$n"; nodes1 "$n"
+  for i in $(seq 60); do
+    l=$(cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) rosnode list 2> /dev/null); miss=
+    for x in morai_udp_bridge velodyne tf_publisher_node lidar_leveler_node localization_node section_annotator_node object_detector_node \
+             traffic_light_node path_planner_node velocity_planner_node control_node speed_filter_node; do echo "$l" | grep -q "$x" || miss+=" $x"; done
+    [[ -z $miss ]] && break; sleep 2
+  done
+  touch "$d/restart.stamp"; echo "stack $n nodes restarted${miss:+, missing$miss}"
+}
+
 down1() {
   local d=$R/$1
+  nodesdown1 "$1"
   [[ -e $d/stack.pid ]] || return 0
   local w; w=$(cat "$d/stack.pid")
   pkill -INT -s "$w" 2>/dev/null
@@ -101,5 +139,6 @@ case ${1:-} in
   up) for n in $(seq "${2:-3}"); do up1 "$n"; done ;;
   down) for d in "$R"/*/; do [[ -e $d/stack.pid ]] && down1 "$(basename "$d")"; done; true ;;
   config) config "$2"; cat "$R/$2/bridge.yaml" ;;
+  renodes) renodes "$2" ;;
   *) sed -n 2,8p "$0"; exit 1 ;;
 esac

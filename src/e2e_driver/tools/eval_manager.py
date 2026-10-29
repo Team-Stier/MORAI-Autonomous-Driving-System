@@ -701,6 +701,7 @@ def main():
     ap.add_argument("--max-s", type=float, default=0.0, help="end a lap after this many seconds of driving (0: off)")
     ap.add_argument("--start-cp", type=int, default=0, help="start each lap at checkpoint J (1-13; spawned before play, "
                     "returns, CP order and the start test go on from there; lap_s = from the first move to the end)")
+    ap.add_argument("--lap-hook", default="", help="shell command run before every lap after the first (the world paused)")
     ap.add_argument("--end-cp", type=int, default=0, help="end each lap when checkpoint K is passed (0: at the finish)")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
     a = ap.parse_args()
@@ -719,6 +720,10 @@ def main():
     k = a.first_lap
     try:
         while not a.laps or k < a.laps:
+            if a.lap_hook and k > a.first_lap:           # e.g. a fresh start of the stack's nodes (eval3.sh LAP_RESTART)
+                msc("pause")
+                r = subprocess.run(a.lap_hook, shell=True, capture_output=True, text=True, timeout=300)
+                print(f"lap hook before lap {k}: rc {r.returncode} {r.stdout.strip()[-200:]}", flush=True)
             mgr.run_lap(k)
             k += 1
     finally:

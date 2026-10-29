@@ -15,7 +15,9 @@
 # (--gather GATHER 0.1 s, --prep PREP process). SIMS: engine slots (N). Parts already up (worlds, stacks, an engine
 # from sync_bench.sh or an earlier KEEP_UP=1 run) are reused; KEEP_UP=1 leaves them up at the end (another wave).
 # CPU_LAYOUT=shared (SYNC default): worlds and stacks share all CPUs but the engine's 8, every world's camera spinners on 4 CPUs.
-# START_CP=J / END_CP=K: section laps (eval_manager --start-cp / --end-cp; lap_s from the first move at CP J to CP K).
+# LAP_RESTART=1 (DRIVER=stack default): the stack's nodes start afresh before every lap after the first (stacks.sh
+# renodes via eval_manager --lap-hook), as each competition run starts from a fresh stack; roscore, sim_clock and the
+# recorders stay. START_CP=J / END_CP=K: section laps (eval_manager --start-cp / --end-cp; lap_s from the first move at CP J to CP K).
 # DRIVER=stack (campaign default; DELIVER is ignored, give -): the competition stack of DRIVE_WS (stacks.sh, built by
 # drive_setup.sh) drives instead of e2e_driver + engine, on wall time (free run, SYNC=0 only). No engine; each stack's
 # /morai_udp_bridge/control_cmd is recorded (cmd_wN.csv, the first-steps signal) and the CPUs are split between the
@@ -132,9 +134,11 @@ for n in $(seq "$N"); do
   inrosn "$n" "exec rostopic echo -p /sim_clock/state" > "$O/clk_w$n.csv" 2> /dev/null < /dev/null &
   echo $! >> /root/actor/rec.pids
   fi
+  hook=(); [[ $DRIVER == stack && ${LAP_RESTART:-1} == 1 ]] && hook=(--lap-hook "bash $HERE/stacks.sh renodes $n")
   (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
     --port $((8094 + n)) --no-view --direct --host local --grpc 127.0.0.1:$((7788 + n)) --launcher "$(wdir "$n")/MoraiLauncher_Lin_Data" \
-    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" --start-cp "${START_CP:-0}" --end-cp "${END_CP:-0}" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
+    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" --start-cp "${START_CP:-0}" --end-cp "${END_CP:-0}" \
+    ${hook[@]+"${hook[@]}"} ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
   echo $! >> /root/actor/managers.pids
 done
 stamp "drives started ($N managers)"
@@ -168,6 +172,8 @@ done; touch "$OUT/LAPS_DELIVERED") &
   while pgrep -f "[e]val_manager.py eval_map" > /dev/null; do
     for n in $(seq "$N"); do
       log=/root/stack/$n/ros/log/latest/rosout.log
+      st=/root/stack/$n/restart.stamp   # LAP_RESTART: no window within 90 s of a node restart
+      [[ -e $st ]] && (( $(date +%s) - $(stat -c %Y "$st") < 90 )) && { echo "$(date +%T) w$n skipped (nodes restarted)" >> "$OUT/env_guard.log"; continue; }
       c0=$(wc -l < "$OUT/w$n/cmd_w$n.csv"); r0=$(grep -cE "WARN /(localization|lidar_leveler)_node .*Rejected" "$log" 2> /dev/null); t0=$(date +%s.%N)
       ego=$(WS=${DRIVE_WS:-$V/drive} inrosn "$n" "timeout 30 rostopic hz -w 200 /localization/ego 2>&1" | grep average | tail -1 | awk '{print $3}')
       c1=$(wc -l < "$OUT/w$n/cmd_w$n.csv"); r1=$(grep -cE "WARN /(localization|lidar_leveler)_node .*Rejected" "$log" 2> /dev/null); t1=$(date +%s.%N)
