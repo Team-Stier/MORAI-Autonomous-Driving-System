@@ -113,10 +113,10 @@ if [[ $DRIVER == stack ]]; then
     stamp "stack $n $(cat "${DRIVE_WS:-$V/drive}/BUILT" 2> /dev/null): ${miss:+missing$miss}${miss:-all nodes up}"
     # a node that registered but failed its startup waits without processing (no /traffic_light, laps judged as if it
     # ran): one fresh start of the nodes, then env-invalid like a missing node (a fresh pod is replaced)
-    sleep 15; bad=$(bash "$HERE/stacks.sh" startfail "$n" | tr '\n' ' ')
+    sleep 15; bad=$(bash "$HERE/stacks.sh" startfail "$n" 2> /dev/null | grep -xE '[a-z_]+' | tr '\n' ' ')
     if [[ -n $bad ]]; then
       stamp "stack $n startup failed: $bad- nodes restarted once ($(bash "$HERE/stacks.sh" renodes "$n" 2>&1 | tail -1))"
-      sleep 15; bad=$(bash "$HERE/stacks.sh" startfail "$n" | tr '\n' ' ')
+      sleep 15; bad=$(bash "$HERE/stacks.sh" startfail "$n" 2> /dev/null | grep -xE '[a-z_]+' | tr '\n' ' ')
       if [[ -n $bad ]]; then
         echo "w$n startup failed after a restart: $bad($(tac /root/stack/$n/nodes.log | grep -m1 -o 'startup failed; waiting without processing: .\{0,80\}')) at $(date +%T)" > "$OUT/ENV_INVALID"
         stamp "ENV_INVALID: $(cat "$OUT/ENV_INVALID")"; bash "$HERE/stacks.sh" down > /dev/null; exit 1
@@ -238,6 +238,12 @@ print(round(cmd,1), round(rpm), '-' if 27 <= cmd <= 33 else 'CMD_OUT_OF_30+-3', 
       # a node restart (LAP_RESTART) inside the window: its numbers are the restart's, not the environment's
       [[ -e $st ]] && (( $(stat -c %Y "$st") >= ${t0%.*} )) && { echo "$(date +%T) $line (discarded: nodes restarted in the window)" >> "$OUT/env_guard.log"; continue; }
       echo "$(date +%T) $line" >> "$OUT/env_guard.log"
+      # after the host check, one bad window is a warning and the second in a row ends the run (a single ego dip to
+      # 37.5 Hz at rho 1.00 ended an endless run, 10/29)
+      if [[ $bad == 1 && $(grep -cv "skipped\|discarded" "$OUT/env_guard.log") -gt 1 && ! -e $OUT/w$n/guard_warn ]]; then
+        touch "$OUT/w$n/guard_warn"; echo "$(date +%T) w$n warning: one bad window (two in a row end the run)" >> "$OUT/env_guard.log"; continue
+      fi
+      [[ $bad == 1 ]] || rm -f "$OUT/w$n/guard_warn"
       if [[ $bad == 1 ]]; then
         echo "$line at $(date +%T)" > "$OUT/ENV_INVALID"; stamp "ENV_INVALID: $(cat "$OUT/ENV_INVALID")"
         kill $(cat /root/actor/managers.pids) 2> /dev/null; break 2

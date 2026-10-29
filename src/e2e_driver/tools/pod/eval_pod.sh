@@ -228,6 +228,13 @@ P "grep -q 'setup.*done' /workspace/setup.\$(hostname).log" || { log "setup fail
 log "setup done"
 }
 M=/root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Version
+if [[ -n ${ATTACH:-} && -z $BRANCH && -z ${DELIVER_ONLY:-} ]]; then   # the harness of this host on an attached pod (its
+  # copy is from its setup or last BRANCH deploy: eval3.sh and stacks.sh of different days failed every run, dynamic 10/29)
+  rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ \
+    "$REPO/src/e2e_driver/tools/" pod:/workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/ &&
+  rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/ &&
+    log "harness synced" || { log "harness sync failed"; exit 1; }
+fi
 if [[ ${ACCOUNT:-0} == 1 ]]; then   # the account after the boot: as setup.sh would have unpacked it
   scp -q -F "$SSHC" ~/.morai-secrets/V2AccountInfo.byte pod:$M/ && P "mkdir -p /workspace/morai" &&
     scp -q -F "$SSHC" ~/.morai-secrets/config.tar pod:/workspace/morai/config.tar && P "tar -xf /workspace/morai/config.tar -C /root/.config && \
