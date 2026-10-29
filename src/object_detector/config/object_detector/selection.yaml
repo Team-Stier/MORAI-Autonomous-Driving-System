@@ -15,7 +15,7 @@ roi:
     "12": highway_road_roi.hpp
     "13": highway_road_roi.hpp
     "14": road_roi.hpp
-    "15": road_roi.hpp
+    "15": tunnel_road_roi.hpp
     "16": road_roi.hpp
   health_core_map: []
 clustering:

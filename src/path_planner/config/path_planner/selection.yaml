@@ -73,13 +73,13 @@ local:
     '5': integrated_static.hpp
     '6': integrated_dynamic.hpp
     '7': integrated_path.hpp
-    '8': integrated_final_circle.hpp
-    '9': integrated_roundabout.hpp
+    '8': roundabout_approach.hpp
+    '9': roundabout_rolling_entry.hpp
     '10': integrated_highway_approach.hpp
     '11': integrated_highway.hpp
     '12': integrated_highway.hpp
     '13': integrated_highway.hpp
     '14': integrated_dynamic.hpp
-    '15': integrated_path.hpp
+    '15': tunnel_path.hpp
     '16': integrated_final_circle.hpp
   health_core_map: []

@@ -1,0 +1,97 @@
+dynamic_zone_enabled: true
+dynamic_zone_min_x_m: -90.0
+dynamic_zone_max_x_m: 65.0
+dynamic_zone_min_y_m: -560.0
+dynamic_zone_max_y_m: -450.0
+# Emergency hold envelope only; future conflicts are timed by the solver.
+dynamic_zone_minimum_detection_m: 8.0
+dynamic_zone_reaction_sec: 0.3
+dynamic_zone_braking_mps2: 6.0
+dynamic_zone_clear_sec: 0.3
+use_boundary_midpoint_centerline: false
+centerline_step_m: 0.25
+local_path_length_m: 180
+sample_step_m: 0.5
+wheelbase_m: 3.0
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+collision_margin_m: 0.25
+static_speed_mps: 0.3
+dynamic_speed_mps: 0.8
+dynamic_confirmation_sec: 0.3
+static_confirmation_sec: 0.5
+track_expiry_sec: 1.0
+dynamic_prediction_sec: 3.0
+avoidance_speed_mps: 6.0
+maximum_lateral_acceleration_mps2: 1.5
+avoidance_lead_m: 2.0
+transition_length_m: 10.0
+return_transition_length_m: 14.0
+maximum_curvature_per_m: 0.25
+maximum_lane_offset_m: 6.0
+maximum_join_gap_m: 1.5
+completion_lateral_m: 0.35
+completion_heading_rad: 0.2
+stop_buffer_m: 2.0
+stopping_deceleration_mps2: 2.0
+refined_curve_lanelet_ids:
+- 98417
+- 101861
+refined_curve_right_bias_m: 0.0
+reference_smoothing_enabled: true
+integrated_speed_beam_width: 64
+integrated_recovery_speed_beam_width: 128
+integrated_qp_iterations: 300
+integrated_reference_weight: 12.0
+integrated_previous_weight: 0.5
+integrated_corridor_half_width_m: 1.8
+integrated_horizon_sec: 5.0
+# 59 km/h: stay below the 60 km/h penalty; control keeps its 60 km/h guard as a safety net.
+integrated_maximum_speed_mps: 16.38888888888889
+integrated_maximum_lateral_acceleration_mps2: 5.5
+integrated_preferred_lateral_acceleration_mps2: 2.8
+integrated_following_gap_m: 1.5
+integrated_following_headway_sec: 0.8
+# 45 km/h through section 15; the zone box covers the whole section.
+integrated_dynamic_zone_speed_mps: 12.5
+integrated_dynamic_zone_approach_m: 30.0
+# Hold only for a body measured crossing the road at least this fast inside the stopping envelope.
+integrated_dynamic_zone_moving_speed_mps: 0.8
+# Footprints up to 1.5 m are small bodies; their forecasts do not grow (box fragments seen at 3.4 Hz carry false motion).
+integrated_vulnerable_extent_m: 1.5
+integrated_vulnerable_uncertainty_mps: 0.0
+integrated_vulnerable_uncertainty_max_m: 1.0
+integrated_interaction_speed_searches: 12
+
+# Replan only after nominal 5 m/s^2, 4 m/s^3 dynamics have no solution.
+integrated_recovery_deceleration_mps2: 8.0
+integrated_recovery_jerk_mps3: 8.0
+
+# Steering delay plus settling allowance; measured departures after nominal failure only.
+integrated_recovery_reentry_response_sec: 0.3
+integrated_recovery_lateral_acceleration_mps2: 6.0
+
+# Publish the full optimized geometry separately from the timed trajectory.
+integrated_publish_lateral_reference: true
+# Source curvature preview sets a preferred speed; native v/a/time stays continuous.
+integrated_curve_preview_m: 45.0
+integrated_curve_spacing_m: 2.0
+integrated_curve_deceleration_mps2: 1.7
+integrated_minimum_curve_speed_mps: 4.166666666666667
+
+# Keep the optimized curve close to the Lanelet reference.
+integrated_reference_piece_m: 7.5
+integrated_road_margin_m: 0.05
+# Pedestrian-shaped bodies (short side at most 1.0 m, long side at most 2.5 m, at least 0.3 m tall) within 3 m
+# beyond our side: approach at most at the speed that stops at 2.0 m/s^2 short of them, pass at 4.5 m/s.
+tunnel_vulnerable_width_m: 1.0
+tunnel_vulnerable_length_m: 2.5
+tunnel_vulnerable_min_height_m: 0.3
+tunnel_vulnerable_reach_m: 3.0
+tunnel_vulnerable_pass_speed_mps: 4.5
+tunnel_vulnerable_deceleration_mps2: 2.0
+# Plan around small bodies with at least a 0.6 m footprint.
+tunnel_small_body_min_extent_m: 0.6
+# Box fragments seen at 3.4 Hz carry 0.2-0.8 m/s of false motion: plan bodies slower than 0.9 m/s as standing still.
+tunnel_still_speed_mps: 0.9

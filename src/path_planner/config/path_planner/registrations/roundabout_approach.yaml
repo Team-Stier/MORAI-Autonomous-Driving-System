@@ -1,0 +1,10 @@
+stage: local
+inputs:
+- ego
+- competition
+- objects
+- route
+validator: inputs.hpp
+policy: remove_invalid.hpp
+bank: shared_map.hpp
+allowed_issues: {}

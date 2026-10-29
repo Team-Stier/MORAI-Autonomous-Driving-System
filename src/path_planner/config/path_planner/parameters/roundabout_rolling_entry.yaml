@@ -1,0 +1,77 @@
+# Geometry comes only from the active Lanelet2 map, CP9 approach through CP10 exit.
+map_file: ../map/kcity_lanelet2_final_circle.osm
+reference_lanelet_ids: [101013, 108759, 110234, 110255, 110325, 110261, 110266, 110022, 110031, 110043, 110051]
+stop_line_id: 11921
+departure_lanelet_id: 110261
+reference_before_entry_m: 65.0
+reference_after_entry_m: 100.0
+control_step_m: 2.0
+integration_step_m: 0.05
+sample_step_m: 0.25
+local_path_length_m: 40.0
+# Traffic speed planning, all speed values are m/s.
+desired_speed_mps: 6.0
+max_acceleration_mps2: 2.0
+max_deceleration_mps2: 4.0
+max_jerk_mps3: 4.0
+max_lateral_acceleration_mps2: 3.0
+time_step_sec: 0.25
+command_step_sec: 0.8
+beam_width: 32
+collision_margin_m: 0.7
+prediction_uncertainty_mps: 0.2
+following_time_gap_sec: 0.8
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+# OSM stop line 11921, rear-axle target = line - front extent - margin.
+entry_stop_margin_m: 0.8
+entry_decision_distance_m: 2.0
+# Check the crossing conflict beyond the yield target within the available forecast.
+entry_check_length_m: 8.0
+entry_gap_confirmation_sec: 0.15
+approach_speed_mps: 3.0
+# Approach-time gap check also clears an entry started this much later (vehicle response).
+rolling_response_sec: 0.5
+# Rolling entry is accepted only within this rear-axle distance before the yield target.
+rolling_accept_distance_m: 6.0
+# Entry is committed only after the front passes the stop line by this distance; a short roll does not commit.
+commit_past_line_m: 1.0
+# Executed launch after an at-rest entry: moves 0.32-0.54 s after the decision, then ~3.6 m/s^2
+# (5.3 m after 2.1 s). An at-rest entry clears the slow and the fast bound (the slow one uses
+# command_step_sec); a rolling entry also clears the fast bound from its current speed.
+slow_launch_response_sec: 0.55
+slow_launch_acceleration_mps2: 3.2
+slow_launch_jerk_mps3: 12.0
+fast_launch_response_sec: 0.15
+fast_launch_acceleration_mps2: 4.0
+fast_launch_jerk_mps3: 12.0
+fast_launch_command_step_sec: 0.4
+# Same-direction traffic behind the ego (a ring car after the merge) keeps this time gap at its own speed.
+rear_time_gap_sec: 0.6
+# Dense ring traffic (e.g. 3.6 s spawn period at 12 km/h) leaves no gap for the band above. After
+# patience_sec at the yield target (0 never), only the planned launch after relaxed_launch_response_sec
+# is checked, without the fast bound and the rear gap. 8 s cost 31-64 s more waiting in 41004, 41007
+# and 57003 than the v3 at-rest check, which collided about once per 8-12 laps.
+patience_sec: 3.0
+relaxed_launch_response_sec: 0.8
+# Ring conflict zone: upstream ring lanelets in driving order and the merged ring lanelet.
+# Objects arriving at the merge within conflict_clear_sec (speed at least the floor) block entry;
+# objects that stayed within stationary_displacement_m for stationary_confirmation_sec do not.
+# conflict_clear_sec 0 disables the zone check.
+conflict_lanelet_ids: [110846, 110850, 110866, 110203]
+conflict_downstream_lanelet_id: 110223
+conflict_downstream_m: 6.0
+conflict_zone_half_width_m: 2.5
+conflict_margin_m: 3.0
+conflict_speed_floor_mps: 4.0
+conflict_clear_sec: 0.0
+stationary_confirmation_sec: 3.0
+stationary_displacement_m: 1.0
+# Reserve lateral tracking margin for the speed controller on curved geometry.
+curve_speed_ratio: 0.90
+
+# Search horizon; the 10 prediction frames still cover 0.5 through 5.0 s.
+planning_horizon_sec: 3.0
+
+# A cleared launch remains committed; following traffic sets the speed afterward.

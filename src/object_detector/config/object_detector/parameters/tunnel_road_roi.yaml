@@ -1,0 +1,17 @@
+map_file: ../map/kcity_lanelet2_final_circle.osm
+forward_distance_m: 55.0
+left_inflation_m: 0.0
+right_inflation_m: 0.0
+z_min_m: -2.0
+z_max_m: 3.0
+# Tunnel axis and walls (localization tunnel_wall geometry).
+tunnel_origin_x_m: -23.5
+tunnel_origin_y_m: -519.2000122070312
+tunnel_axis_yaw_rad: -2.6434409392630127
+tunnel_min_station_m: -58.61842773450474
+tunnel_max_station_m: 58.61843533549703
+tunnel_left_wall_m: 5.995789344373857
+tunnel_right_wall_m: -6.01444403868076
+# Walkway points between the walls less 1.0 m, from 0.22 m above the road (base_link 0.37 m above it).
+wall_clearance_m: 1.0
+walkway_min_z_m: -0.15
