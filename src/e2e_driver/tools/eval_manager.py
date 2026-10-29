@@ -490,6 +490,13 @@ class Manager:
         if self.a.end_cp:
             lap["end_cp"] = self.a.end_cp
         self.weather(lap, seed, j0, 0.0)
+        if self.a.lap_hook and k > self.a.first_lap:
+            # e.g. a fresh start of the stack's nodes (eval3.sh LAP_RESTART), with the world paused at this lap's start
+            # pose: nodes started before the scene load / --start-cp spawn saw the old lap's end and transient poses (a
+            # fresh global Stage kept a route from one, worker-highway 10/29)
+            r = subprocess.run(self.a.lap_hook, shell=True, capture_output=True, text=True, timeout=300)
+            lap["lap_hook"] = dict(rc=r.returncode, out=r.stdout.strip()[-200:])
+            print(f"lap hook before lap {k}: rc {r.returncode} {r.stdout.strip()[-200:]}", flush=True)
         if self.a.sync:
             lap["sync"] = dict(mode=self.set_sync(True), tick_ms=self.a.tick_ms, serial=self.a.serial, k0=self.k)
         played = threading.Event()                      # MSC confirms play 1-15 s late (10/26): record from the paused START on
@@ -720,10 +727,6 @@ def main():
     k = a.first_lap
     try:
         while not a.laps or k < a.laps:
-            if a.lap_hook and k > a.first_lap:           # e.g. a fresh start of the stack's nodes (eval3.sh LAP_RESTART)
-                msc("pause")
-                r = subprocess.run(a.lap_hook, shell=True, capture_output=True, text=True, timeout=300)
-                print(f"lap hook before lap {k}: rc {r.returncode} {r.stdout.strip()[-200:]}", flush=True)
             mgr.run_lap(k)
             k += 1
     finally:
