@@ -266,3 +266,12 @@ TEST(IntegratedDynamic, SectionTwoCurveApexSpeed) {
   for (const auto& point : path.points) minimum = std::min(minimum, point.velocity);
   EXPECT_GT(minimum, 7.0);
 }
+
+// Stopped at the section 2 checkpoint (start of the radius-13 m left curve) with the body
+// turned 0.25 rad toward the outer edge, as after a curb strike or a return: the plan drives on.
+TEST(IntegratedDynamic, StoppedOffHeadingInCurveDrivesOn) {
+  Scene scene;
+  scene.place(-96.34, -364.89, 1.118 - 0.25, 0.0, 2);
+  const auto path = scene.plan({});
+  EXPECT_GT(maximumSpeed(path), 1.0);
+}
