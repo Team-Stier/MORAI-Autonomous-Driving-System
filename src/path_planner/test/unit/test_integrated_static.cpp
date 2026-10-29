@@ -36,6 +36,8 @@ struct Scene {
   path_planner::Route route;
   ros::Time stamp{100.0};
 
+  Scene() { ros::Time::init(); }  // throttled planner warnings read the clock
+
   // Puts the vehicle at (x, y) with yaw and speed; checkpoints from row 4 (CP4) remain.
   void place(double x, double y, double yaw_rad, double speed_mps) {
     ego.header.stamp = stamp;
@@ -83,6 +85,31 @@ struct Scene {
       best = std::min(best, lanelet::geometry::distance2d(lane.centerline2d(), lanelet::BasicPoint2d(x, y)));
     return best;
   }
+  // Gap from (x, y) to the nearest marked (non-virtual) bound of the route lanelet closest to it.
+  double markedGap(double x, double y) const {
+    const lanelet::BasicPoint2d point(x, y);
+    double nearest = std::numeric_limits<double>::infinity(), gap = std::numeric_limits<double>::infinity();
+    for (const auto& lane : *route) {
+      const double d = lanelet::geometry::distance2d(lane.centerline2d(), point);
+      if (d >= nearest) continue;
+      nearest = d;
+      gap = std::numeric_limits<double>::infinity();
+      for (const auto& bound : {lane.leftBound2d(), lane.rightBound2d()})
+        if (bound.attributeOr(lanelet::AttributeName::Type, "") != std::string("virtual"))
+          gap = std::min(gap, lanelet::geometry::distance2d(bound, point));
+    }
+    return gap;
+  }
+  // Path length on which the body (half width 1.08 m) touches a marked bound of the route lane.
+  double touching(const path_planner::Message& path) const {
+    double length = 0;
+    for (std::size_t i = 1; i < path.lateral_reference.size(); ++i) {
+      const auto& a = path.lateral_reference[i - 1].position;
+      const auto& b = path.lateral_reference[i].position;
+      if (markedGap(b.x, b.y) < 1.08) length += std::hypot(b.x - a.x, b.y - a.y);
+    }
+    return length;
+  }
 };
 
 double speedAhead(const path_planner::Message& path, const nav_msgs::Odometry& ego, double distance_m) {
@@ -120,29 +147,46 @@ TEST(IntegratedStatic, CheckpointReturnRestartsPlanning) {
   EXPECT_GT(fastest, 1.0);
 }
 
-TEST(IntegratedStatic, PassesInLaneBoxAndReturnsWithinShortCrossing) {
+// Plans from (start_x, start_y, start_yaw_rad) at 5 m/s past one box and checks
+// that the timed path reaches beside it, that the body touches a marked line of
+// the route lane for less than 3 s at 5.56 m/s and that it is back near the
+// centre within 20 m.
+void expectPass(double box_x, double box_y, bool passes_left, double start_x = -59.9, double start_y = -158.0,
+                double start_yaw_rad = M_PI / 2) {
   Scene scene;
-  // Scenario box 40100004 (0.56 m) right of the lane centre, 1.5-17 m past stop line 6254.
-  scene.place(-59.9, -158.0, M_PI / 2, 5.0);
-  scene.addBox(-59.05, -143.32, 0.56);
+  scene.place(start_x, start_y, start_yaw_rad, 5.0);
+  scene.addBox(box_x, box_y, 0.56);
   const auto path = scene.plan();
   ASSERT_GT(path.points.size(), 2u);
   ASSERT_FALSE(path.lateral_reference.empty());
   double farthest = -1e9;
   for (const auto& point : path.points) farthest = std::max(farthest, point.pose.pose.position.y);
-  EXPECT_GT(farthest, -143.32);  // the timed path reaches beside the box
-  // The body (half width 1.08 m) is over a painted line while its centre is
-  // more than 0.42 m off the 3.0 m lane centre; keep that below 3 s at 5.56 m/s.
-  double crossing = 0, returned_y = std::numeric_limits<double>::infinity();
-  for (std::size_t i = 1; i < path.lateral_reference.size(); ++i) {
-    const auto& a = path.lateral_reference[i - 1].position;
-    const auto& b = path.lateral_reference[i].position;
-    if (scene.offset(b.x, b.y) > 0.42) crossing += std::hypot(b.x - a.x, b.y - a.y);
-    if (b.y > -143.32 && scene.offset(b.x, b.y) < 0.3) returned_y = std::min(returned_y, b.y);
+  EXPECT_GT(farthest, box_y);  // the timed path reaches beside the box
+  double returned_y = std::numeric_limits<double>::infinity(), side = 0;
+  for (const auto& pose : path.lateral_reference) {
+    const auto& b = pose.position;
+    if (std::abs(b.y - box_y) < 1.0) side = b.x - box_x;
+    if (b.y > box_y && scene.offset(b.x, b.y) < 0.3) returned_y = std::min(returned_y, b.y);
   }
-  EXPECT_GT(crossing, 0.0);
-  EXPECT_LT(crossing, 16.0);
-  EXPECT_LT(returned_y, -143.32 + 20.0);  // back in the lane within 20 m past the box
+  EXPECT_EQ(passes_left, side < 0);  // north-bound: smaller x is the left
+  EXPECT_LT(scene.touching(path), 16.0);
+  EXPECT_LT(returned_y, box_y + 20.0);
+}
+
+TEST(IntegratedStatic, PassesInLaneBoxAndReturnsWithinShortCrossing) {
+  // Scenario box 40100004 (0.56 m) right of the lane centre, 15 m past stop line 6254 in the intersection.
+  expectPass(-59.05, -143.32, true);
+}
+
+TEST(IntegratedStatic, PassesBoxLeftOfCentreOnTheRight) {
+  // Scenario box 40100002 left of the lane centre.
+  expectPass(-60.41, -142.14, false);
+}
+
+TEST(IntegratedStatic, PassesBoxRightOfCentreAtZoneStart) {
+  // Earliest scenario station (s 319): 9 m past the stop line, met from the
+  // 3.0 m lane centre 20 m before it.
+  expectPass(-59.1, -152.0, true, -60.93, -171.5, 84.8 * M_PI / 180);
 }
 
 TEST(IntegratedStatic, MovingBodyInLaneReleasesNoPaint) {

@@ -6888,6 +6888,7 @@ struct IntegratedStaticTrajectoryParameters {
   double recovery_lateral_acceleration_mps2=6.;
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
   double paint_release_m=0.,paint_release_lateral_m=2.,paint_release_speed_mps=1.;
+  double borrow_width_m=0.,borrow_before_m=20.,borrow_after_m=12.;
 };
 
 
@@ -6900,7 +6901,7 @@ class IntegratedTrajectory {
  public:
   IntegratedTrajectory(IntegratedStaticTrajectoryParameters p,const lanelet::LaneletMap& map)
       : p_(std::move(p)),solver_(p_.solver,map),recovery_solver_(solver_,recoveryParameters(p_)),
-        initial_solver_(solver_),initial_recovery_solver_(recovery_solver_),active_paint_(p_.solver.physical_boundaries) {}
+        initial_solver_(solver_),initial_recovery_solver_(recovery_solver_),active_paint_(p_.solver.physical_boundaries),map_(&map) {}
   const char* outcome()const{return outcome_;}
   std::string diagnostics()const{return used_recovery_ ? "dynamics-recovery "+recovery_solver_.diagnostics():solver_.diagnostics();}
   Message calculate(const nav_msgs::Odometry& ego,const interfaces::CompetitionVehicleStatus& status,
@@ -7016,14 +7017,18 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
-      releasePaint(reference,objects);
+      releasePaint(stationaryInLane(reference,objects));
       auto native=convert(objects,predictions,reference);
 
       // Search/track the smooth target, but construct road permission from
       // the original map supports. Reference fitting must not change road area.
       auto physical_reference=solver_.mapReference(state,planning_route,false);
-      const auto coverage=physicalCorridor(physical_reference);
+      auto coverage=physicalCorridor(physical_reference);
       physicalCorridor(reference);
+      if(!dynamic_zone) {
+        borrowLanes(physical_reference,stationaryInLane(physical_reference,objects),&coverage);
+        borrowLanes(reference,stationaryInLane(reference,objects),nullptr);
+      }
 
       integrated_native::PlanningConstraints limits;
       limits.maximum_speed_mps=std::min(p_.solver.max_speed_mps,ceiling);
@@ -7070,24 +7075,39 @@ class IntegratedTrajectory {
     }
   }
  private:
-  // Paint segments within paint_release_m of a stationary obstacle lying
-  // inside the route lane leave the hard paint set, so the body may cross the
-  // line while it passes. A moving body, such as a slower leading vehicle,
-  // releases nothing. Every other segment, and all collision checks, stay hard.
-  void releasePaint(const std::vector<integrated_native::ReferencePoint>& reference,const interfaces::Objects& objects) {
-    std::vector<integrated_native::Vec2> centers;
-    if(p_.paint_release_m>0)for(const auto& object:objects.objects) {
+  // A stationary obstacle lying inside the route lane: its centre, station
+  // along the reference and signed lateral offset (left positive). A moving
+  // body, such as a slower leading vehicle, is not one.
+  struct Anchor {integrated_native::Vec2 center;double station_m,lateral_m;};
+  std::vector<Anchor> stationaryInLane(const std::vector<integrated_native::ReferencePoint>& reference,
+      const interfaces::Objects& objects) const {
+    std::vector<Anchor> anchors;
+    for(const auto& object:objects.objects) {
       if(object.velocity_available && std::hypot(object.velocity.x,object.velocity.y)>=p_.paint_release_speed_mps)continue;
       const integrated_native::Vec2 c{object.position.x,object.position.y};
-      double lateral=std::numeric_limits<double>::infinity();
-      for(std::size_t i=1;i<reference.size();++i)
-        lateral=std::min(lateral,segmentDistance(c,reference[i-1].position,reference[i].position));
-      if(lateral<=p_.paint_release_lateral_m)centers.push_back(c);
+      Anchor best{c,0,std::numeric_limits<double>::infinity()};double station=0;
+      for(std::size_t i=1;i<reference.size();++i) {
+        const auto a=reference[i-1].position,b=reference[i].position;
+        const double dx=b.x-a.x,dy=b.y-a.y,length=std::hypot(dx,dy);
+        if(length<1e-9)continue;
+        const double u=std::max(0.,std::min(1.,((c.x-a.x)*dx+(c.y-a.y)*dy)/(length*length)));
+        const double ex=c.x-a.x-u*dx,ey=c.y-a.y-u*dy,distance=std::hypot(ex,ey);
+        if(distance<std::abs(best.lateral_m))best={c,station+u*length,dx*ey-dy*ex<0?-distance:distance};
+        station+=length;
+      }
+      if(std::abs(best.lateral_m)<=p_.paint_release_lateral_m)anchors.push_back(best);
     }
+    return anchors;
+  }
+  // Paint segments within paint_release_m of a stationary obstacle lying
+  // inside the route lane leave the hard paint set, so the body may cross the
+  // line while it passes. Every other segment, and all collision checks, stay hard.
+  void releasePaint(const std::vector<Anchor>& anchors) {
     std::vector<bool> released;
     for(const auto& line:p_.solver.physical_boundaries)for(std::size_t j=1;j<line.size();++j) {
       bool near=false;
-      for(const auto& c:centers)near=near || segmentDistance(c,line[j-1],line[j])<p_.paint_release_m;
+      if(p_.paint_release_m>0)for(const auto& anchor:anchors)
+        near=near || segmentDistance(anchor.center,line[j-1],line[j])<p_.paint_release_m;
       released.push_back(near);
     }
     if(released==released_)return;
@@ -7105,7 +7125,87 @@ class IntegratedTrajectory {
     }
     solver_.setActivePaint(active_paint_);recovery_solver_.setActivePaint(active_paint_);
     if(std::find(released.begin(),released.end(),true)!=released.end())
-      ROS_INFO("[native planner] paint released near %zu in-lane objects",centers.size());
+      ROS_INFO("[native planner] paint released near %zu in-lane objects",anchors.size());
+  }
+  // From borrow_before_m ahead of a stationary in-lane obstacle to
+  // borrow_after_m past it, the corridor bound on the obstacle's free side
+  // moves out over contiguous map lanelet area of any direction, at most
+  // borrow_width_m, and stops before hard paint. The road patch of covered
+  // points follows the bound, so the body may pass through the lane beside
+  // the obstacle. Object collision checks are unchanged.
+  void borrowLanes(std::vector<integrated_native::ReferencePoint>& reference,const std::vector<Anchor>& anchors,
+      std::vector<bool>* covered) {
+    if(p_.borrow_width_m<=0 || anchors.empty() || reference.size()<2)return;
+    loadBorrowArea(anchors);
+    constexpr double step=.2;
+    double station=0;
+    for(std::size_t i=0;i<reference.size();++i) {
+      if(i)station+=std::hypot(reference[i].position.x-reference[i-1].position.x,reference[i].position.y-reference[i-1].position.y);
+      bool left=false,right=false;
+      for(const auto& anchor:anchors)
+        if(station>=anchor.station_m-p_.borrow_before_m && station<=anchor.station_m+p_.borrow_after_m)
+          (anchor.lateral_m<0?left:right)=true;
+      if(!left && !right)continue;
+      const auto& a=reference[i==0?0:i-1].position;
+      const auto& b=reference[i+1<reference.size()?i+1:i].position;
+      const double length=std::hypot(b.x-a.x,b.y-a.y);
+      if(length<1e-9)continue;
+      const integrated_native::Vec2 normal{-(b.y-a.y)/length,(b.x-a.x)/length},origin=reference[i].position;
+      // Nearest hard paint crossing the normal on each side.
+      double negative=-std::numeric_limits<double>::infinity(),positive=std::numeric_limits<double>::infinity();
+      for(const auto& line:active_paint_)for(std::size_t j=1;j<line.size();++j) {
+        const double dx=line[j].x-line[j-1].x,dy=line[j].y-line[j-1].y;
+        const double den=normal.x*dy-normal.y*dx;if(std::abs(den)<1e-9)continue;
+        const double ax=line[j-1].x-origin.x,ay=line[j-1].y-origin.y;
+        const double d=(ax*dy-ay*dx)/den,u=(ax*normal.y-ay*normal.x)/den;
+        if(u<0 || u>1)continue;
+        if(d<0)negative=std::max(negative,d);else positive=std::min(positive,d);
+      }
+      bool widened=false;
+      for(const double sign:{1.,-1.}) {
+        if(sign>0?!left:!right)continue;
+        double& bound=sign>0?reference[i].max_l_m:reference[i].min_l_m;
+        const double paint=sign>0?positive-p_.physical_guard_m:-(negative+p_.physical_guard_m);
+        double reach=sign*bound;
+        for(double l=reach+step;l<=sign*bound+p_.borrow_width_m+1e-9 && l<=paint;l+=step) {
+          if(!insideBorrowArea({origin.x+normal.x*sign*l,origin.y+normal.y*sign*l}))break;
+          reach=l;
+        }
+        if(reach>sign*bound){bound=sign*reach;widened=true;}
+      }
+      if(widened && covered)(*covered)[i]=true;
+    }
+  }
+  // Lanelet outlines around the current anchors; reloaded when they move.
+  void loadBorrowArea(const std::vector<Anchor>& anchors) {
+    std::vector<long> key;
+    for(const auto& anchor:anchors){key.push_back(std::lround(anchor.center.x));key.push_back(std::lround(anchor.center.y));}
+    if(key==borrow_key_)return;
+    borrow_key_=key;borrow_area_.clear();
+    const double reach=std::max(p_.borrow_before_m,p_.borrow_after_m)+p_.borrow_width_m+5;
+    for(const auto& anchor:anchors) {
+      const lanelet::BoundingBox2d box(lanelet::BasicPoint2d(anchor.center.x-reach,anchor.center.y-reach),
+                                       lanelet::BasicPoint2d(anchor.center.x+reach,anchor.center.y+reach));
+      for(const auto& lane:map_->laneletLayer.search(box)) {
+        BorrowRing ring;
+        for(const auto& point:lane.polygon2d()) {
+          ring.points.push_back({point.x(),point.y()});
+          ring.min.x=std::min(ring.min.x,point.x());ring.min.y=std::min(ring.min.y,point.y());
+          ring.max.x=std::max(ring.max.x,point.x());ring.max.y=std::max(ring.max.y,point.y());
+        }
+        if(ring.points.size()>2)borrow_area_.push_back(std::move(ring));
+      }
+    }
+  }
+  bool insideBorrowArea(integrated_native::Vec2 p) const {
+    for(const auto& ring:borrow_area_) {
+      if(p.x<ring.min.x || p.x>ring.max.x || p.y<ring.min.y || p.y>ring.max.y)continue;
+      bool in=false;const auto& r=ring.points;
+      for(std::size_t i=0,j=r.size()-1;i<r.size();j=i++)
+        if((r[i].y>p.y)!=(r[j].y>p.y) && p.x<(r[j].x-r[i].x)*(p.y-r[i].y)/(r[j].y-r[i].y)+r[i].x)in=!in;
+      if(in)return true;
+    }
+    return false;
   }
   static double segmentDistance(integrated_native::Vec2 p,integrated_native::Vec2 a,integrated_native::Vec2 b) {
     const double dx=b.x-a.x,dy=b.y-a.y,n=dx*dx+dy*dy;
@@ -7297,6 +7397,14 @@ class IntegratedTrajectory {
   const integrated_native::IntegratedSolver initial_solver_,initial_recovery_solver_;
   std::vector<std::vector<integrated_native::Vec2>> active_paint_;
   std::vector<bool> released_;
+  const lanelet::LaneletMap* map_;
+  struct BorrowRing {
+    std::vector<integrated_native::Vec2> points;
+    integrated_native::Vec2 min{std::numeric_limits<double>::infinity(),std::numeric_limits<double>::infinity()};
+    integrated_native::Vec2 max{-std::numeric_limits<double>::infinity(),-std::numeric_limits<double>::infinity()};
+  };
+  std::vector<BorrowRing> borrow_area_;
+  std::vector<long> borrow_key_;
   bool has_last_position_=false;
   integrated_native::Vec2 last_position_;
   double last_position_stamp_=0;
