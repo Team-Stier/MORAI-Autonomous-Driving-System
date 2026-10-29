@@ -80,6 +80,6 @@ local:
     '12': integrated_highway.hpp
     '13': integrated_highway.hpp
     '14': rddf_core.hpp
-    '15': tunnel_hybrid_astar.hpp
+    '15': hybrid_astar.hpp
     '16': rddf_core.hpp
   health_core_map: []
