@@ -225,7 +225,7 @@ if [[ $DRIVER == stack && -n $BRANCH ]]; then   # the drive checkout: prepared h
   rsync -rlt --delete -e "ssh -F $SSHC" --exclude .git --exclude /build --exclude /devel --exclude /REF --exclude /BUILT \
     "$SNAPDIR/" pod:/workspace/drive/ && P "echo '$BRANCH' > /workspace/drive/REF" || { log "drive sync failed"; exit 1; }
   log "drive $BRANCH (${SHA:0:10}) synced, building"
-  P "touch /workspace/keepalive; (while sleep 120; do touch /workspace/keepalive; done) & k=\$!; RVIZ=${RVIZ:-0} bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/drive_setup.sh > /workspace/drive_setup.log 2>&1; r=\$?; kill \$k; exit \$r" ||
+  P "touch /workspace/keepalive; (while sleep 120; do touch /workspace/keepalive; done) > /dev/null 2>&1 < /dev/null & k=\$!; RVIZ=${RVIZ:-0} bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/drive_setup.sh > /workspace/drive_setup.log 2>&1; r=\$?; kill \$k; exit \$r" ||
     { log "drive build failed: $(P "tail -3 /workspace/drive_setup.log")"; exit 1; }
   BUILT=$(P "cat /workspace/drive/BUILT"); log "drive built: $BUILT"
   [[ ${BUILT%% *} == "$SHA" ]] || { log "built sha ${BUILT%% *} is not $SHA"; exit 1; }
