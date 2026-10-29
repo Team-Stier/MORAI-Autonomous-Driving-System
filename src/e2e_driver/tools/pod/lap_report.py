@@ -101,7 +101,7 @@ def report(d, k):
                                          if e.get("type") in ("signal_violation", "signal_unverified"))),
              duration_s=sc.get("duration_s"), rho_end=lap.get("rho_end"), wall_s=lap.get("wall_s"), clock_rho=clock_rho,
              stack_rate=stack_rate, world_rate=world_rate,
-             lat=lap.get("lat"), lane_events=(sc.get("counts") or {}).get("lane", 0),
+             lat=lap.get("lat"), lat_all=lap.get("lat_all"), lane_events=(sc.get("counts") or {}).get("lane", 0),
              late=round(float(np.mean([bool(x.get("late")) for x in dbg])), 3) if dbg else None,
              model_ms=[round(float(np.percentile(ms, q)), 1) for q in (50, 95)] if ms else None,
              weather=sorted({f"{w[1]}{w[2]}" for w in lap.get("weather", [])}), tunnel=meta.get("tunnel"), dynamic=dict(dyn),

@@ -43,6 +43,7 @@ build() { ONNXRUNTIME_ROOT=$ORT catkin_make --force-cmake -DCMAKE_BUILD_TYPE=Rel
 # one retry: parallel CMake generation of node_pipeline's generated files can race (BROADCAST-16)
 # RVIZ=1 and still failing: without visualizer (the drive must not wait on the videos' RViz)
 if build || { log "catkin_make failed once, retrying ($(command grep -m1 -E 'error|Error' $V/drive_build.log | cut -c1-160))"; build; } ||
+   { log "build failed twice: clean build (build/ devel/ of another ref can keep generated registries)"; rm -rf build devel; build; } ||
    { [[ ${RVIZ:-0} == 1 ]] && log "build with visualizer failed: without it (no RViz)" && RVIZ=0 build; }; then
   echo "$(cat SHA 2> /dev/null || echo nosha) $REF" > BUILT; log "built $(cat BUILT)"
 else

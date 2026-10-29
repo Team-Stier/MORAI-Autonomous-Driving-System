@@ -536,7 +536,7 @@ class Manager:
                 clk.append((round(t, 3), round(tau, 3)))
                 s, lat = tr.update(e["x"], e["y"])
                 if lat < 15.0 and e["v"] > 1.0:
-                    lats.append(lat)
+                    lats.append((s, lat))
                 shade = shaded(e["x"], e["y"])
                 ns = int(tau * 1e9)
                 rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
@@ -605,9 +605,13 @@ class Manager:
         lap.update(end=end, lap_s=round(lap_s, 2), wall_s=round(time.time() - w_play, 1), rho_end=round(clock.rho, 3))
         lap["scorer"] = self.judge(rows)
         if lats:
-            la = np.abs(np.array(lats))
-            lap["lat"] = dict(rms_m=round(float(np.sqrt(np.mean(la ** 2))), 3), p95_m=round(float(np.percentile(la, 95)), 3),
-                              max_m=round(float(la.max()), 3), n=len(la))
+            # path following: off the route line on purpose on the highway (lane changes) and the ring, so those spans
+            # are left out; lat_all keeps every sample (a full lap's lat_all rms is ~1-2 m from the highway alone)
+            sl = np.array(lats); la_all = np.abs(sl[:, 1])
+            keep = ~(((sl[:, 0] >= self.highway[0]) & (sl[:, 0] <= self.highway[1])) | ((sl[:, 0] >= self.ring[0]) & (sl[:, 0] <= self.ring[1])))
+            st = lambda a: dict(rms_m=round(float(np.sqrt(np.mean(a ** 2))), 3), p95_m=round(float(np.percentile(a, 95)), 3),
+                                max_m=round(float(a.max()), 3), n=len(a)) if len(a) else None
+            lap["lat"], lap["lat_all"] = st(la_all[keep]), st(la_all)
         if self.objects:
             lap["validation"] = None if self.a.scene_file else validate(meta, egot, objt, self.ring, self.highway)
             with gzip.open(self.out / f"lap{k:03d}.objects.json.gz", "wt") as f:
