@@ -270,8 +270,8 @@ print(int(ok), "%s score %s s, 패널티 %s s" % (r.get("end"), f(r.get("score_s
       [[ $code == 200 ]] || code="$code, link: $(dm "$line
 영상(7일 링크): $url")"
       # the user's Mac Claude app (desktop session '개발 철학 이해' fetches the B2 link; the runner messages it per line)
-      python3 -c 'import json,sys,time; print(json.dumps(dict(utc=time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), version=sys.argv[1], run=sys.argv[2], lap=sys.argv[3], summary=sys.argv[4], b2=sys.argv[5], discord=sys.argv[6]), ensure_ascii=False))' \
-        "${VERSION:-${MSG_PREFIX:-}}" "$1" "$K" "$summary" "$url" "$code" >> "${VIDEO_FEED:-/home/opc/morai-campaign/shared/results/video_feed.jsonl}"
+      python3 -c 'import json,os,sys,time; print(json.dumps(dict(time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), version=sys.argv[1], run=sys.argv[2], lap=int(sys.argv[3].split("_")[-1]), summary=sys.argv[4], url=sys.argv[5], size_mb=round(os.path.getsize(sys.argv[6]) / 1e6, 1) if os.path.exists(sys.argv[6]) else None, discord=sys.argv[7]), ensure_ascii=False))' \
+        "${VERSION:-${MSG_PREFIX:-}}" "$1" "$K" "$summary" "$url" "$LOCAL/laps/$(basename "$vid")" "$code" >> "${VIDEO_FEED:-/home/opc/morai-campaign/shared/results/video_feed.jsonl}"
     else
       code="not sent (no drive: $summary)"
     fi
