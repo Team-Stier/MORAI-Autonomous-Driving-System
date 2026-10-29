@@ -69,8 +69,8 @@ local:
     '1': integrated_dynamic.hpp
     '2': integrated_dynamic.hpp
     '3': integrated_path.hpp
-    '4': integrated_static.hpp
-    '5': integrated_static.hpp
+    '4': static_detour.hpp
+    '5': static_detour.hpp
     '6': integrated_dynamic.hpp
     '7': integrated_path.hpp
     '8': roundabout_approach.hpp
