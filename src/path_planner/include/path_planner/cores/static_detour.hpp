@@ -7672,6 +7672,21 @@ class IntegratedTrajectory {
     if(plan_.side!=0 && (!std::isfinite(first) || s0>hold_end+plan_.return_m) && std::abs(l0)<d.completion_offset_m) {
       ROS_INFO("[static detour] bypass complete");plan_=DetourPlan{};
     }
+    if(!std::isfinite(first) && plan_.side!=0) {
+      // The obstacles are gone while the vehicle is still off its lane:
+      // steer back into the lane rather than leave an off-lane pose to the regular plan.
+      for(const double ret:d.return_lengths_m) {
+        DetourProfile profile;
+        profile.full=s0;profile.hold_end=s0;profile.offset=l0;profile.ramp=1;profile.ret=ret;
+        double peak=0;
+        auto path=detourPath(frame,profile,state,s0,l0,slope0,extents,predictions,false,peak);
+        if(path.empty())continue;
+        speed=std::min(d.maximum_speed_mps,std::max(d.minimum_speed_mps,
+            std::sqrt(d.lateral_acceleration_mps2/std::max(peak,1e-6))));
+        return path;
+      }
+      return {};
+    }
     if(!std::isfinite(first) || (plan_.side==0 && s0>hold_end))return {};
 
     std::vector<int> sides;
@@ -7681,6 +7696,8 @@ class IntegratedTrajectory {
     for(const int side:sides) {
       double offset=side>0?left:right;
       if(plan_.side==side)offset=side>0?std::max(offset,plan_.offset_m):std::min(offset,plan_.offset_m);
+      // Already farther out on this side: hold that offset rather than turn back in.
+      offset=side>0?std::max(offset,std::min(l0,d.maximum_offset_m)):std::min(offset,std::max(l0,-d.maximum_offset_m));
       if(std::abs(offset)>d.maximum_offset_m)continue;
       std::vector<std::pair<double,double>> lengths;
       if(plan_.side==side)lengths.push_back({plan_.ramp_m,plan_.return_m});
