@@ -1,14 +1,14 @@
 execution: {mode: periodic, frequency_hz: 30.0, queue_capacity: 8, max_health_checks: 10}
 section_topic: /section_annotation
-max_skew_sec: 0.5
+max_skew_sec: 1.0
 inputs:
   path:
     type: interfaces/Path
     topic: /local_path/velocity_injected
     frame: base_link
     range: [0.0, 111.11111111111111]
-    stale_after_sec: 0.5
-    receive_timeout_sec: 0.5
+    stale_after_sec: 1.0
+    receive_timeout_sec: 1.0
   ego:
     type: nav_msgs/Odometry
     topic: /localization/ego
