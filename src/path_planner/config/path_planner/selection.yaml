@@ -69,9 +69,9 @@ local:
     '1': rddf_core.hpp
     '2': rddf_core.hpp
     '3': rddf_core.hpp
-    '4': integrated_static.hpp
-    '5': integrated_static.hpp
-    '6': integrated_dynamic.hpp
+    '4': hybrid_astar.hpp
+    '5': hybrid_astar.hpp
+    '6': hybrid_astar.hpp
     '7': rddf_core.hpp
     '8': roundabout_approach.hpp
     '9': roundabout_rolling_entry.hpp
@@ -80,6 +80,6 @@ local:
     '12': integrated_highway.hpp
     '13': integrated_highway.hpp
     '14': rddf_core.hpp
-    '15': tunnel_path.hpp
+    '15': hybrid_astar.hpp
     '16': rddf_core.hpp
   health_core_map: []
