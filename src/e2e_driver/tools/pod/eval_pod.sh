@@ -326,7 +326,7 @@ redraw=${REDRAW:-1}
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   wave=("${SEEDS[@]:w:N}"); WN=$RUN; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${RUN}_wave$((w / N + 1))
   P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$RUN/timeline.txt /workspace/results/$WN/ && \
-     (DRIVER=$DRIVER SCENE_FILE=${SCENE_FILE:+/workspace/scene/$(basename "$SCENE_FILE")} RVIZ=${RVIZ:-0} RVIZ_FPS=${RVIZ_FPS:-5} START_CP=${START_CP:-0} END_CP=${END_CP:-0} SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} GUARD_RHO_FIRST=${GUARD_RHO_FIRST:-0.85} SENSOR_PRESET=${SENSOR_PRESET:-sub} \
+     (DRIVER=$DRIVER SCENE_FILE=${SCENE_FILE:+/workspace/scene/$(basename "$SCENE_FILE")} RVIZ=${RVIZ:-0} RVIZ_FPS=${RVIZ_FPS:-5} START_CP=${START_CP:-0} END_CP=${END_CP:-0} SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} GUARD_RHO_FIRST=${GUARD_RHO_FIRST:-0.85} GUARD_EGO_HZ=${GUARD_EGO_HZ:-40} SENSOR_PRESET=${SENSOR_PRESET:-sub} \
       KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
   sleep 10   # setsid may not have exec'd eval3 yet when the next ssh looks for it
