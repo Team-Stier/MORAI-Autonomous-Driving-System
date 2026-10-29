@@ -80,8 +80,15 @@ bye() {
     vastai destroy instance "$POD" -y > /dev/null; log "vast instance $POD destroyed; credit \$$(vastai show user --raw | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["credit"], 2))')"
     POD=; return
   fi
-  curl -s -X DELETE "https://rest.runpod.io/v1/pods/$POD" -H "Authorization: Bearer $KEY" > /dev/null
-  podlog "terminate $POD ($NAME)"
+  # a DELETE can be lost (8xvzdokexfnt4e logged terminated 12:15 still ran at 13:30, highway 10/29): retried until
+  # the API no longer knows the pod; a pod still there after the tries is logged as a leak
+  local i gone=0
+  for i in 1 2 3 4 5 6; do
+    curl -s -m 30 -X DELETE "https://rest.runpod.io/v1/pods/$POD" -H "Authorization: Bearer $KEY" > /dev/null
+    sleep 5
+    gql "{\"query\":\"query { pod(input:{podId:\\\"$POD\\\"}) { id } }\"}" | grep -q '"pod":null' && { gone=1; break; }
+  done
+  (( gone )) && podlog "terminate $POD ($NAME)" || { podlog "terminate FAILED $POD ($NAME): still listed after 6 deletes"; log "pod $POD NOT terminated: delete it by hand"; }
   log "pod $POD terminated (volume ${VOLUME:-none} kept); balance \$$(gql '{"query":"query { myself { clientBalance } }"}' | python3 -c 'import json,sys; print(round(json.load(sys.stdin)["data"]["myself"]["clientBalance"], 2))')"
   POD=
 }
