@@ -26,6 +26,8 @@ struct HybridAstarParameters {
   double prediction_acceleration_mps2 = 6.0;
   double emergency_deceleration_mps2 = 6.0;
   double occupancy_history_sec = 0.8;
+  // Objects measured or forecast at least this fast are not avoided (the e-stop handles them).
+  double moving_object_speed_mps = 0.5;
   std::vector<double> transition_lengths_m{8.0, 12.0, 16.0};
   std::vector<double> lateral_offsets_m{0.0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5, -6.0, 6.0, -7.5};
   std::vector<double> steering_candidates_deg{-40, -35, -30, -25, -20, -15, -10, -5,
@@ -39,8 +41,11 @@ class HybridAstar {
             lanelet::Locations::Germany, lanelet::Participants::Vehicle)),
         graph_(lanelet::routing::RoutingGraph::build(*shared.map, *rules_)) {}
 
-  interfaces::Path process(const nav_msgs::Odometry& ego, const interfaces::Objects& objects,
-                           const Route& route, const PredictedObjects& predictions) {
+  interfaces::Path process(const nav_msgs::Odometry& ego, const interfaces::Objects& all_objects,
+                           const Route& route, const PredictedObjects& all_predictions) {
+    const auto still = stillObjects(all_objects, all_predictions);
+    const interfaces::Objects& objects = still.first;
+    const PredictedObjects& predictions = still.second;
     const auto& p = ego.pose.pose.position;
     const double heading = poseYaw(ego.pose.pose), speed = ego.twist.twist.linear.x;
     const double motion_dt = std::max(0.0, (ego.header.stamp - previous_motion_stamp_).toSec());
@@ -442,6 +447,30 @@ class HybridAstar {
     const double y_min = std::min(-a.half_width, y - width), y_max = std::max(a.half_width, y + width);
     return {a.center + 0.5*(x_min + x_max)*forward + 0.5*(y_min + y_max)*side,
             a.heading, 0.5*(x_max - x_min), 0.5*(y_max - y_min)};
+  }
+  // Objects and forecasts without the moving ones: an object counts as moving when its measured velocity or its
+  // first forecast velocity reaches moving_object_speed_mps.
+  std::pair<interfaces::Objects, PredictedObjects> stillObjects(const interfaces::Objects& objects,
+                                                               const PredictedObjects& predictions) const {
+    const auto moving = [&](const interfaces::Object& object) {
+      return object.velocity_available &&
+             std::hypot(object.velocity.x, object.velocity.y) >= parameters_.moving_object_speed_mps;
+    };
+    std::vector<std::uint32_t> moving_ids;
+    for (const auto& object : objects.objects) if (moving(object)) moving_ids.push_back(object.id);
+    for (const auto& object : predictions.front().objects) if (moving(object)) moving_ids.push_back(object.id);
+    const auto keep = [&](const interfaces::Objects& source) {
+      interfaces::Objects result;
+      result.header = source.header;
+      for (const auto& object : source.objects)
+        if (std::find(moving_ids.begin(), moving_ids.end(), object.id) == moving_ids.end())
+          result.objects.push_back(object);
+      return result;
+    };
+    std::pair<interfaces::Objects, PredictedObjects> result;
+    result.first = keep(objects);
+    for (std::size_t i = 0; i < predictions.size(); ++i) result.second[i] = keep(predictions[i]);
+    return result;
   }
   std::vector<Occupancy> occupancy(const interfaces::Objects& objects, const PredictedObjects& predictions,
                                    const ros::Time& stamp) {

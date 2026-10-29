@@ -26,6 +26,10 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
     p.emergency_deceleration_mps2 = params.number("emergency_deceleration_mps2");
   if (params.has("occupancy_history_sec"))
     p.occupancy_history_sec = params.number("occupancy_history_sec");
+  if (params.has("moving_object_speed_mps"))
+    p.moving_object_speed_mps = params.number("moving_object_speed_mps");
+  if (!std::isfinite(p.moving_object_speed_mps) || p.moving_object_speed_mps <= 0.0)
+    throw std::invalid_argument("moving_object_speed_mps must be finite and positive");
   p.transition_lengths_m = params.numbers("transition_lengths_m");
   if (params.has("lateral_offsets_m")) p.lateral_offsets_m = params.numbers("lateral_offsets_m");
   p.steering_candidates_deg = params.numbers("steering_candidates_deg");
