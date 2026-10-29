@@ -70,6 +70,8 @@ integrated_recovery_jerk_mps3: 8.0
 
 # Steering delay plus settling allowance; measured departures after nominal failure only.
 integrated_recovery_reentry_response_sec: 0.3
+# A vehicle stopped partly off the road (curb strike, checkpoint return) re-enters as if leaving at 2 m/s.
+integrated_recovery_reentry_minimum_speed_mps: 2.0
 integrated_recovery_lateral_acceleration_mps2: 6.0
 
 # Publish the full optimized geometry separately from the timed trajectory.

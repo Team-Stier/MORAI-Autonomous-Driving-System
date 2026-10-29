@@ -32,7 +32,9 @@ inline TunnelPathTrajectoryParameters loadTunnelPathTrajectoryParameters(const n
     throw std::invalid_argument("invalid integrated recovery search budget");
   s.qp_max_iterations=r.integer("integrated_qp_iterations");
   if(r.has("integrated_recovery_reentry_response_sec"))p.recovery_response_sec=r.number("integrated_recovery_reentry_response_sec");
-  if(!std::isfinite(p.recovery_response_sec) || p.recovery_response_sec<0 || p.recovery_response_sec>.3)
+  if(r.has("integrated_recovery_reentry_minimum_speed_mps"))p.recovery_minimum_speed_mps=r.number("integrated_recovery_reentry_minimum_speed_mps");
+  if(!std::isfinite(p.recovery_response_sec) || p.recovery_response_sec<0 || p.recovery_response_sec>.3 ||
+     !std::isfinite(p.recovery_minimum_speed_mps) || p.recovery_minimum_speed_mps<0 || p.recovery_minimum_speed_mps>3)
     throw std::invalid_argument("invalid integrated reentry response");
   if(r.has("integrated_road_margin_m"))s.road_margin_m=r.number("integrated_road_margin_m");
   if(r.has("integrated_maximum_lateral_slope"))s.max_lateral_slope=r.number("integrated_maximum_lateral_slope");

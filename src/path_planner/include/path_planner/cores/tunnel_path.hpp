@@ -1153,6 +1153,9 @@ struct PathParameters {
   double road_margin_m = 0.05;
   std::vector<std::vector<Vec2>> physical_boundaries;
   double reentry_response_sec = 0;
+  // A body stopped partly off the road keeps the response sweep of leaving
+  // at this speed; a measured faster departure uses its own speed.
+  double reentry_minimum_speed_mps = 0;
   double pedestrian_caution_speed_mps = 0.0;  // 0 disables the optional VRU approach ceiling.
   double pedestrian_caution_distance_m = 0.0;
   double pedestrian_caution_lateral_margin_m = 0.0;  // 0 keeps the legacy body/bbox preview.
@@ -3800,7 +3803,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       Pose2 inherited=ego.pose;
       if(step>0) {
         const double t=p_.reentry_response_sec*step/response_steps;
-        const double distance=std::max(0.,ego.speed_mps*t+ego.acceleration_mps2*t*t/2);
+        const double distance=std::max(0.,std::max(ego.speed_mps,p_.reentry_minimum_speed_mps)*t+ego.acceleration_mps2*t*t/2);
         const double turn=ego.curvature_inv_m*distance;
         const double scale=std::abs(turn)>1e-8?2*std::sin(turn/2)/turn:1.;
         inherited.position=Geometry::add(ego.pose.position,
@@ -5747,7 +5750,8 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     if(!std::isfinite(p_.preferred_reference_piece_m) || p_.preferred_reference_piece_m<0 ||
        (p_.preferred_reference_piece_m>0 && p_.preferred_reference_piece_m<2) || p_.preferred_reference_piece_m>25)
       throw std::invalid_argument("invalid preferred reference piece length");
-    if(!std::isfinite(p_.reentry_response_sec) || p_.reentry_response_sec<0 || p_.reentry_response_sec>.3)
+    if(!std::isfinite(p_.reentry_response_sec) || p_.reentry_response_sec<0 || p_.reentry_response_sec>.3 ||
+       !std::isfinite(p_.reentry_minimum_speed_mps) || p_.reentry_minimum_speed_mps<0 || p_.reentry_minimum_speed_mps>3)
       throw std::invalid_argument("invalid measured reentry response interval");
     if (p_.following_low_speed_headway_sec>p_.following_time_headway_sec ||
         p_.preferred_lateral_accel_mps2>p_.max_lateral_accel_mps2 ||
@@ -6965,7 +6969,7 @@ struct TunnelPathTrajectoryParameters {
   double minimum_curve_speed_mps=15./3.6;
   double corridor_half_width_m=1.8;
   double horizon_sec=5.0;
-  double recovery_deceleration_mps2=8.,recovery_jerk_mps3=8.,recovery_response_sec=.3;
+  double recovery_deceleration_mps2=8.,recovery_jerk_mps3=8.,recovery_response_sec=.3,recovery_minimum_speed_mps=0;
   double recovery_lateral_acceleration_mps2=6.;
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
   // Dynamic-zone emergency hold applies only to a body measured moving at
@@ -7244,6 +7248,7 @@ class IntegratedTrajectory {
     result.max_deceleration_mps2=p.recovery_deceleration_mps2;
     result.max_longitudinal_jerk_mps3=p.recovery_jerk_mps3;
     result.reentry_response_sec=p.recovery_response_sec;
+    result.reentry_minimum_speed_mps=p.recovery_minimum_speed_mps;
     result.max_lateral_accel_mps2=p.recovery_lateral_acceleration_mps2;
     result.corridor_half_width_m=std::max(result.corridor_half_width_m,p.corridor_half_width_m);
     return result;

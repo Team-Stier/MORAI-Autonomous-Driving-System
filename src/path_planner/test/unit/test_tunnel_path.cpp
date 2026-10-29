@@ -25,7 +25,7 @@ std::string contents(const std::string& path) {
   return text.str();
 }
 
-// Section 15 inside the tunnel, in our lane (lateral -1.7 m), heading along the bore toward the exit.
+// Section 15 inside the tunnel, by default in our lane (lateral -1.7 m), heading along the bore toward the exit.
 struct Scene {
   path_planner::SharedMap map{path_planner::loadSharedMapParameters(node_pipeline::ParamReader::fromFile(
       kPackage + "/config/path_planner/parameters/shared_map.yaml", kPackage))};
@@ -39,12 +39,13 @@ struct Scene {
   ros::Time stamp{100.0};
   double yaw_rad = kAxisYaw;
 
-  explicit Scene(double speed_mps, double station_m = -40.0) {
+  explicit Scene(double speed_mps, double station_m = -40.0, double lateral_m = -1.7, double heading_rad = 0.0) {
     ros::Time::init();
+    yaw_rad = kAxisYaw + heading_rad;
     ego.header.stamp = stamp;
     ego.header.frame_id = "map";
-    ego.pose.pose.position.x = kOriginX + station_m * std::cos(kAxisYaw) + 1.7 * std::sin(kAxisYaw);
-    ego.pose.pose.position.y = kOriginY + station_m * std::sin(kAxisYaw) - 1.7 * std::cos(kAxisYaw);
+    ego.pose.pose.position.x = kOriginX + station_m * std::cos(kAxisYaw) - lateral_m * std::sin(kAxisYaw);
+    ego.pose.pose.position.y = kOriginY + station_m * std::sin(kAxisYaw) + lateral_m * std::cos(kAxisYaw);
     ego.pose.pose.orientation.z = std::sin(yaw_rad / 2);
     ego.pose.pose.orientation.w = std::cos(yaw_rad / 2);
     ego.twist.twist.linear.x = speed_mps;
@@ -264,4 +265,23 @@ TEST(TunnelPath, PlansAroundSmallBodyWithMinimumFootprint) {
   const auto path = scene.plan({box});
   ASSERT_GT(path.points.size(), 2u);
   EXPECT_GE(footprintClearance(path, box.position.x, box.position.y), 0.3 + 0.25 - 0.02);
+}
+
+// Stopped in our lane turned 0.25 rad toward the right wall, as after a swerve or a checkpoint return:
+// the recovery re-entry sweep lets the plan drive on.
+TEST(TunnelPath, StoppedTurnedTowardRightWallDrivesOn) {
+  Scene scene(0.0, -40.0, -2.4, -0.25);
+  EXPECT_GT(maximumSpeed(scene.plan({})), 1.0);
+}
+
+// Stopped with the right side over the lane edge, turned 0.1 rad toward the right wall: the plan drives on.
+TEST(TunnelPath, StoppedOverLaneEdgeTurnedTowardWallDrivesOn) {
+  Scene scene(0.0, -40.0, -3.3, -0.1);
+  EXPECT_GT(maximumSpeed(scene.plan({})), 1.0);
+}
+
+// Stopped over the lane edge turned 0.8 rad back toward the lane: the plan drives on.
+TEST(TunnelPath, StoppedOverLaneEdgeTurnedBackIntoLaneDrivesOn) {
+  Scene scene(0.0, -20.0, -3.3, 0.8);
+  EXPECT_GT(maximumSpeed(scene.plan({})), 1.0);
 }
