@@ -20,7 +20,7 @@
 # /morai_udp_bridge/control_cmd is recorded (cmd_wN.csv, the first-steps signal) and the CPUs are split between the
 # worlds (12 each, half of a small host) and the stacks (the rest).
 set -uo pipefail
-DRIVER=${DRIVER:-stack}; export DRIVER; [[ $DRIVER == stack ]] && SYNC=0
+DRIVER=${DRIVER:-stack}; export DRIVER; [[ $DRIVER == stack ]] && { SYNC=0; export SENSOR_PRESET=${SENSOR_PRESET:-camp_cam7}; }
 [[ ${SYNC:-0} == 1 ]] && CPU_LAYOUT=${CPU_LAYOUT:-shared}            # sync_bench 10/28: shared + pinned spinners
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@"); (( ${#SEEDS[@]} )) || SEEDS=(7 8 9)
@@ -80,6 +80,13 @@ stamp "worlds, stacks and engine starting"
 
 wait $WORLDS || { stamp "worlds failed"; tail -5 "$OUT/worlds.log"; bash "$HERE/stacks.sh" down; kill "$(cat /root/actor/server.pids)"; exit 1; }
 stamp "worlds ready"
+if [[ $DRIVER == stack ]]; then   # a world kept up from an earlier run may hold another sensor preset
+  for n in $(seq "$N"); do
+    L=$(wdir "$n")/MoraiLauncher_Lin_Data/SaveFile/LinkConnection.txt
+    python3 /root/morai-eval-msc.py "$L" pause "" 30 > /dev/null
+    stamp "w$n sensors $(SENSOR_PRESET=$SENSOR_PRESET bash "$HERE/worlds.sh" preset "$n") $(python3 /root/morai-eval-msc.py "$L" load-sensors "$(SENSOR_PRESET=$SENSOR_PRESET bash "$HERE/worlds.sh" preset "$n")" 60 | cut -c1-24)"
+  done
+fi
 if [[ $DRIVER == stack ]]; then
   [[ ${CPU_LAYOUT:-split} == shared ]] && SPIN_CPUS=$((T - 12))-$((T - 9)) bash "$HERE/pin.sh" >> "$OUT/worlds.log" 2>&1
   for n in $(seq "$N"); do   # every node of the chain registered (2 min at most: a node that died is in stack.log)

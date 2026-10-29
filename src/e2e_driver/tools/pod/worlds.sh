@@ -47,13 +47,27 @@ login1() {
   echo "$(date +%T) w$n logged in (cpus $cpus, gRPC $((7788 + n)), DISPLAY :$n)"
 }
 
+sensor_preset() {  # n -> the sensor preset world n loads: SENSOR_PRESET (w1_collect); camp_cam7 = w1_collect with only
+  # camera_7 (port x297, 30 Hz as in spec/0918sensors.json) of its four cameras: the competition stack reads no other
+  # camera, and each camera costs MORAI Linux frames (RTX 3080 / i5-13600K, 10/29: IMU per wall s 9 Hz with four, 20
+  # with camera_7 only, 39 with none; sensors are sampled once per frame)
+  local p=${SENSOR_PRESET:-w1_collect} S; S=$(dir "$1")/MoraiLauncher_Lin_Data/SaveFile/Sensor/25.S4.MolitComp03
+  [[ $p == camp_cam7 ]] && python3 - "$S/w1_collect.json" "$S/camp_cam7.json" <<'PY2'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["cameraList"] = [c for c in d["cameraList"] if c["cc"]["udpConfig"]["destinationPort"] % 1000 == 297]
+json.dump(d, open(sys.argv[2], "w"))
+PY2
+  echo "$p"
+}
+
 prep1() {
   local n=$1 log=/root/inst/$1/Player.log i
   for i in $(seq 40); do M "$n" status "" 4 2>/dev/null | grep -q "platform.: 2.*status.: 1," && break; sleep 3; done
   echo "$(date +%T) w$n lobby ($(grep -m1 -o 'Run server.*' "$log" | cut -c1-60))"
   M "$n" map R_KR_PR_K-city_2025/2023_Hyundai_Ioniq5 300 | tail -1 | cut -c1-50
   M "$n" pause "" 30 > /dev/null
-  echo "w$n net $(M "$n" load-network w1_collect 60 | cut -c1-30) sens $(M "$n" load-sensors w1_collect 60 | cut -c1-30)"
+  echo "w$n net $(M "$n" load-network w1_collect 60 | cut -c1-30) sens $(sensor_preset "$n") $(M "$n" load-sensors "$(sensor_preset "$n")" 60 | cut -c1-30)"
 }
 
 case ${1:-} in
@@ -70,6 +84,7 @@ case ${1:-} in
     for p in "${pids[@]}"; do wait "$p" || exit 1; done
     [[ ${SKIP_PIN:-0} == 1 ]] || bash "$HERE/pin.sh" ;;
   down) pkill -f "[S]imulator.real"; sleep 3; pkill -x Xvfb; true ;;
+  preset) sensor_preset "$2" ;;   # writes the preset file (camp_cam7) and prints its name
   status) for p in $(pgrep -f "[S]imulator.real"); do echo "$p $(readlink /proc/$p/cwd) $(taskset -pc $p | sed 's/.*: //')"; done ;;
   *) sed -n 2,12p "$0"; exit 1 ;;
 esac
