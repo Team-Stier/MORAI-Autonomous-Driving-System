@@ -35,7 +35,8 @@
 #   HARNESS v2: ~/morai-eval/pod/<name>/driver.pid = this driver's PID (stop a run with kill "$(cat .../driver.pid)" only;
 #   never pkill/pgrep patterns: other sessions' drivers run on this host). CPU gate after ssh up (a new pod): CPU model
 #   not EPYC 7xxx / Xeon and a 10 M-iteration python loop (best of 3) <= CPU_BENCH_MAX_S (0.80; i5-13600K 0.52) or the
-#   pod is deleted and another created (CPU_RETRIES, 6); likewise without the NVIDIA Vulkan ICD / vulkaninfo driver. ENV_INVALID from eval3.sh (its guard): the run ends; a new
+#   pod is deleted and another created (CPU_RETRIES, 6); likewise without the NVIDIA Vulkan ICD / vulkaninfo driver
+#   (VK_RETRIES, 8). ENV_INVALID from eval3.sh (its guard): the run ends; a new
 #   pod (not ATTACH) is then replaced the same way.
 set -uo pipefail
 # run from a private copy: an edit of this file (git checkout, another session) cannot break a run in progress
@@ -183,9 +184,9 @@ vk=$(P "ls /etc/vulkan/icd.d/nvidia_icd.json /usr/share/vulkan/icd.d/nvidia_icd.
 log "Vulkan: $(echo "$vk" | tr '\n' ' ' | tr -s ' ' | cut -c1-160)"
 if ! grep -q "nvidia_icd.json" <<< "$vk" || ! grep -qiE "nvidia|geforce|rtx" <<< "$vk"; then
   podlog "reject $POD ($NAME): no NVIDIA Vulkan ($(echo "$vk" | tr '\n' ' ' | cut -c1-80))"
-  (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) || { log "Vulkan gate: giving up"; KEEP=0 bye; exit 1; }
+  (( ${VK_RETRY:-0} < ${VK_RETRIES:-8} )) || { log "Vulkan gate: giving up"; KEEP=0 bye; exit 1; }
   KEEP=0 bye; log "Vulkan gate: pod rejected (deleted), creating another"
-  CPU_RETRY=$(( ${CPU_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"
+  VK_RETRY=$(( ${VK_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"   # its own budget (VK_RETRIES), not the CPU gate's
 fi
 if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
   M=/root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Version

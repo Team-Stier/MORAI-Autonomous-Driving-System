@@ -99,6 +99,16 @@ if [[ $DRIVER == stack ]]; then
                traffic_light_node path_planner_node velocity_planner_node control_node speed_filter_node; do echo "$l" | grep -q "$x" || miss+=" $x"; done
       [[ -z $miss ]] && break; sleep 2
     done
+    if [[ -n $miss ]]; then   # one fresh start of the nodes, then the run is env-invalid (a fresh pod is replaced)
+      stamp "stack $n missing$miss: nodes restarted once ($(bash "$HERE/stacks.sh" renodes "$n" 2>&1 | tail -1))"
+      l=$(inrosn "$n" "rosnode list 2> /dev/null"); miss=
+      for x in morai_udp_bridge velodyne tf_publisher_node lidar_leveler_node localization_node section_annotator_node object_detector_node \
+               traffic_light_node path_planner_node velocity_planner_node control_node speed_filter_node; do echo "$l" | grep -q "$x" || miss+=" $x"; done
+      if [[ -n $miss ]]; then
+        echo "w$n stack nodes missing after a restart:$miss at $(date +%T)" > "$OUT/ENV_INVALID"; stamp "ENV_INVALID: $(cat "$OUT/ENV_INVALID")"
+        bash "$HERE/stacks.sh" down > /dev/null; exit 1
+      fi
+    fi
     stamp "stack $n $(cat "${DRIVE_WS:-$V/drive}/BUILT" 2> /dev/null): ${miss:+missing$miss}${miss:-all nodes up}"
   done
 else
