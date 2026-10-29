@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <estop/cores/estop_off.hpp>
 #include <estop/cores/estop_overlap.hpp>
 
 namespace {
@@ -85,4 +86,9 @@ TEST(EstopOverlap, StopClearsOnlyAfterTheReleaseTime) {
 TEST(EstopOverlap, ObjectBehindTheEgoIsIgnored) {
   estop::EstopOverlap core{estop::EstopOverlapParameters{}};
   EXPECT_FALSE(core.process(path(10.0, 30.0, 5.0), objects(97.0, 50.0), transforms()).data);
+}
+
+TEST(EstopOff, AlwaysFalse) {
+  estop::EstopOff core;
+  EXPECT_FALSE(core.process(path(10.0, 30.0, 5.0)).data);
 }

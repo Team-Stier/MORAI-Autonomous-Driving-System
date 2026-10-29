@@ -11,3 +11,5 @@
 
 판정 관대·엄격도는 `config/estop/parameters/estop_overlap.yaml`의 공간 여유(`longitudinal_margin_m`·`lateral_margin_m`·`object_margin_m`)와
 시간 여유(`time_tolerance_sec`·`time_samples`), 검사 범위(`horizon_sec`·`horizon_m`)로 정한다.
+
+구간 선택(`selection.yaml`): 섹션 5·6·15만 `estop_overlap.hpp`, 나머지 섹션은 항상 false인 `estop_off.hpp`.

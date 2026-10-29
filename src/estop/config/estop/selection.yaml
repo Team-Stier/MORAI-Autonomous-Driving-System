@@ -1,20 +1,20 @@
 estop:
   section_core_map:
-    "0": estop_overlap.hpp
-    "1": estop_overlap.hpp
-    "2": estop_overlap.hpp
-    "3": estop_overlap.hpp
-    "4": estop_overlap.hpp
+    "0": estop_off.hpp
+    "1": estop_off.hpp
+    "2": estop_off.hpp
+    "3": estop_off.hpp
+    "4": estop_off.hpp
     "5": estop_overlap.hpp
     "6": estop_overlap.hpp
-    "7": estop_overlap.hpp
-    "8": estop_overlap.hpp
-    "9": estop_overlap.hpp
-    "10": estop_overlap.hpp
-    "11": estop_overlap.hpp
-    "12": estop_overlap.hpp
-    "13": estop_overlap.hpp
-    "14": estop_overlap.hpp
+    "7": estop_off.hpp
+    "8": estop_off.hpp
+    "9": estop_off.hpp
+    "10": estop_off.hpp
+    "11": estop_off.hpp
+    "12": estop_off.hpp
+    "13": estop_off.hpp
+    "14": estop_off.hpp
     "15": estop_overlap.hpp
-    "16": estop_overlap.hpp
+    "16": estop_off.hpp
   health_core_map: []
