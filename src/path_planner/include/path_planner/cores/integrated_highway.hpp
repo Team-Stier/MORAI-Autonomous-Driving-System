@@ -26,7 +26,7 @@ struct HighwayMissionParameters {
   double maximum_lane_offset_m=6,maximum_join_gap_m=1.5;
   double vehicle_front_m=3.845008,vehicle_rear_m=.79,vehicle_half_width_m=1.080418;
   double front_gap_m=8,rear_gap_m=15,gap_confirmation_sec=.5;
-  double entry_speed_mps=60.0/3.6,highway_end_y_m=-217.855;
+  double entry_speed_mps=60.0/3.6,highway_end_y_m=-217.855,exit_speed_mps=60.0/3.6;
   double rear_headway_sec=1,rear_clear_sec=2;
   double mission_end_y_m=-217.855;unsigned mission_change_count=3;
   double completion_lateral_m=.2,completion_heading_rad=.05;
@@ -150,8 +150,12 @@ class HighwayMission {
   }
   double speedLimit(const nav_msgs::Odometry& ego) const {
     if(completed_changes_==0)return parameters_.entry_speed_mps;
-    const double remaining=std::max(0.0,ego.pose.pose.position.y-parameters_.highway_end_y_m);
-    return std::min(parameters_.cruise_speed_mps,std::sqrt(parameters_.entry_speed_mps*parameters_.entry_speed_mps+
+    return exitLimit(ego.pose.pose.position.y);
+  }
+  // Braking profile that reaches exit_speed_mps at highway_end_y_m, evaluated at a map y.
+  double exitLimit(double y) const {
+    const double remaining=std::max(0.0,y-parameters_.highway_end_y_m);
+    return std::min(parameters_.cruise_speed_mps,std::sqrt(parameters_.exit_speed_mps*parameters_.exit_speed_mps+
         2*parameters_.stopping_deceleration_mps2*remaining));
   }
   Route missionRoute(const nav_msgs::Odometry& ego,const Route& global) const {
@@ -340,7 +344,9 @@ class HighwayMission {
     else target=std::min(target,(following?previous_target_mps_:
         std::max(previous_target_mps_,std::min(speed,target)))+parameters_.acc_acceleration_mps2*dt);
     target=std::min(target,active_limit_mps_);previous_target_mps_=target;last_follow_sec_=now;
-    for(auto& point:path.points)point.velocity=target;
+    // Each point also keeps the exit braking profile at its own position so the
+    // tracker previews the slowdown before the end of the speed-limit exemption.
+    for(auto& point:path.points)point.velocity=std::min(target,exitLimit(point.pose.pose.position.y));
   }
   void publishStatus(const nav_msgs::Odometry& ego,const std::string& mode) {
     visualization_msgs::Marker marker;marker.header=ego.header;marker.ns="highway_status";marker.id=1;

@@ -24,8 +24,10 @@ mission_change_count: 3
 entry_speed_mps: 16.666666666666668
 rear_headway_sec: 1.1
 rear_clear_sec: 3.0
-highway_end_y_m: -217.855
-acc_acceleration_mps2: 1
+# 속도 예외 구간 끝(A2256W000153 끝점 y=-365.748) 15 m 앞에서 exit_speed_mps에 도달한다.
+highway_end_y_m: -350.748
+exit_speed_mps: 15.277777777777779  # 55 km/h
+acc_acceleration_mps2: 2
 acc_deceleration_mps2: 1.5
 
 # Bounded, world-fixed centerline smoothing; false restores the raw reference.

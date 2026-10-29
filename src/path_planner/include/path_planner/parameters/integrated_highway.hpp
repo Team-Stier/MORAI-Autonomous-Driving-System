@@ -63,6 +63,9 @@ inline HighwayMissionParameters loadHighwayMissionParameters(const node_pipeline
   if(!std::isfinite(p.rear_clear_sec) || p.rear_clear_sec<=0)throw std::invalid_argument("invalid highway rear_clear_sec");
   p.highway_end_y_m=reader.number("highway_end_y_m");
   if(!std::isfinite(p.highway_end_y_m))throw std::invalid_argument("invalid highway end");
+  p.exit_speed_mps=reader.has("exit_speed_mps")?reader.number("exit_speed_mps"):p.entry_speed_mps;
+  if(!std::isfinite(p.exit_speed_mps) || p.exit_speed_mps<=0 || p.exit_speed_mps>60.0/3.6)
+    throw std::invalid_argument("invalid highway exit_speed_mps");
   p.mission_end_y_m=reader.number("mission_end_y_m");
   if(!std::isfinite(p.mission_end_y_m))throw std::invalid_argument("invalid highway mission end");
   const double count=reader.number("mission_change_count");
