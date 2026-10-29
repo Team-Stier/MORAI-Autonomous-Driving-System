@@ -31,7 +31,7 @@ Core 개발자는 계산과 아래 경로의 파일을 담당하고, 리드는 �
 
 - 대상 노드의 `node.yaml`에 등록할 Stage가 있다.
 - Core에 필요한 입력이 해당 Stage의 입력에 있다. 첫 Stage의 입력은 `inputs`, 이후 Stage의 입력은 이전 Stage의 `outputs`다.
-- `process()`의 반환이 해당 Stage `outputs`의 개수·타입·순서와 일치한다. 마지막 Stage는 발행 메시지 하나다.
+- `process()`의 반환이 해당 Stage `outputs`의 개수·타입·순서와 일치한다. 마지막 Stage는 선언된 ROS 메시지 하나 또는 선언 순서의 tuple이다.
 - Core 설정·정적 자산은 파라미터 로더로 주입할 수 있다.
 - Core가 의존하는 입력 내용 전제(특정 transform의 존재, 필드 구성 등)를 `node.yaml` 입력 한도나 연결할 Validator로 선언할 수 있다.
 

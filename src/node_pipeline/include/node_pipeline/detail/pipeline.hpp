@@ -123,7 +123,7 @@ template<class Buffer, class Assembler, class Stages, class CoreSet, class Heade
       return true;
     });
     if (!completed) return report;
-    auto message = snapshot.data.template message<typename IO::MessageType>(0);
+    auto message = OutputReader<typename IO::MessageType>::read(snapshot.data);
     header_injector.injectHeader(message, snapshot.context);
     io.publish(message);
     return finish(ProcessStatus::Published, checks, std::string());

@@ -47,6 +47,20 @@ template<class Value> CoreResult wrapResult(Value&& value, std::vector<int> orig
   };
 }
 
+// Read all final payloads before header injection and publication.
+template<class Message> struct OutputReader {
+  static Message read(const StageData& data) { return data.template message<Message>(0); }
+};
+template<class... Messages> struct OutputReader<std::tuple<Messages...>> {
+  template<std::size_t... I>
+  static std::tuple<Messages...> readImpl(const StageData& data, std::index_sequence<I...>) {
+    return std::make_tuple(data.template message<Messages>(I)...);
+  }
+  static std::tuple<Messages...> read(const StageData& data) {
+    return readImpl(data, std::index_sequence_for<Messages...>{});
+  }
+};
+
 // 설정 단계에서 읽은 Core·Bank 파라미터 값이다. 생성된 로더 진입점이 실제 타입으로 만든다.
 using ParameterLoader = std::shared_ptr<const void> (*)(const ParamReader&);
 template<class Entry> std::shared_ptr<const void> loadErased(const ParamReader& reader) {

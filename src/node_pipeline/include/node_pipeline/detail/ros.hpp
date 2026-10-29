@@ -54,9 +54,11 @@ struct StageParams {
   std::int64_t started_steady_ns = 0;
   bool last = false;
   std::string output_frame;
+  std::vector<std::string> output_frames;
   ConfigNode selection;
   std::map<std::string, ConfigNode> registrations;
 };
+struct OutputSettings { std::string topic, frame; };
 struct RosSettings {
   ExecutionConfig execution;
   std::size_t queue_capacity = 8;
@@ -65,6 +67,7 @@ struct RosSettings {
   std::string section_topic;
   std::string output_topic;
   std::string output_frame;
+  std::vector<OutputSettings> outputs;
   std::vector<StageParams> stages;
   std::map<std::string, std::shared_ptr<const void>> parameters;
 };
@@ -104,9 +107,14 @@ void loadStageConfig(const StageParams& stage_params, const std::map<std::string
   for (std::size_t i = 0; i < frames.size(); ++i)
     if (!stage_params.limits[i].frame.empty() && !frames[i])
       throw std::invalid_argument("frame declared for a message without a frame: " + stage_params.slots[i]);
-  if (stage_params.last &&
-      Access::hasFrame<AtT<0, typename Schema::Outputs>>() == stage_params.output_frame.empty())
-    throw std::invalid_argument("output frame_id must be set exactly for messages with a frame");
+  if (stage_params.last) {
+    const auto output_frames = framesAvailable<typename Schema::Outputs>();
+    if (output_frames.size() != stage_params.output_frames.size())
+      throw std::invalid_argument("output count does not match the build");
+    for (std::size_t i = 0; i < output_frames.size(); ++i)
+      if (output_frames[i] == stage_params.output_frames[i].empty())
+        throw std::invalid_argument("output frame_id must be set exactly for messages with a frame");
+  }
 
   std::map<std::string, CoreId> core_ids;
   for (auto& profile : core_profiles) {
@@ -213,6 +221,10 @@ auto createCoreObjects(Types<BankEntries...>, Types<CoreEntries...>,
 template<class Message> struct RosIO {
   using MessageType = Message;
   ros::Publisher publisher;
+  static RosIO create(ros::NodeHandle& nh, const std::vector<OutputSettings>& outputs, bool latched) {
+    if (outputs.size() != 1) throw std::invalid_argument("single output expected");
+    return {nh.advertise<Message>(outputs.front().topic, 1, latched)};
+  }
   Clocks readClocks() const {
     return {static_cast<std::int64_t>(ros::Time::now().toNSec()),
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()};
@@ -244,10 +256,52 @@ template<class Message> struct RosIO {
 // 최종 메시지에 context stamp와 output.frame_id로 헤더만 주입한다.
 template<class Message> struct RosHeaderInjector {
   std::string frame_id;
+  static RosHeaderInjector create(const std::vector<OutputSettings>& outputs) {
+    if (outputs.size() != 1) throw std::invalid_argument("single output expected");
+    return {outputs.front().frame};
+  }
   void injectHeader(Message& message, const Context& context) const { Access::inject(message, context.stamp_ns, frame_id); }
 };
 
 // 구독 메시지를 원래 타입 그대로 PipelineNode에 전달한다. callback 밖으로 예외를 내보내지 않는다.
+template<class... Messages> struct RosIO<std::tuple<Messages...>> {
+  using MessageType = std::tuple<Messages...>;
+  std::tuple<RosIO<Messages>...> channels;
+  template<std::size_t... I>
+  static RosIO createImpl(ros::NodeHandle& nh, const std::vector<OutputSettings>& outputs,
+                          bool latched, std::index_sequence<I...>) {
+    return {std::make_tuple(RosIO<Messages>::create(nh, {outputs[I]}, latched)...)};
+  }
+  static RosIO create(ros::NodeHandle& nh, const std::vector<OutputSettings>& outputs, bool latched) {
+    if (outputs.size() != sizeof...(Messages)) throw std::invalid_argument("output count mismatch");
+    return createImpl(nh, outputs, latched, std::index_sequence_for<Messages...>{});
+  }
+  Clocks readClocks() const { return std::get<0>(channels).readClocks(); }
+  template<class Health> void reportHealth(const Health& health, std::size_t checks) const {
+    std::get<0>(channels).reportHealth(health, checks);
+  }
+  void report(const ProcessReport& report) const { std::get<0>(channels).report(report); }
+  void publish(const MessageType& messages) const {
+    forEachIndex<sizeof...(Messages)>([&](auto tag) {
+      std::get<decltype(tag)::value>(channels).publish(std::get<decltype(tag)::value>(messages));
+    });
+  }
+};
+template<class... Messages> struct RosHeaderInjector<std::tuple<Messages...>> {
+  std::vector<std::string> frames;
+  static RosHeaderInjector create(const std::vector<OutputSettings>& outputs) {
+    if (outputs.size() != sizeof...(Messages)) throw std::invalid_argument("output count mismatch");
+    std::vector<std::string> frames;
+    for (const auto& output : outputs) frames.push_back(output.frame);
+    return {frames};
+  }
+  void injectHeader(std::tuple<Messages...>& messages, const Context& context) const {
+    forEachIndex<sizeof...(Messages)>([&](auto tag) {
+      Access::inject(std::get<decltype(tag)::value>(messages), context.stamp_ns, frames[decltype(tag)::value]);
+    });
+  }
+};
+
 template<class Node> struct RosCallbacks {
   Node& node;
   template<class Fn> static void guarded(Fn&& fn) {

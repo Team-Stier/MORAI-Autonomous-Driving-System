@@ -79,7 +79,7 @@ nav_msgs::Odometry process(const sensor_msgs::NavSatFix& gps,
 원래 메시지의 header는 메시지의 일부로 전달된다. Policy 보정·대체 후에도 메시지 타입은 동일하다.
 
 중간 Stage의 Core는 `node.yaml`에 선언된 해당 Stage `outputs`의 개수·타입·순서대로 반환한다. 여러 반환 값은 `std::pair`·`std::tuple`로 묶는다.
-마지막 Stage의 Core는 발행 메시지 타입 하나를 반환하고 payload를 완성한다.
+마지막 Stage의 Core는 선언한 ROS 메시지 payload를 반환한다. 복수 출력은 선언 순서의 tuple로 반환한다.
 별도 Output·PoseResult 같은 계산 결과 래퍼나 성공/실패·준비 상태 코드를 만들지 않는다.
 Core는 발행 헤더를 설정하지 않는다. RosHeaderInjector가 헤더만 주입하며, HeaderInjector와 IO는 payload를 변경하거나 출력 검사를 하지 않는다.
 
@@ -153,7 +153,7 @@ output:
 | `check_stamp`·`check_receive_timeout`·`check_skew` | 기본값 true |
 | `section_topic` | 생략하면 section은 항상 UNKNOWN(0)이다. |
 | `stages[].outputs[]` | `name`과 새 값의 `type`, 또는 패스스루할 Stage 입력 이름 `from`. C++ 타입은 `type: pkg::Type`과 `header: <package>/libraries/<name>.hpp`로 선언한다. 검사용 `frame`·`numbers`·`range`를 둘 수 있다. |
-| `output` | 발행 토픽과 헤더 `frame_id`. 마지막 Stage의 출력은 하나이며 그 타입이 발행 타입이다. |
+| `output` | 단일 출력의 발행 토픽과 헤더 `frame_id`, 또는 마지막 Stage 순서의 `{name, topic, frame_id}` 목록. |
 
 첫 Stage의 입력은 `inputs`, 이후 Stage의 입력은 이전 Stage의 `outputs`다.
 `stamp`는 예약 이름이므로 구독 입력과 Stage 출력 이름으로 사용할 수 없다.
@@ -468,3 +468,11 @@ sequenceDiagram
 | `replaceInputs(snapshot, result)` | 반환값을 슬롯으로 감싸 `data.inputs`만 교체하고 나머지 스냅샷 정보를 보존한다. |
 | 각 Core | 슬롯에서 꺼낸 실제 메시지·중간 변수로 계산하며 내부 상태를 유지한다. 입력 검사·헤더 주입·스냅샷 생성·다음 Stage 실행은 수행하지 않는다. |
 | `RosHeaderInjector`·`RosIO` | 전체 루프가 끝난 뒤 최종 메시지에 context로 헤더만 주입하고 한 번 발행한다. 중간값에 헤더를 주입하거나 발행하지 않는다. `reportHealth()`는 DEBUG 로거 `health`에 입력별 issue를 남기고, `report()`는 NoCore·Rejected를 WARN, Failed를 ERROR로 남긴다. |
+
+## 복수 출력
+
+기존 `output: {topic, frame_id}`는 단일 출력을 유지한다. 복수 출력은 `output`을
+`[{name, topic, frame_id}, ...]`로 선언하며, 이름·개수·순서는 마지막 Stage의 `outputs`와 일치한다.
+각 topic은 서로 다르고, 각 메시지의 frame 유무에 따라 `frame_id`를 지정한다.
+공통 실행기는 모든 payload를 읽은 뒤 동일한 context stamp와 각 frame을 주입해 선언 순서로 발행한다.
+각 발행 큐는 1이며 latched 실행은 모든 출력에 적용된다. 서로 다른 ROS 토픽의 전달은 원자적이지 않다.

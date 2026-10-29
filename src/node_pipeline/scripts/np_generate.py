@@ -332,19 +332,29 @@ def load_node(package_dir, package, node):
         stage.outputs = next_slots
         model.stages.append(stage)
         slots = next_slots
-    if len(slots) != 1 or not slots[0].type.is_ros:
-        raise ConfigError(f"{where}: the last stage must return exactly one ROS message")
-    model.output_type = slots[0].type
-
+    if not all(slot.type.is_ros for slot in slots):
+        raise ConfigError(f"{where}: final outputs must be ROS messages")
     output = data["output"]
-    check_keys(output, {"topic", "frame_id"}, {"topic"}, f"{where}: output")
-    if not isinstance(output["topic"], str) or not TOPIC.match(output["topic"]):
-        raise ConfigError(f"{where}: output.topic must be an absolute topic name")
-    model.output_topic = output["topic"]
-    if "frame_id" in output:
-        if not isinstance(output["frame_id"], str) or not FRAME.match(output["frame_id"]):
-            raise ConfigError(f"{where}: output.frame_id is invalid")
-        model.output_frame = output["frame_id"]
+    declarations = output if isinstance(output, list) else [output]
+    if len(declarations) != len(slots):
+        raise ConfigError(f"{where}: output count must match the final Stage")
+    topics = set()
+    for index, declaration in enumerate(declarations):
+        at = f"{where}: output[{index}]"
+        allowed = {"name", "topic", "frame_id"} if isinstance(output, list) else {"topic", "frame_id"}
+        required = {"name", "topic"} if isinstance(output, list) else {"topic"}
+        check_keys(declaration, allowed, required, at)
+        if isinstance(output, list) and declaration["name"] != slots[index].name:
+            raise ConfigError(f"{at}: output names must follow the final Stage order")
+        topic = declaration["topic"]
+        if not isinstance(topic, str) or not TOPIC.match(topic) or topic in topics:
+            raise ConfigError(f"{at}: topics must be distinct absolute topic names")
+        topics.add(topic)
+        frame = declaration.get("frame_id", "")
+        if "frame_id" in declaration and (not isinstance(frame, str) or not FRAME.match(frame)):
+            raise ConfigError(f"{at}: frame_id is invalid")
+    model.output_type = slots[0].type if len(slots) == 1 else TypeRef(
+        "std::tuple<" + ", ".join(slot.type.cpp for slot in slots) + ">", "tuple", False)
 
     load_registrations(package_dir, package, node, model)
     return model

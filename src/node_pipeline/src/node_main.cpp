@@ -50,8 +50,8 @@ int main(int argc, char** argv) {
     const auto execution = settings.execution;
     Spec::Buffer buffer(settings.queue_capacity);
     npd::SnapshotAssembler<Spec::Buffer> assembler(settings.reference_input);
-    const npd::RosHeaderInjector<Output> header_injector{settings.output_frame};
-    const npd::RosIO<Output> io{nh.advertise<Output>(settings.output_topic, 1, execution.mode == npd::ExecutionMode::Latched)};
+    const auto header_injector = npd::RosHeaderInjector<Output>::create(settings.outputs);
+    const auto io = npd::RosIO<Output>::create(nh, settings.outputs, execution.mode == npd::ExecutionMode::Latched);
     using Node = npd::PipelineNode<Spec::Buffer, npd::SnapshotAssembler<Spec::Buffer>, decltype(stages), Spec::CoreSet,
                                    npd::RosHeaderInjector<Output>, npd::RosIO<Output>>;
     Node node(execution, buffer, assembler, std::move(stages), std::move(cores), header_injector, io);
