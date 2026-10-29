@@ -93,8 +93,13 @@ class HighwayMission {
       const double alignment_speed=(!gap_clear && speed_ready)?mergeBehindSpeed(ego,objects,speed,now):reference_change_speed_mps_;
       path=waiting_path_;follow(path,objects,speed,now,alignment_speed);
       const auto stations=distances(path);
+      // A short window met at speed reserves its waiting stop nearer than the ego can stop.
+      // Never demand a stop inside the braking distance at the stopping deceleration, nor
+      // beyond the last point that still leaves the shortest feasible change.
+      const double stop_station=std::min(latest_wait_station_m_,std::max(waiting_stop_station_m_,
+          speed*speed/(2*parameters_.stopping_deceleration_mps2)+parameters_.stop_buffer_m));
       for(std::size_t i=0;i<path.points.size();++i)path.points[i].velocity=std::min(path.points[i].velocity,
-          std::sqrt(2*parameters_.stopping_deceleration_mps2*std::max(0.0,waiting_stop_station_m_-stations[i]-parameters_.stop_buffer_m)));
+          std::sqrt(2*parameters_.stopping_deceleration_mps2*std::max(0.0,stop_station-stations[i]-parameters_.stop_buffer_m)));
       for(auto& point:path.points)point.velocity=std::min(point.velocity,reference_change_speed_mps_);
       publishStatus(ego,"GAP_WAIT");return path;
     }
@@ -112,7 +117,7 @@ class HighwayMission {
       gap_entry_time_sec_=0;last_observation_sec_=-1;motion_history_.clear();maneuver_speed_mps_=0;
       maneuver_.points.clear();waiting_path_.points.clear();target_path_.points.clear();
       reference_handover_m_=handover_m_=transition_m_=change_begin_m_=0;gap_since_=-1;
-      reference_change_speed_mps_=waiting_stop_station_m_=0;
+      reference_change_speed_mps_=waiting_stop_station_m_=latest_wait_station_m_=0;
       reference_completion_lateral_m_=maneuver_completion_lateral_m_=.2;
       reference_end_index_=0;target_lane_id_=0;completed_changes_=0;blocking_id_=0;gap_reason_.clear();mode_.clear();
       ROS_INFO("[highway] mission restarted: %.1f m back, clock %.1f -> %.1f s",back,last_call_sec_,now);
@@ -622,6 +627,7 @@ class HighwayMission {
         const double reserved_transition=std::max({minimum_transition,
             std::min(parameters_.transition_length_m,usable),active_limit_mps_*duration});
         waiting_stop_station_m_=length_m+std::max(0.0,available-reserved_transition);
+        latest_wait_station_m_=length_m+std::max(0.0,available-minimum_transition);
         if(source.points.size()<2 || target.points.size()<2 ||
             offset>parameters_.maximum_lane_offset_m || transition>available) {
           // Retain the requested merge rather than proceeding past its remaining legal window.
@@ -800,7 +806,7 @@ class HighwayMission {
   std::map<std::pair<lanelet::Id,bool>,lanelet::BasicLineString3d> centerlines_;
   std::vector<LaneSpan> reference_spans_;Message maneuver_,waiting_path_,target_path_;
   bool change_window_exhausted_=false,reference_lane_change_=false;double reference_handover_m_=0,handover_m_=0,transition_m_=0,change_begin_m_=0,gap_since_=-1;
-  double reference_change_speed_mps_=0,waiting_stop_station_m_=0;
+  double reference_change_speed_mps_=0,waiting_stop_station_m_=0,latest_wait_station_m_=0;
   double reference_completion_lateral_m_=.2,maneuver_completion_lateral_m_=.2;
   std::size_t reference_end_index_=0;lanelet::Id target_lane_id_=0;unsigned completed_changes_=0;
   std::uint32_t blocking_id_=0;std::string gap_reason_="",mode_;

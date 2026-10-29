@@ -201,3 +201,18 @@ TEST(YoloTrafficLight, DropsCandidatesBelowMaximumCenterRow) {
   EXPECT_EQ(kept.front().state, State::Stop);
   EXPECT_EQ(Core::aboveRow(candidates, 0.0).size(), 2U);
 }
+
+TEST(YoloTrafficLight, LeftCombinationFollowsLitLamps) {
+  traffic_light::YoloTrafficLightParameters parameters;
+  cv::Mat red_left = head(kRed, 0);
+  cv::circle(red_left, cv::Point(40, 14), 3, kGreen, cv::FILLED);
+  EXPECT_EQ(Core::leftCombination(Core::litPixels(red_left, kHead, parameters.track), 3),
+            interfaces::TrafficLight::RED_LEFT);
+  cv::Mat green_left = head(kGreen, 2);
+  cv::circle(green_left, cv::Point(32, 14), 3, kGreen, cv::FILLED);
+  EXPECT_EQ(Core::leftCombination(Core::litPixels(green_left, kHead, parameters.track), 3),
+            interfaces::TrafficLight::GREEN_LEFT);
+  cv::Mat unlit(40, 80, CV_8UC3, cv::Scalar(170, 165, 160));
+  EXPECT_EQ(Core::leftCombination(Core::litPixels(unlit, kHead, parameters.track), 3),
+            interfaces::TrafficLight::UNKNOWN);
+}

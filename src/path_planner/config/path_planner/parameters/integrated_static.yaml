@@ -88,3 +88,5 @@ integrated_paint_release_speed_mps: 1.0
 integrated_borrow_width_m: 4.0
 integrated_borrow_before_m: 20.0
 integrated_borrow_after_m: 12.0
+# A start pose inside the road or paint margin is moved this far towards the reference (0 disables).
+integrated_start_snap_m: 0.3

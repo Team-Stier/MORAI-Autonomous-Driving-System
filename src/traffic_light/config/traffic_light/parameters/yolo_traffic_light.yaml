@@ -13,6 +13,7 @@ minimum_votes: 1
 unknown_votes: false
 # camera_7 640x480 pitched up 10 deg: horizon near row 296; lights above it.
 maximum_center_y_px: 285
+left_combination: true
 # Weak candidates on a head accepted within timeout_sec, verified by the lit lamp colour (OpenCV HSV hue 0-180).
 track:
   minimum_confidence: 0.05

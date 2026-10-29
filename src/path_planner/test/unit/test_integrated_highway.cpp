@@ -2,6 +2,7 @@
 #include <path_planner/cores/integrated_highway.hpp>
 #include <lanelet2_core/utility/Utilities.h>
 #include <cmath>
+#include <map>
 
 namespace {
 // HighwayMission logs with ROS_*_THROTTLE, which reads ros::Time::now().
@@ -47,6 +48,57 @@ Road southboundRoad(double lane_width_m = 3.5) {
   return {lanelet::utils::createMap({right, left}), right, left};
 }
 
+// Toll-plaza shape: one southbound lane from y=+50 to y=-30, where a left lane opens beside it.
+// The two lanes share a dashed boundary until y=-110 and a solid one to y=-250, so the left
+// change window is 80 m long. Lanes are centred on x=0 (right) and x=3.5 (left).
+struct ShortWindowRoad {
+  lanelet::LaneletMapPtr map;
+  lanelet::routing::LaneletPath route;  // single lane, right lane, then the change into the left lane
+};
+ShortWindowRoad shortWindowRoad() {
+  // Pieces meeting at the same coordinate share the point, so the routing graph connects them.
+  std::map<std::pair<int, int>, lanelet::Point3d> points;
+  const auto line = [&points](double x, int from_y, int to_y, const char* subtype) {
+    lanelet::LineString3d result(lanelet::utils::getId());
+    for (int y = from_y; y >= to_y; --y) {
+      const auto key = std::make_pair(static_cast<int>(std::lround(x * 100)), y);
+      auto found = points.find(key);
+      if (found == points.end())
+        found = points.emplace(key, lanelet::Point3d(lanelet::utils::getId(), x, y, 0)).first;
+      result.push_back(found->second);
+    }
+    result.attributes()[lanelet::AttributeName::Type] = lanelet::AttributeValueString::LineThin;
+    result.attributes()[lanelet::AttributeName::Subtype] = subtype;
+    return result;
+  };
+  const auto window_shared = line(1.75, -30, -110, lanelet::AttributeValueString::Dashed);
+  const auto plaza_shared = line(1.75, -110, -250, lanelet::AttributeValueString::Solid);
+  lanelet::Lanelet entry(lanelet::utils::getId(), line(1.75, 50, -30, lanelet::AttributeValueString::Solid),
+                         line(-1.75, 50, -30, lanelet::AttributeValueString::Solid));
+  lanelet::Lanelet window_right(lanelet::utils::getId(), window_shared,
+                                line(-1.75, -30, -110, lanelet::AttributeValueString::Solid));
+  lanelet::Lanelet window_left(lanelet::utils::getId(), line(5.25, -30, -110, lanelet::AttributeValueString::Solid),
+                               window_shared);
+  lanelet::Lanelet plaza_right(lanelet::utils::getId(), plaza_shared,
+                               line(-1.75, -110, -250, lanelet::AttributeValueString::Solid));
+  lanelet::Lanelet plaza_left(lanelet::utils::getId(), line(5.25, -110, -250, lanelet::AttributeValueString::Solid),
+                              plaza_shared);
+  for (auto* lane : {&entry, &window_right, &window_left, &plaza_right, &plaza_left})
+    lane->attributes()[lanelet::AttributeName::Subtype] = lanelet::AttributeValueString::Road;
+  return {lanelet::utils::createMap({entry, window_right, window_left, plaza_right, plaza_left}),
+          lanelet::routing::LaneletPath(lanelet::ConstLanelets{entry, window_right, window_left, plaza_left})};
+}
+
+std::vector<double> stations(const path_planner::Message& path) {
+  std::vector<double> result(path.points.size(), 0);
+  for (std::size_t i = 1; i < result.size(); ++i) {
+    const auto& a = path.points[i - 1].pose.pose.position;
+    const auto& b = path.points[i].pose.pose.position;
+    result[i] = result[i - 1] + std::hypot(b.x - a.x, b.y - a.y);
+  }
+  return result;
+}
+
 nav_msgs::Odometry southboundEgo(double x, double y, double stamp_sec) {
   nav_msgs::Odometry ego;
   ego.header.stamp = ros::Time(stamp_sec);
@@ -73,6 +125,15 @@ path_planner::HighwayMissionParameters parameters() {
 path_planner::HighwayMissionParameters mergeParameters() {
   auto result = parameters();
   result.mission_end_y_m = -1000;
+  result.highway_end_y_m = -1000;
+  return result;
+}
+
+// The route change of the short window at cruise speed: an 80 m change cannot run at the cruise
+// design speed, so the waiting stop is reserved at the window start (y=-30).
+path_planner::HighwayMissionParameters shortWindowParameters() {
+  auto result = parameters();
+  result.entry_speed_mps = result.cruise_speed_mps;  // no merge-entry cap on this road
   result.highway_end_y_m = -1000;
   return result;
 }
@@ -208,6 +269,47 @@ TEST(IntegratedHighway, FollowerInOwnLaneDoesNotHoldMerge) {
   step(mission, route, 0, -20, 0, 10, follower);
   const auto second = step(mission, route, 0, -20, 0, 10.6, follower);
   EXPECT_GT(second.path.points.back().pose.pose.position.x, 1.8);  // committed into the left lane
+}
+
+TEST(IntegratedHighway, FastApproachToShortWindowSlowsOnlyToChangeSpeed) {
+  // 26 m/s, 30 m before the window: a stop at the window start would need 11 m/s².
+  const auto road = shortWindowRoad();
+  path_planner::HighwayMission mission(shortWindowParameters(), *road.map);
+  const path_planner::Route route = road.route;
+  const auto first = step(mission, route, 0, 0, 26, 10);
+  ASSERT_GT(first.path.points.size(), 30u);
+  EXPECT_LT(first.path.points.back().pose.pose.position.x, 0.5);  // waiting in the right lane
+  // The 80 m change runs at (80 m - stop buffer) / sqrt(6 * 3.5 m / 2 m/s²) = 23.8 m/s.
+  const double change_speed = (80.0 - 3.0) / std::sqrt(6 * 3.5 / 2.0);
+  // The 26 m/s braking distance (113 m) passes the last wait that leaves the shortest change
+  // (sqrt(6 * 3.5 m / 0.12 /m) = 13.2 m) in the window: stop there, 3 m buffer before it.
+  const double last_stop = 30.0 + 80.0 - std::sqrt(6 * 3.5 / 0.12) - 3.0;
+  EXPECT_GT(first.path.points.front().velocity, 23.5);  // a stop at the window start allows 12.7 m/s
+  const auto s = stations(first.path);
+  bool saw_stop = false;
+  for (std::size_t i = 0; i < s.size(); ++i) {
+    const double stopping = std::sqrt(2 * 3 * std::max(0.0, last_stop - s[i]));
+    EXPECT_NEAR(first.path.points[i].velocity, std::min(change_speed, stopping), 1e-6) << "s=" << s[i];
+    saw_stop = saw_stop || s[i] >= last_stop;
+  }
+  EXPECT_TRUE(saw_stop);
+}
+
+TEST(IntegratedHighway, SlowApproachToShortWindowKeepsWaitingStop) {
+  // 8 m/s can still stop before the window start: wait there as designed.
+  const auto road = shortWindowRoad();
+  path_planner::HighwayMission mission(shortWindowParameters(), *road.map);
+  const path_planner::Route route = road.route;
+  const auto first = step(mission, route, 0, 0, 8, 10);
+  ASSERT_GT(first.path.points.size(), 30u);
+  const auto s = stations(first.path);
+  bool saw_stop = false;
+  for (std::size_t i = 0; i < s.size(); ++i)
+    if (s[i] >= 30.0 - 3.0) {  // window start minus the stop buffer
+      EXPECT_NEAR(first.path.points[i].velocity, 0.0, 1e-6) << "s=" << s[i];
+      saw_stop = true;
+    }
+  EXPECT_TRUE(saw_stop);
 }
 
 TEST(IntegratedHighway, TargetLaneCarBehindHoldsMerge) {

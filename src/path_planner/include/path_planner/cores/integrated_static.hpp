@@ -6889,6 +6889,7 @@ struct IntegratedStaticTrajectoryParameters {
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
   double paint_release_m=0.,paint_release_lateral_m=2.,paint_release_speed_mps=1.;
   double borrow_width_m=0.,borrow_before_m=20.,borrow_after_m=12.;
+  double start_snap_m=0.;
 };
 
 
@@ -7017,15 +7018,25 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
-      const auto anchors=stationaryInLane(reference,objects);
-      // Keep each anchor until the vehicle is borrow_after_m past it.
+      // A passed box leaves the LiDAR view while the body is still beside it.
+      // Stationary in-lane obstacles seen on earlier calls stay in the scene,
+      // as anchors and as collision objects, until the vehicle is
+      // borrow_after_m past them.
+      interfaces::Objects scene=objects;
+      for(const auto& kept:remembered_) {
+        bool seen=false;
+        for(const auto& object:objects.objects)
+          seen=seen || std::hypot(kept.position.x-object.position.x,kept.position.y-object.position.y)<2.;
+        if(!seen)scene.objects.push_back(kept);
+      }
+      const auto anchors=stationaryInLane(reference,scene);
       const integrated_native::Vec2 axis{std::cos(state.pose.yaw_rad),std::sin(state.pose.yaw_rad)};
       remembered_.clear();
       for(const auto& anchor:anchors)
         if((anchor.center.x-state.pose.position.x)*axis.x+(anchor.center.y-state.pose.position.y)*axis.y>=-p_.borrow_after_m)
-          remembered_.push_back(anchor.center);
+          remembered_.push_back(scene.objects[anchor.index]);
       releasePaint(anchors);
-      auto native=convert(objects,predictions,reference);
+      auto native=convert(scene,predictions,reference);
 
       // Search/track the smooth target, but construct road permission from
       // the original map supports. Reference fitting must not change road area.
@@ -7033,15 +7044,15 @@ class IntegratedTrajectory {
       auto coverage=physicalCorridor(physical_reference);
       physicalCorridor(reference);
       if(!dynamic_zone) {
-        borrowLanes(physical_reference,stationaryInLane(physical_reference,objects),&coverage);
-        borrowLanes(reference,stationaryInLane(reference,objects),nullptr);
+        borrowLanes(physical_reference,stationaryInLane(physical_reference,scene),&coverage);
+        borrowLanes(reference,stationaryInLane(reference,scene),nullptr);
       }
 
       integrated_native::PlanningConstraints limits;
       limits.maximum_speed_mps=std::min(p_.solver.max_speed_mps,ceiling);
       limits.preferred_speed_mps=referenceCurveTarget(guide,limits.maximum_speed_mps);
       bool passing=false;
-      for(const auto& object:objects.objects)
+      for(const auto& object:scene.objects)
         passing=passing || std::hypot(object.position.x-state.pose.position.x,
             object.position.y-state.pose.position.y)<10.;
       if(!dynamic_zone && (passing || dynamicBlocked(reference,state,objects,predictions,p_.curve_preview_m))) {
@@ -7054,6 +7065,43 @@ class IntegratedTrajectory {
         auto alternative=recovery_solver_.planInMap(state,reference,native,limits,planning_route,previous_,{},coverage,nullptr,&physical_reference);
         if(!alternative.empty() && (planned.empty() || alternative.back().speed_mps>planned.back().speed_mps)) {
           planned=std::move(alternative);used_recovery_=true;
+        }
+      }
+      // A start pose already inside the road or paint margin, such as after a
+      // tracking error in the 3.0 m section-4 lane, rejects every candidate.
+      // Plan from the pose moved towards the reference, up to start_snap_m,
+      // with its heading turned towards the reference heading; the controller
+      // closes the remaining offset. Collision checks stay as they are.
+      if(planned.empty() && p_.start_snap_m>0 && reference.size()>1 &&
+         solver_.diagnostics().find("geometry_reason=initial-road")!=std::string::npos) {
+        std::size_t nearest=1;double best=std::numeric_limits<double>::infinity();
+        for(std::size_t i=1;i<reference.size();++i) {
+          const double d=segmentDistance(state.pose.position,reference[i-1].position,reference[i].position);
+          if(d<best){best=d;nearest=i;}
+        }
+        const auto a=reference[nearest-1].position,b=reference[nearest].position;
+        const double length=std::hypot(b.x-a.x,b.y-a.y);
+        if(length>1e-9) {
+          const integrated_native::Vec2 normal{-(b.y-a.y)/length,(b.x-a.x)/length};
+          const double lateral=(state.pose.position.x-a.x)*normal.x+(state.pose.position.y-a.y)*normal.y;
+          const double delta=std::atan2(b.y-a.y,b.x-a.x)-state.pose.yaw_rad;
+          const double turn=std::atan2(std::sin(delta),std::cos(delta));
+          for(const double share:{.5,1.}) {
+            auto snapped=state;
+            const double shift=std::min(std::abs(lateral),share*p_.start_snap_m);
+            snapped.pose.position.x-=normal.x*std::copysign(shift,lateral);
+            snapped.pose.position.y-=normal.y*std::copysign(shift,lateral);
+            snapped.pose.yaw_rad+=share*turn;
+            planned=solver_.planInMap(snapped,reference,native,limits,planning_route,{},{},coverage,nullptr,&physical_reference);
+            if(planned.empty()) {
+              planned=recovery_solver_.planInMap(snapped,reference,native,limits,planning_route,{},{},coverage,nullptr,&physical_reference);
+              used_recovery_=!planned.empty();
+            }
+            if(!planned.empty()) {
+              ROS_INFO_THROTTLE(1.,"[native planner] start moved %.2f m and %.3f rad towards the reference",shift,share*turn);
+              break;
+            }
+          }
         }
       }
       if(planned.empty()) {
@@ -7082,34 +7130,25 @@ class IntegratedTrajectory {
     }
   }
  private:
-  // A stationary obstacle lying inside the route lane: its centre, station
-  // along the reference and signed lateral offset (left positive). A moving
-  // body, such as a slower leading vehicle, is not one. Obstacles found on
-  // earlier calls count too: a passed box leaves the LiDAR view while the
-  // body is still beside it.
-  struct Anchor {integrated_native::Vec2 center;double station_m,lateral_m;};
+  // A stationary obstacle lying inside the route lane: its index in the
+  // scene, centre, station along the reference and signed lateral offset
+  // (left positive). A moving body, such as a slower leading vehicle, is not one.
+  struct Anchor {std::size_t index;integrated_native::Vec2 center;double station_m,lateral_m;};
   std::vector<Anchor> stationaryInLane(const std::vector<integrated_native::ReferencePoint>& reference,
       const interfaces::Objects& objects) const {
-    std::vector<integrated_native::Vec2> centers;
-    for(const auto& object:objects.objects)
-      if(!object.velocity_available || std::hypot(object.velocity.x,object.velocity.y)<p_.paint_release_speed_mps)
-        centers.push_back({object.position.x,object.position.y});
-    const std::size_t observed=centers.size();
-    for(const auto& c:remembered_) {
-      bool seen=false;
-      for(std::size_t k=0;k<observed;++k)seen=seen || std::hypot(c.x-centers[k].x,c.y-centers[k].y)<2.;
-      if(!seen)centers.push_back(c);
-    }
     std::vector<Anchor> anchors;
-    for(const auto& c:centers) {
-      Anchor best{c,0,std::numeric_limits<double>::infinity()};double station=0;
+    for(std::size_t k=0;k<objects.objects.size();++k) {
+      const auto& object=objects.objects[k];
+      if(object.velocity_available && std::hypot(object.velocity.x,object.velocity.y)>=p_.paint_release_speed_mps)continue;
+      const integrated_native::Vec2 c{object.position.x,object.position.y};
+      Anchor best{k,c,0,std::numeric_limits<double>::infinity()};double station=0;
       for(std::size_t i=1;i<reference.size();++i) {
         const auto a=reference[i-1].position,b=reference[i].position;
         const double dx=b.x-a.x,dy=b.y-a.y,length=std::hypot(dx,dy);
         if(length<1e-9)continue;
         const double u=std::max(0.,std::min(1.,((c.x-a.x)*dx+(c.y-a.y)*dy)/(length*length)));
         const double ex=c.x-a.x-u*dx,ey=c.y-a.y-u*dy,distance=std::hypot(ex,ey);
-        if(distance<std::abs(best.lateral_m))best={c,station+u*length,dx*ey-dy*ex<0?-distance:distance};
+        if(distance<std::abs(best.lateral_m))best={k,c,station+u*length,dx*ey-dy*ex<0?-distance:distance};
         station+=length;
       }
       if(std::abs(best.lateral_m)<=p_.paint_release_lateral_m)anchors.push_back(best);
@@ -7422,7 +7461,7 @@ class IntegratedTrajectory {
   };
   std::vector<BorrowRing> borrow_area_;
   std::vector<long> borrow_key_;
-  std::vector<integrated_native::Vec2> remembered_;
+  std::vector<interfaces::Object> remembered_;
   bool has_last_position_=false;
   integrated_native::Vec2 last_position_;
   double last_position_stamp_=0;
