@@ -65,21 +65,21 @@ prediction:
     core: prediction_pass_through.hpp
 local:
   section_core_map:
-    '0': rddf_core.hpp
+    '0': integrated_path.hpp
     '1': rddf_core.hpp
     '2': rddf_core.hpp
     '3': rddf_core.hpp
     '4': integrated_static.hpp
     '5': integrated_static.hpp
-    '6': rddf_core.hpp
+    '6': integrated_dynamic.hpp
     '7': rddf_core.hpp
-    '8': roundabout_approach.hpp
+    '8': rddf_core.hpp
     '9': roundabout_rolling_entry.hpp
-    '10': integrated_highway_approach.hpp
+    '10': rddf_core.hpp
     '11': integrated_highway.hpp
     '12': integrated_highway.hpp
     '13': integrated_highway.hpp
-    '14': integrated_dynamic.hpp
-    '15': rddf_core.hpp
-    '16': integrated_final_circle.hpp
+    '14': rddf_core.hpp
+    '15': tunnel_path.hpp
+    '16': rddf_core.hpp
   health_core_map: []
