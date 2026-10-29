@@ -6964,8 +6964,10 @@ struct StaticDetourGeometryParameters {
   bool enabled=false;
   // Obstacles are bypassed only with their centre inside this map box.
   double object_min_x_m=0,object_max_x_m=0,object_min_y_m=0,object_max_y_m=0;
-  // Bypass memory is kept only while the rear axle is inside this map box.
+  // Bypasses are planned only while the rear axle is inside this map box.
   double active_min_x_m=0,active_max_x_m=0,active_min_y_m=0,active_max_y_m=0;
+  // Remembered obstacles are forgotten once the rear axle is inside this box (zone passed).
+  double clear_min_x_m=0,clear_max_x_m=0,clear_min_y_m=0,clear_max_y_m=0;
   std::vector<lanelet::Id> drivable_lanelet_ids;
   // While the rear axle is on these lanelets (single lane between solid lines before
   // the stop line) the offset stays within keep_lane_offset_m: no wheel waits on paint.
@@ -6975,7 +6977,8 @@ struct StaticDetourGeometryParameters {
   std::vector<std::vector<integrated_native::Vec2>> paint_lines;
   double lookahead_m=45,stationary_speed_mps=1.;
   int minimum_observations=3;
-  double unseen_sec=1.,match_jump_m=.8;
+  // An obstacle closer than forget_range_m ahead of the bumper and unseen for unseen_sec is dropped.
+  double unseen_sec=1.,match_jump_m=.8,forget_range_m=12.;
   // Lateral gap kept to an obstacle box: planned offset, hard check, in-lane pass.
   double clearance_m=.5,check_clearance_m=.3,in_lane_clearance_m=.3;
   // A wide, shallow box is a vehicle face; its unseen body extends away from us.
@@ -7104,7 +7107,7 @@ class IntegratedTrajectory {
       if(has_last_position_ && (stamp.toSec()<last_position_stamp_ ||
           moved>p_.solver.max_initial_distance_m+state.speed_mps*elapsed)) {
         solver_=initial_solver_;recovery_solver_=initial_recovery_solver_;previous_.clear();
-        last_blocked_sec_=-std::numeric_limits<double>::infinity();resetDetour();
+        last_blocked_sec_=-std::numeric_limits<double>::infinity();plan_=DetourPlan{};
         ROS_INFO("[native planner] planning state restarted after a %.1f m jump",moved);
       }
       has_last_position_=true;last_position_=state.pose.position;last_position_stamp_=stamp.toSec();
@@ -7609,8 +7612,12 @@ class IntegratedTrajectory {
     const auto& d=p_.detour;const auto& vehicle=p_.solver.vehicle;
     const auto& position=state.pose.position;
     detour_ids_.clear();
+    // Static obstacles stay where they were seen: a checkpoint return keeps them
+    // for the next approach. They are forgotten only after the zone is passed.
+    if(position.x>=d.clear_min_x_m && position.x<=d.clear_max_x_m &&
+       position.y>=d.clear_min_y_m && position.y<=d.clear_max_y_m){resetDetour();return {};}
     if(position.x<d.active_min_x_m || position.x>d.active_max_x_m ||
-       position.y<d.active_min_y_m || position.y>d.active_max_y_m){resetDetour();return {};}
+       position.y<d.active_min_y_m || position.y>d.active_max_y_m){plan_=DetourPlan{};return {};}
     const DetourFrame frame(reference);
     if(frame.points.size()<2)return {};
     double s0=0,l0=0,reference_yaw=0;
@@ -7642,12 +7649,13 @@ class IntegratedTrajectory {
       else detour_boxes_.push_back(box);
       detour_ids_.push_back(object.id);
     }
-    // Keep bodies beside and behind us (they leave the forward view); drop
-    // bodies ahead of the bumper that the sensor no longer reports.
+    // Keep bodies beside and behind us (they leave the forward view) and far
+    // ahead (small ones are seen late); drop near ones the sensor no longer reports.
     std::vector<DetourBox> kept;std::vector<DetourExtent> extents;
     for(const auto& box:detour_boxes_) {
       const auto e=detourExtent(frame,box);
-      if(e.s_max<s0-30 || (e.s_min>s0+vehicle.front_m+2 && state.stamp_sec-box.seen_sec>d.unseen_sec))continue;
+      const double ahead=e.s_min-s0-vehicle.front_m;
+      if(e.s_max<s0-30 || (ahead>2 && ahead<d.forget_range_m && state.stamp_sec-box.seen_sec>d.unseen_sec))continue;
       kept.push_back(box);
       if(box.observations>=d.minimum_observations && e.s_min<=s0+d.lookahead_m)extents.push_back(e);
     }
