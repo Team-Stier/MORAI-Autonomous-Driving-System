@@ -23,6 +23,9 @@ struct StopLineStateParameters {
   double intersection_before_m = 25.0;
   double intersection_after_m = 40.0;
   double intersection_deceleration_mps2 = 2.5;
+  // A localization jump beyond jump_distance_m + jump_speed_mps x elapsed (<= 2 s) clears the latched stop.
+  double jump_distance_m = 5.0;
+  double jump_speed_mps = 30.0;
   std::vector<StopLine> stop_lines;
 };
 
@@ -39,5 +42,8 @@ struct StopLineState {
   double intersection_remaining_m = -1.0;
   double intersection_previous_x_m = 0.0;
   double intersection_previous_y_m = 0.0;
+  double localization_previous_x_m = 0.0;
+  double localization_previous_y_m = 0.0;
+  double localization_previous_sec = -1.0;
 };
 }  // namespace velocity_planner

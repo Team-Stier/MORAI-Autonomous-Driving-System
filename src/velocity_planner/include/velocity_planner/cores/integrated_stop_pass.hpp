@@ -1,4 +1,5 @@
 #pragma once
+#include <velocity_planner/libraries/localization_jump.hpp>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <velocity_planner/banks/stop_line_state.hpp>
 #include <interfaces/Path.h>
@@ -11,6 +12,7 @@ namespace velocity_planner {
 class IntegratedStopPass {
  public:
   std::pair<interfaces::Path, tf2_msgs::TFMessage> process(const interfaces::Path& path, const tf2_msgs::TFMessage& tf) {
+    releaseStopAfterJump(state_, tf, path.header.stamp.toSec());
     auto result=calculate(path,tf);
     const bool timed=std::any_of(path.points.begin(),path.points.end(),
         [](const interfaces::PathPoint& p){return !p.time_from_start.isZero();});

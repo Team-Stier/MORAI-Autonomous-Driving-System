@@ -24,6 +24,11 @@ inline StopLineStateParameters loadStopLineStateParameters(const node_pipeline::
   if (params.has("stop_line_extension_m")) result.stop_line_extension_m = params.number("stop_line_extension_m");
   if (!std::isfinite(result.stop_line_extension_m) || result.stop_line_extension_m < 0 || result.stop_line_extension_m > 5)
     throw std::invalid_argument("stop_line_extension_m must be between 0 and 5 m");
+  if (params.has("jump_distance_m")) result.jump_distance_m = params.number("jump_distance_m");
+  if (params.has("jump_speed_mps")) result.jump_speed_mps = params.number("jump_speed_mps");
+  if (!std::isfinite(result.jump_distance_m) || result.jump_distance_m <= 0 ||
+      !std::isfinite(result.jump_speed_mps) || result.jump_speed_mps < 0)
+    throw std::invalid_argument("invalid jump_distance_m or jump_speed_mps");
   result.x_m = params.number("x_m");
   result.y_m = params.number("y_m");
   result.z_mps2 = params.number("z_mps2");

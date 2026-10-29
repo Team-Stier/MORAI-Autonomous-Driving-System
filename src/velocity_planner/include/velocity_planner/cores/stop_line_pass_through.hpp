@@ -1,4 +1,5 @@
 #pragma once
+#include <velocity_planner/libraries/localization_jump.hpp>
 #include <velocity_planner/banks/stop_line_state.hpp>
 #include <interfaces/Path.h>
 #include <tf2_msgs/TFMessage.h>
@@ -12,6 +13,7 @@ class StopLinePassThrough {
   explicit StopLinePassThrough(StopLineState& state) : state_(state) {}
   std::pair<interfaces::Path, tf2_msgs::TFMessage> process(
       const interfaces::Path& path, const tf2_msgs::TFMessage& tf) {
+    releaseStopAfterJump(state_, tf, path.header.stamp.toSec());
     interfaces::Path output = path;
     limitIntersectionSpeed(output);
     state_.green_frames = 0;
