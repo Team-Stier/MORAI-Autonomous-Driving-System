@@ -33,7 +33,7 @@
 #   (before MSG_PREFIX) and every delivered lap's lap_KK.json to RESULTS_DIR/vN/ (campaign_results.py aggregates).
 #   RVIZ=1: the repo's visualizer + RViz (RVIZ_FPS 5) on a second display, side by side with the simulator in each
 #   lap video (drive_setup.sh builds visualizer; the competition stack is unchanged).
-#   NO_EVAL=1: stop after the deploy (pod kept, as CREATE_ONLY). START_CP=J END_CP=K: section laps (eval3.sh).
+#   NO_EVAL=1: stop after the deploy (pod kept, as CREATE_ONLY). DELIVER_ONLY=<RUN> with ATTACH: only deliver that run's laps. START_CP=J END_CP=K: section laps (eval3.sh).
 #   HARNESS v2: ~/morai-eval/pod/<name>/driver.pid = this driver's PID (stop a run with kill "$(cat .../driver.pid)" only;
 #   never pkill/pgrep patterns: other sessions' drivers run on this host). CPU gate after ssh up (a new pod): CPU model
 #   not EPYC 7xxx / Xeon and a 10 M-iteration python loop (best of 3) <= CPU_BENCH_MAX_S (0.80; i5-13600K 0.52) or the
@@ -280,6 +280,15 @@ print(int(ok), "%s score %s s, 패널티 %s s" % (r.get("end"), f(r.get("score_s
   done
 }
 
+# DELIVER_ONLY=<RUN> (with ATTACH, KEEP=1): no deploy, no new eval3: deliver the laps of that run (already going on the
+# pod, e.g. after a runner handover) to Discord / results / video_feed as they come, until its eval3 ends
+if [[ -n ${DELIVER_ONLY:-} ]]; then
+  RUN=$DELIVER_ONLY; log "deliver-only: $RUN"
+  while P "pgrep -f '[e]val3.sh $RUN' > /dev/null || ls /workspace/results/$RUN/lap_*.ready > /dev/null 2>&1"; do
+    deliver "$RUN"; P "pgrep -f '[e]val3.sh $RUN' > /dev/null" || break; sleep 20
+  done
+  deliver "$RUN"; log "deliver-only: $RUN ended"; KEEP=1; exit 0
+fi
 # worlds this host takes (sync_bench 10/28, 5090: N=7 used 29.2 GB VRAM, 23.5 cores, ~38 GB RAM): VRAM 3.13 N + 7.3 GB,
 # CPU 3.1 N + 2.5 cores of 90 % of the quota, RAM 4.8 N + 4.5 GB of 85 %; the seeds run in waves of N
 NMAX=$(P "python3 -c 'import subprocess as s; q=open(\"/sys/fs/cgroup/cpu.max\").read().split(); c=int(q[0])/int(q[1]) if q[0] != \"max\" else len(open(\"/proc/cpuinfo\").read().split(\"processor\"))-1; m=open(\"/sys/fs/cgroup/memory.max\").read().strip(); r=(int(m) if m != \"max\" else int(open(\"/proc/meminfo\").read().split()[1])*1024)/2**30; v=int(s.check_output([\"nvidia-smi\",\"--query-gpu=memory.total\",\"--format=csv,noheader,nounits\"]).split()[0])/1024; print(max(1, min(int((v-0.8-7.3)/3.13), int((0.9*c-2.5)/3.1), int((0.85*r-4.5)/4.8))), round(c,1), round(r), round(v,1))'")
