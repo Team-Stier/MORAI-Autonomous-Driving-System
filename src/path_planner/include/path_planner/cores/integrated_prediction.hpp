@@ -13,9 +13,12 @@ namespace path_planner {
 // A track continues across gaps up to max(continuity_gap_sec, continuity_gap_frames x frame interval)
 // and fits velocity on samples within max(fit_window_sec, fit_window_frames x frame interval).
 // The frame interval is the latest /objects stamp step; frame factors 0 keep the fixed limits.
+// A body longer than large_extent_m whose fitted speed is below large_minimum_speed_mps keeps
+// its velocity unknown: fragments of a standing box shift its centre between frames.
 struct IntegratedPredictionParameters {
   double continuity_gap_sec=.3,continuity_gap_frames=0;
   double fit_window_sec=.5,fit_window_frames=0;
+  double large_extent_m=0,large_minimum_speed_mps=0;
 };
 class IntegratedPrediction {
   struct Sample {double time,x,y,length,width;};
@@ -90,7 +93,9 @@ class IntegratedPrediction {
             for(auto& v:vy)v=std::abs(v-y);
             use_fit=median(vx)<=1.5 && median(vy)<=1.5;
           }
-          if(use_fit) {o.velocity.x=x;o.velocity.y=y;o.velocity_available=true;}
+          const bool standing_box=std::max(o.bbox_size.x,o.bbox_size.y)>parameters_.large_extent_m &&
+              speed<parameters_.large_minimum_speed_mps;
+          if(use_fit && !standing_box) {o.velocity.x=x;o.velocity.y=y;o.velocity_available=true;}
         }
       }
       if(!o.velocity_available && linked_motion) {
