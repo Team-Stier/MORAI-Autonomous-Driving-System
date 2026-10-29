@@ -55,6 +55,17 @@ inline IntegratedStaticTrajectoryParameters loadIntegratedStaticTrajectoryParame
   if(!std::isfinite(p.dynamic_zone_speed_mps) || p.dynamic_zone_speed_mps<=0 ||
       !std::isfinite(p.dynamic_zone_approach_m) || p.dynamic_zone_approach_m<0)
     throw std::invalid_argument("invalid integrated dynamic zone cap");
+  if(r.has("integrated_passing_radius_m"))p.passing_radius_m=r.number("integrated_passing_radius_m");
+  if(r.has("integrated_passing_ahead_only"))p.passing_ahead_only=r.flag("integrated_passing_ahead_only");
+  if(r.has("integrated_passing_lateral_m"))p.passing_lateral_m=r.number("integrated_passing_lateral_m");
+  if(!std::isfinite(p.passing_radius_m) || p.passing_radius_m<0 || p.passing_radius_m>30 ||
+      !std::isfinite(p.passing_lateral_m) || p.passing_lateral_m<0 || p.passing_lateral_m>6)
+    throw std::invalid_argument("invalid integrated passing window");
+  if(r.has("integrated_vehicle_face_min_width_m"))p.vehicle_face_min_width_m=r.number("integrated_vehicle_face_min_width_m");
+  if(r.has("integrated_vehicle_length_prior_m"))p.vehicle_length_prior_m=r.number("integrated_vehicle_length_prior_m");
+  if(!std::isfinite(p.vehicle_face_min_width_m) || p.vehicle_face_min_width_m<=0 || p.vehicle_face_min_width_m>3 ||
+      !std::isfinite(p.vehicle_length_prior_m) || p.vehicle_length_prior_m<0 || p.vehicle_length_prior_m>8)
+    throw std::invalid_argument("invalid integrated vehicle face prior");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
   if(r.has("integrated_recovery_lateral_acceleration_mps2"))p.recovery_lateral_acceleration_mps2=r.number("integrated_recovery_lateral_acceleration_mps2");

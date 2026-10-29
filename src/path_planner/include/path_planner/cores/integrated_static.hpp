@@ -6881,6 +6881,10 @@ struct IntegratedStaticTrajectoryParameters {
   double recovery_deceleration_mps2=8.,recovery_jerk_mps3=8.,recovery_response_sec=.3;
   double recovery_lateral_acceleration_mps2=6.;
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
+  double passing_radius_m=10.;
+  bool passing_ahead_only=false;
+  double passing_lateral_m=3.;
+  double vehicle_face_min_width_m=1.5,vehicle_length_prior_m=0.;
 };
 
 
@@ -6993,7 +6997,7 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
-      auto native=convert(objects,predictions,reference);
+      auto native=convert(objects,predictions,reference,state);
 
       // Search/track the smooth target, but construct road permission from
       // the original map supports. Reference fitting must not change road area.
@@ -7006,8 +7010,7 @@ class IntegratedTrajectory {
       limits.preferred_speed_mps=referenceCurveTarget(guide,limits.maximum_speed_mps);
       bool passing=false;
       for(const auto& object:objects.objects)
-        passing=passing || std::hypot(object.position.x-state.pose.position.x,
-            object.position.y-state.pose.position.y)<10.;
+        passing=passing || passingObject(state,object);
       if(!dynamic_zone && (passing || dynamicBlocked(reference,state,objects,predictions,p_.curve_preview_m))) {
         limits.maximum_speed_mps=std::min(limits.maximum_speed_mps,avoidance_speed);
         limits.preferred_speed_mps=std::min(limits.preferred_speed_mps,avoidance_speed);
@@ -7046,6 +7049,19 @@ class IntegratedTrajectory {
     }
   }
  private:
+  // An object within the passing radius keeps the avoidance speed cap. With
+  // passing_ahead_only, an object fully behind the rear axle or outside the
+  // lateral window beside the vehicle no longer holds the cap.
+  bool passingObject(const integrated_native::EgoState& state,const interfaces::Object& object) const {
+    const double dx=object.position.x-state.pose.position.x,dy=object.position.y-state.pose.position.y;
+    if(std::hypot(dx,dy)>=p_.passing_radius_m)return false;
+    if(!p_.passing_ahead_only)return true;
+    const double c=std::cos(state.pose.yaw_rad),s=std::sin(state.pose.yaw_rad);
+    const double along=dx*c+dy*s,lateral=-dx*s+dy*c;
+    const double half=std::max({object.bbox_size.x,object.bbox_size.y,p_.minimum_obstacle_extent_m})/2;
+    return along+half>=-p_.solver.vehicle.rear_m &&
+        std::abs(lateral)<=p_.solver.vehicle.width_m/2+half+p_.passing_lateral_m;
+  }
   static Message hold(const nav_msgs::Odometry& ego) {
     Message output;interfaces::PathPoint point;point.pose.pose=ego.pose.pose;point.velocity=0;point.acceleration=0;
     output.points.push_back(point);point.time_from_start=ros::Duration(5);output.points.push_back(point);return output;
@@ -7189,7 +7205,7 @@ class IntegratedTrajectory {
     return o;
   }
   integrated_native::Predictions convert(const interfaces::Objects& current,const PredictedObjects& future,
-      const std::vector<integrated_native::ReferencePoint>& reference) const {
+      const std::vector<integrated_native::ReferencePoint>& reference,const integrated_native::EgoState& ego) const {
     (void)future;
     integrated_native::Predictions result;result.reference_stamp_sec=current.header.stamp.toSec();
     // The supplied static mission deliberately treats section-4 observations
@@ -7214,6 +7230,16 @@ class IntegratedTrajectory {
         const double delta=o.pose.yaw_rad-yaw;
         if(std::abs(std::sin(delta))>std::abs(std::cos(delta)))std::swap(o.length_m,o.width_m);
         o.pose.yaw_rad=yaw;
+        // A vehicle-wide face seen ahead hides the vehicle body behind it.
+        // Extend the box away from the ego along the road to the length prior.
+        if(p_.vehicle_length_prior_m>0 && o.width_m>=p_.vehicle_face_min_width_m && o.length_m<p_.vehicle_length_prior_m) {
+          const double c=std::cos(yaw),s=std::sin(yaw);
+          const double along=(o.pose.position.x-ego.pose.position.x)*c+(o.pose.position.y-ego.pose.position.y)*s;
+          if(along>0) {
+            const double shift=(p_.vehicle_length_prior_m-o.length_m)/2;
+            o.pose.position.x+=shift*c;o.pose.position.y+=shift*s;o.length_m=p_.vehicle_length_prior_m;
+          }
+        }
       }
       // A thin LiDAR face is not the full static obstacle. Preserve the
       // original static mission's unseen-face reserve in native search too.

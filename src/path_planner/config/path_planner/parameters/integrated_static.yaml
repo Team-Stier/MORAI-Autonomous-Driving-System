@@ -78,3 +78,12 @@ integrated_minimum_curve_speed_mps: 4.166666666666667
 # Bound avoidance and return slopes and reserve tracking clearance.
 integrated_road_margin_m: 0.15
 integrated_maximum_lateral_slope: 0.35
+
+# Avoidance speed cap holds only while an object is ahead of or beside the vehicle.
+integrated_passing_radius_m: 10.0
+integrated_passing_ahead_only: true
+integrated_passing_lateral_m: 3.0
+
+# A face at least this wide ahead is extended away from the ego to the vehicle length prior (0 disables).
+integrated_vehicle_face_min_width_m: 1.5
+integrated_vehicle_length_prior_m: 5.0
