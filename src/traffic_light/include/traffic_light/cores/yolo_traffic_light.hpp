@@ -30,6 +30,10 @@ struct YoloTrafficLightParameters {
     // Candidates whose box centre lies below this source-image row are dropped (lights stand above the
     // camera, so they appear above the horizon). Non-positive keeps every row.
     double maximum_center_y_px = 0.0;
+    // true: a LEFT result reports RED_LEFT when a red lamp is lit in the left-turn box, GREEN_LEFT
+    // when only green lamps are lit (TrackParameters colour bounds), otherwise UNKNOWN (combination
+    // not determined).
+    bool left_combination = false;
   };
   // A candidate below its class confidence is accepted when its box overlaps a head accepted within
   // timeout_sec and the lit lamp colour inside the box matches its class (go: green, stop: red,
@@ -131,9 +135,24 @@ class YoloTrafficLight {
     candidates = aboveRow(candidates, parameters.detection.maximum_center_y_px);
     const auto accepted = acceptDetections(candidates, image, message.header.stamp.toSec(),
                                            parameters, tracks);
+    const DetectionState state =
+        pushState(chooseFrameState(accepted, parameters.detection.ambiguity_margin));
     interfaces::TrafficLight output;
-    output.state = toRosState(pushState(
-        chooseFrameState(accepted, parameters.detection.ambiguity_margin)));
+    output.state = toRosState(state);
+    if (state == DetectionState::LeftTurn && parameters.detection.left_combination) {
+      const double stamp_sec = message.header.stamp.toSec();
+      const auto left = std::find_if(accepted.begin(), accepted.end(), [](const Detection& item) {
+        return item.state == DetectionState::LeftTurn;
+      });
+      if (left != accepted.end()) {
+        left_lamp = litPixels(image, left->box, parameters.track);
+        left_lamp_stamp_sec = stamp_sec;
+      }
+      const bool recent = stamp_sec >= left_lamp_stamp_sec &&
+                          stamp_sec - left_lamp_stamp_sec <= parameters.track.timeout_sec;
+      output.state = recent ? leftCombination(left_lamp, parameters.track.minimum_lit_pixels)
+                            : interfaces::TrafficLight::UNKNOWN;
+    }
     return output;
   }
 
@@ -324,6 +343,14 @@ class YoloTrafficLight {
     return best.state;
   }
 
+  static std::uint8_t leftCombination(const LitPixels& lit, int minimum) {
+    if (lit.red >= minimum) return interfaces::TrafficLight::RED_LEFT;
+    if (lit.green >= minimum && lit.red == 0 && lit.yellow == 0) {
+      return interfaces::TrafficLight::GREEN_LEFT;
+    }
+    return interfaces::TrafficLight::UNKNOWN;
+  }
+
   static std::uint8_t toRosState(DetectionState state) {
     switch (state) {
       case DetectionState::Go: return interfaces::TrafficLight::GREEN;
@@ -387,6 +414,8 @@ class YoloTrafficLight {
   std::string output_name;
   std::deque<DetectionState> history;
   std::vector<Track> tracks;
+  LitPixels left_lamp;
+  double left_lamp_stamp_sec = -1.0;
 };
 
 }  // namespace traffic_light

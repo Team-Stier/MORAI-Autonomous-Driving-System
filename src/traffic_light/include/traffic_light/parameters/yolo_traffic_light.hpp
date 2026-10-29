@@ -26,6 +26,7 @@ inline YoloTrafficLightParameters loadYoloTrafficLightParameters(
   if (params.has("history_size")) history_size = static_cast<int>(params.integer("history_size"));
   if (params.has("minimum_votes")) minimum_votes = static_cast<int>(params.integer("minimum_votes"));
   if (params.has("unknown_votes")) p.detection.unknown_votes = params.flag("unknown_votes");
+  if (params.has("left_combination")) p.detection.left_combination = params.flag("left_combination");
   if (params.has("maximum_center_y_px"))
     p.detection.maximum_center_y_px = params.number("maximum_center_y_px");
   p.detection.history_size = history_size > 0 ? static_cast<std::size_t>(history_size) : 0;
