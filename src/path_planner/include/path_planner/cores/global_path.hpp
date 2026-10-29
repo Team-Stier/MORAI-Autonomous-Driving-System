@@ -38,15 +38,17 @@ class GlobalPath {
     const auto start = match(ego_xy, yaw_rad);
     lanelet::Ids checkpoint_ids;
     for (const auto& checkpoint : checkpoints) checkpoint_ids.push_back(checkpoint.lanelet_id);
-    if (!route_ || route_->front() != start || checkpoint_ids != checkpoint_ids_) {
+    if (!start) {
+      route_ = Route{};
+    } else if (!route_ || route_->front() != *start || checkpoint_ids != checkpoint_ids_) {
       checkpoint_ids_ = checkpoint_ids;
       if (checkpoints.empty()) {
-        route_ = lanelet::routing::LaneletPath({start});
+        route_ = lanelet::routing::LaneletPath({*start});
       } else {
         lanelet::ConstLanelets via;
         for (std::size_t i = 0; i + 1 < checkpoints.size(); ++i)
           via.push_back(map_->laneletLayer.get(checkpoints[i].lanelet_id));
-        route_ = graph_->shortestPathVia(start, via, map_->laneletLayer.get(checkpoints.back().lanelet_id));
+        route_ = graph_->shortestPathVia(*start, via, map_->laneletLayer.get(checkpoints.back().lanelet_id));
       }
     }
 
@@ -54,7 +56,7 @@ class GlobalPath {
     nav_msgs::Path path;
     path.header = ego.header;
     if (route) {
-      const auto predecessors = graph_->previous(start, false);
+      const auto predecessors = graph_->previous(*start, false);
       if (!predecessors.empty()) {
         // shortcut: use the first predecessor at merges; track the incoming lane when ambiguity matters.
         lanelet::ConstLanelets lanes{predecessors.front()};
@@ -99,8 +101,8 @@ class GlobalPath {
     return closest;
   }
 
-  lanelet::ConstLanelet match(const lanelet::BasicPoint2d& position, double yaw_rad) const {
-    // ponytail: ten spatial candidates; increase the query count if junction density requires it.
+  lanelet::Optional<lanelet::ConstLanelet> match(
+      const lanelet::BasicPoint2d& position, double yaw_rad) const {
     const auto candidates = lanelet::geometry::findNearest(map_->laneletLayer, position, 10);
     std::vector<std::pair<std::tuple<bool, double, double, double, lanelet::Id, bool>, lanelet::ConstLanelet>> matches;
     for (const auto& candidate : candidates) {
@@ -110,12 +112,23 @@ class GlobalPath {
         const auto projection = project(line, position);
         const auto direction = line[projection.segment + 1] - line[projection.segment];
         const double heading_error = 1 - std::cos(std::atan2(direction.y(), direction.x()) - yaw_rad);
-        matches.emplace_back(std::make_tuple(heading_error >= 1, candidate.first,
-            projection.squared_distance, heading_error, lanelet.id(), lanelet.inverted()), lanelet);
+        // Overlapping junction polygons cannot resolve a fork by centimetres
+        // of centreline distance. Include direction and the nearby route prefix.
+        bool on_route = !route_;
+        if (route_) {
+          const auto end = route_->begin() + std::min<std::size_t>(3, route_->size());
+          on_route = std::find(route_->begin(), end, lanelet) != end;
+        }
+        const double score = projection.squared_distance + 4.0 * heading_error +
+            (on_route ? 0.0 : 0.25);
+        matches.emplace_back(std::make_tuple(heading_error >= 1,
+            std::max(0.0, candidate.first - 0.25), score,
+            heading_error, lanelet.id(), lanelet.inverted()), lanelet);
       }
     }
     std::sort(matches.begin(), matches.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
-    return matches.at(0).second;
+    if (matches.empty()) return {};
+    return matches.front().second;
   }
 
   std::shared_ptr<lanelet::LaneletMap> map_;
