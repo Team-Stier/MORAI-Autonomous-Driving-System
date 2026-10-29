@@ -43,6 +43,8 @@ if [[ -z ${EVAL_POD_HERE:-} ]]; then
   self=$(mktemp /tmp/eval_pod.XXXXXX); cp "$0" "$self"
   EVAL_POD_HERE=$(cd "$(dirname "$0")" && pwd) exec bash "$self" "$@"
 fi
+# GPUS / VOLUMES become arrays below and bash exports no arrays: the given lists are kept for a re-exec (CPU gate)
+export EVAL_POD_GPUS=${EVAL_POD_GPUS:-${GPUS:-}} EVAL_POD_VOLUMES=${EVAL_POD_VOLUMES:-${VOLUMES:-}}
 BUNDLE=${BUNDLE:-}; DRIVER=${DRIVER:-stack}; BRANCH=${BRANCH:-}; [[ $DRIVER == stack && -z ${ATTACH:-} && -z $BRANCH ]] && BRANCH=main
 PODS_LOG=${PODS_LOG:-/home/opc/morai-campaign/shared/pods.log}; RESULTS_DIR=${RESULTS_DIR:-/home/opc/morai-campaign/shared/results}
 [[ -n ${VERSION:-} ]] && MSG_PREFIX="[${VERSION}] ${MSG_PREFIX:-}"
@@ -56,8 +58,8 @@ draw() { python3 -c 'import random,sys; print(random.choice([s for s in range(10
 (( ${#SEEDS[@]} )) || SEEDS=($(draw))
 RUN=${NAME}_s$(IFS=-; echo "${SEEDS[*]}")   # results and B2 runs/eval_vps/RUN; LOCAL (ssh_config) keeps NAME
 KEY=${RUNPOD_API_KEY:-$(sed -n -E "s/^api_?key *= *[\"']?([^\"']*)[\"']?.*/\1/p" ~/.runpod/config.toml)}
-read -r -a VOLUMES <<< "${VOLUMES:-1tra2qsxbl:EU-CZ-1}"     # VOLUME_ID:DATA_CENTER ..., tried in order
-IFS=$'\n' read -r -d '' -a GPUS <<< "${GPUS:-NVIDIA GeForce RTX 5080
+read -r -a VOLUMES <<< "${EVAL_POD_VOLUMES:-1tra2qsxbl:EU-CZ-1}"     # VOLUME_ID:DATA_CENTER ..., tried in order
+IFS=$'\n' read -r -d '' -a GPUS <<< "${EVAL_POD_GPUS:-NVIDIA GeForce RTX 5080
 NVIDIA GeForce RTX 3080
 NVIDIA GeForce RTX 3090
 NVIDIA GeForce RTX 4090
