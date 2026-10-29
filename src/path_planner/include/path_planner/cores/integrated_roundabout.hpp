@@ -1,8 +1,5 @@
 #pragma once
 #include <path_planner/banks/shared_map.hpp>
-#include <algorithm>
-#include <cmath>
-#include <vector>
 #include <geometry_msgs/Point.h>
 #include <path_planner/libraries/types.hpp>
 #include <lanelet2_core/LaneletMap.h>
@@ -14,13 +11,14 @@
 #include <tuple>
 #include <interfaces/Path.h>
 #include <nav_msgs/Odometry.h>
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <utility>
+#include <vector>
 
-// ---- inlined from libraries/integrated_roundabout_mission.hpp ----
-// Frozen mission behavior from local workspace 69419e3.
 namespace path_planner {
-struct RoundaboutGapFollowMissionParameters {
+struct IntegratedRoundaboutParameters {
   std::vector<lanelet::Id> reference_lanelet_ids;
   lanelet::Id stop_line_id=0,departure_lanelet_id=0;
   std::vector<geometry_msgs::Point> stop_line;
@@ -53,10 +51,11 @@ struct RoundaboutGapFollowMissionParameters {
   double following_time_gap_sec = 1.2;
 };
 
-class RoundaboutGapFollowMission {
+class IntegratedRoundabout {
   struct Tube;
  public:
-  RoundaboutGapFollowMission(RoundaboutGapFollowMissionParameters parameters,lanelet::LaneletMap& map) : p_(std::move(parameters)) {
+  IntegratedRoundabout(IntegratedRoundaboutParameters parameters,SharedMap& shared) : p_(std::move(parameters)) {
+    auto& map=*shared.map;
     for(auto id:p_.reference_lanelet_ids) {
       for(const auto& q:map.laneletLayer.get(id).centerline3d()) {
         geometry_msgs::Point point;point.x=q.x();point.y=q.y();point.z=q.z();
@@ -95,6 +94,43 @@ class RoundaboutGapFollowMission {
                   const interfaces::CompetitionVehicleStatus& competition,
                   const interfaces::Objects& objects,const PredictedObjects& predictions,
                   const ros::Time& stamp) {
+    return publishLegacyPrefix(plan(ego,competition,objects,predictions,stamp),
+        std::max(0.,double(competition.velocity_x_mps)),20.);
+  }
+  const char* planningOutcome() const {return "existing-roundabout";}
+
+ private:
+static Message publishLegacyPrefix(const Message& reference,double measured_speed,
+                                   double minimum_length_m,double horizon_sec=5.) {
+  if(reference.points.size()<2)return reference;
+  std::vector<double> station(reference.points.size(),0.);
+  for(std::size_t i=1;i<reference.points.size();++i) {
+    const auto& a=reference.points[i-1].pose.pose.position;
+    const auto& b=reference.points[i].pose.pose.position;
+    station[i]=station[i-1]+std::hypot(b.x-a.x,b.y-a.y);
+  }
+  double speed=std::max(0.,measured_speed),distance=0.;
+  for(double time=0;time<horizon_sec-1e-9;time+=1./30) {
+    const auto after=std::upper_bound(station.begin(),station.end(),distance);
+    const auto i=std::min<std::size_t>(reference.points.size()-1,after-station.begin());
+    const double cap=std::isfinite(reference.points[i].velocity)?reference.points[i].velocity:
+        std::max(0.,measured_speed);
+    const double next=std::max(0.,speed+std::max(-4./30,std::min(2./30,cap-speed)));
+    distance+=(speed+next)/60.;speed=next;
+  }
+  const double extent=std::max(minimum_length_m,distance);
+  const auto after=std::lower_bound(station.begin(),station.end(),extent);
+  const std::size_t count=std::min(reference.points.size(),std::max<std::size_t>(2,after-station.begin()+1));
+  Message output=reference;
+  output.points.resize(count);
+  for(auto& point:output.points)point.time_from_start=ros::Duration(0);
+  return output;
+}
+
+  Message plan(const nav_msgs::Odometry& ego,
+                  const interfaces::CompetitionVehicleStatus& competition,
+                  const interfaces::Objects& objects,const PredictedObjects& predictions,
+                  const ros::Time& stamp) {
     auto path=referencePath(ego);
     if(path.points.size()<2){for(auto& p:path.points){p.velocity=0;p.acceleration=0;}return path;}
     const double current=projectStation(path.points.front().pose.pose.position);
@@ -127,13 +163,20 @@ class RoundaboutGapFollowMission {
       if(predicted!=predictions[0].objects.end() && !predicted->velocity_available)motion_ready=false;
     }
     if(remaining<=.35 && speed<.15)stopped_at_line_=true;
-    if(!stopped_at_line_) {setPhase(Phase::Approach,remaining);return stopProfile(std::move(path),station,remaining);}
-    setPhase(Phase::Yield,remaining);
+    if(!stopped_at_line_ && (remaining>p_.entry_decision_distance_m || speed>p_.approach_speed_mps)) {
+      gap_since_sec_=-1;
+      setPhase(Phase::Approach,remaining);return stopProfile(std::move(path),station,remaining);
+    }
+    setPhase(stopped_at_line_?Phase::Yield:Phase::Approach,remaining);
     planning_speed_mps_=p_.desired_speed_mps;planning_end_m_=station.back();
-    // Include pedal/vehicle response before the fresh launch. Check the complete
-    // merge at rest, then keep the accepted entry instead of alternating phases.
-    const auto launch=movingSchedule(path,station,obstacles,age+.8,0,0,current);
-    const bool clear_entry=motion_ready && !launch.empty() && launch.back().s>=std::max(0.,remaining)+p_.entry_check_length_m && launch.back().v>=p_.approach_speed_mps;
+    // A rolling entry must clear both immediate acceleration and coasting during
+    // pedal response. Keep the existing delayed launch for a stopped vehicle.
+    const auto launch=movingSchedule(path,station,obstacles,age+(stopped_at_line_?.8:0),stopped_at_line_?0:speed,0,0);
+    const auto delayed=stopped_at_line_?launch:movingSchedule(path,station,obstacles,age,speed,0,.8);
+    const auto clears_entry=[&](const std::vector<State>& schedule) {
+      return !schedule.empty() && schedule.back().s>=std::max(0.,remaining)+p_.entry_check_length_m && schedule.back().v>=p_.approach_speed_mps;
+    };
+    const bool clear_entry=motion_ready && clears_entry(launch) && clears_entry(delayed);
     if(clear_entry){if(gap_since_sec_<0)gap_since_sec_=objects.header.stamp.toSec();if(objects.header.stamp.toSec()-gap_since_sec_>=p_.entry_gap_confirmation_sec || objects.objects.empty())gate_open_=true;}
     else gap_since_sec_=-1;
     if(!gate_open_)return stopProfile(std::move(path),station,std::max(0.,remaining));
@@ -583,17 +626,18 @@ class RoundaboutGapFollowMission {
   }
   std::vector<State> movingSchedule(const Message& path,const std::vector<double>& station,
                                     const std::vector<Tube>& obstacles,double age,double velocity,
-                                    double acceleration,double) const {
+                                    double acceleration,double response_sec) const {
     // Check the same curve-limited forward motion that is executed after commitment.
     // A slower/braking candidate must never authorize a different, faster entry.
     const double end=5.0-age;
     State q{0,0,velocity,acceleration,0,-1};std::vector<State> launch{q};
     for(;q.t<end-1e-9;) {
-      const double h=std::min(p_.time_step_sec,end-q.t);
+      const bool responding=q.t<response_sec-1e-9;
+      const double h=std::min(p_.time_step_sec,(responding?std::min(end,response_sec):end)-q.t);
       const double target=speedTarget(station,q.s);
       const double desired=clamp((target-q.v-q.a*std::abs(q.a)/(2*p_.max_jerk_mps3))/p_.command_step_sec,
           -p_.max_deceleration_mps2,p_.max_acceleration_mps2);
-      const double a=clamp(desired,q.a-p_.max_jerk_mps3*h,q.a+p_.max_jerk_mps3*h);
+      const double a=responding?0:clamp(desired,q.a-p_.max_jerk_mps3*h,q.a+p_.max_jerk_mps3*h);
       const double v=std::max(0.,q.v+(q.a+a)*h/2);
       const Edge edge{q,h,v,a};const double progress=edge.station(h);
       if(progress>station.back() || !clear(edge,path,station,obstacles,age))return {};
@@ -688,51 +732,10 @@ class RoundaboutGapFollowMission {
   bool entered_ = false, gate_open_ = false,stopped_at_line_=false;
   Phase phase_ = Phase::Approach;
   std::vector<double> path_yaw_, path_turn_, path_curvature_, path_speed_;
-  RoundaboutGapFollowMissionParameters p_;
+  IntegratedRoundaboutParameters p_;
   std::vector<geometry_msgs::Point> raw_, controls_;
   std::vector<double> raw_station_;
   std::vector<Sample> samples_;
   double control_step_m_ = 0.0;
 };
 }  // namespace path_planner
-namespace path_planner {
-using IntegratedRoundaboutParameters=RoundaboutGapFollowMissionParameters;
-class IntegratedRoundabout {
- public:
-static Message publishLegacyPrefix(const Message& reference,double measured_speed,
-                                   double minimum_length_m,double horizon_sec=5.) {
-  if(reference.points.size()<2)return reference;
-  std::vector<double> station(reference.points.size(),0.);
-  for(std::size_t i=1;i<reference.points.size();++i) {
-    const auto& a=reference.points[i-1].pose.pose.position;
-    const auto& b=reference.points[i].pose.pose.position;
-    station[i]=station[i-1]+std::hypot(b.x-a.x,b.y-a.y);
-  }
-  double speed=std::max(0.,measured_speed),distance=0.;
-  for(double time=0;time<horizon_sec-1e-9;time+=1./30) {
-    const auto after=std::upper_bound(station.begin(),station.end(),distance);
-    const auto i=std::min<std::size_t>(reference.points.size()-1,after-station.begin());
-    const double cap=std::isfinite(reference.points[i].velocity)?reference.points[i].velocity:
-        std::max(0.,measured_speed);
-    const double next=std::max(0.,speed+std::max(-4./30,std::min(2./30,cap-speed)));
-    distance+=(speed+next)/60.;speed=next;
-  }
-  const double extent=std::max(minimum_length_m,distance);
-  const auto after=std::lower_bound(station.begin(),station.end(),extent);
-  const std::size_t count=std::min(reference.points.size(),std::max<std::size_t>(2,after-station.begin()+1));
-  Message output=reference;
-  output.points.resize(count);
-  for(auto& point:output.points)point.time_from_start=ros::Duration(0);
-  return output;
-}
-  IntegratedRoundabout(IntegratedRoundaboutParameters p,SharedMap& map):mission_(std::move(p),*map.map) {}
-  Message process(const nav_msgs::Odometry& ego,const interfaces::CompetitionVehicleStatus& competition,
-      const interfaces::Objects& objects,const PredictedObjects& predictions,const ros::Time& stamp) {
-    return publishLegacyPrefix(mission_.process(ego,competition,objects,predictions,stamp),
-        std::max(0.,double(competition.velocity_x_mps)),20.);
-  }
-  const char* planningOutcome() const {return "existing-roundabout";}
- private:
-  RoundaboutGapFollowMission mission_;
-};
-}

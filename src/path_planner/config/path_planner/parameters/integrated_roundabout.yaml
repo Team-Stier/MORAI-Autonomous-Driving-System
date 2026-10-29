@@ -29,7 +29,7 @@ entry_stop_margin_m: 0.8
 entry_decision_distance_m: 2.0
 # Check the crossing conflict beyond the yield target within the available forecast.
 entry_check_length_m: 8.0
-entry_gap_confirmation_sec: 0.15
+entry_gap_confirmation_sec: 0.10
 approach_speed_mps: 3.0
 # Reserve lateral tracking margin for the speed controller on curved geometry.
 curve_speed_ratio: 0.90
