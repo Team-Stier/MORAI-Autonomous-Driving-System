@@ -125,6 +125,13 @@ stamp "engine ready: $(grep -o 'loaded in.*' "$OUT/server.log" | cut -c1-120)"
 for n in $(seq "$N"); do until inrosn "$n" "rosnode list 2> /dev/null" | grep -q e2e_driver; do sleep 2; done; done
 fi
 stamp "stacks ready"
+# leftovers of an earlier run on this pod that was stopped before its end (a version switch kills an endless-lap eval3,
+# so the cleanup after "laps done" never ran): its RViz stayed on :20+n above the new one and its viewers kept the ports,
+# so the lap videos showed the old, frozen RViz (user 10/29)
+for p in $(cat /root/actor/rviz.pids 2> /dev/null); do pkill -INT -s "$p" 2> /dev/null; done
+kill $(cat /root/actor/rec.pids 2> /dev/null) 2> /dev/null; rm -f /root/actor/rviz.pids /root/actor/rec.pids /root/actor/managers.pids
+pkill -f "[v]iewer.py 127.0.0.1 8[01]9[0-9] "; pkill -f "[l]ap_video.py record"; sleep 2
+pkill -KILL -f "[r]viz -d /root/stack/"; pkill -KILL -f "[v]isualizer.launch"; pkill -KILL -f "[v]iewer.py 127.0.0.1 8[01]9[0-9] "
 # RVIZ=1: the repo's visualizer nodes and RViz (its config at RVIZ_FPS, 5) per world on Xvfb :20+n in the stack's ROS
 # master, CPUs of the stacks; outside the competition chain (/visualizer/* only feeds RViz). Captured next to the world.
 if [[ $DRIVER == stack && ${RVIZ:-0} == 1 ]]; then
