@@ -57,6 +57,8 @@ def report(d, k):
              weather=sorted({f"{w[1]}{w[2]}" for w in lap.get("weather", [])}), tunnel=meta.get("tunnel"), dynamic=dict(dyn),
              counts=sc.get("counts"), replay_ok=v["ok"] if v else None, replay_failures=v["failures"] if v else [],
              npcs=dict(roundabout=v.get("roundabout_npcs"), highway=v.get("highway_npcs"), sizes=len(v.get("vehicle_sizes", []))) if v else None)
+    if (d.parent / "ENV_INVALID").exists():           # eval3.sh's env guard tripped: kept, never aggregated
+        r["env"], r["env_reason"] = "invalid", (d.parent / "ENV_INVALID").read_text().strip()
     json.dump(r, open(d / f"lap_{k + 1:02d}.json", "w"), ensure_ascii=False, indent=1)
     f = lambda x, n=0: "-" if x is None else f"{x:.{n}f}"
     line = (f"{d.parent.name} 바퀴 {r['lap']} (seed {r['seed']}): {r['end']} {f(r['lap_s'])} s + 감점 {f(r['penalty_s'])} s + 복귀 "

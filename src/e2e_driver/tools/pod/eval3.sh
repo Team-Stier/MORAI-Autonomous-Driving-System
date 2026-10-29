@@ -146,6 +146,30 @@ done; touch "$OUT/LAPS_DELIVERED") &
   done; (( ok )) && break; sleep 1; done
   stamp "first steps") &
 (sleep 240; bash "$HERE/measure.sh" 120 > "$OUT/cpu.txt" 2>&1) &
+# env guard (DRIVER=stack, HARNESS v2): 60 s after the first steps and then every 5 min, over 30 s of wall time: the
+# /morai_udp_bridge/control_cmd rate in simulator seconds (wall rate / rho, rho from /sim_clock/state) >= GUARD_CMD_HZ (25)
+# and the stack's "pipeline Rejected" warnings <= GUARD_REJECT_PER_MIN (130: 1 % of the ~13k pipeline outputs a minute)
+# or OUT/ENV_INVALID (the reason) is written, the managers stop and every later lap is marked env-invalid. Each window
+# goes to OUT/env_guard.log.
+[[ $DRIVER == stack && ${GUARD:-1} == 1 ]] && (
+  until grep -q "first steps" "$OUT/timeline.txt"; do sleep 2; done; sleep 60
+  while pgrep -f "[e]val_manager.py eval_map" > /dev/null; do
+    for n in $(seq "$N"); do
+      log=/root/stack/$n/ros/log/latest/rosout.log
+      c0=$(wc -l < "$OUT/w$n/cmd_w$n.csv"); r0=$(grep -c "Rejected" "$log" 2> /dev/null); t0=$(date +%s.%N)
+      sleep 30
+      c1=$(wc -l < "$OUT/w$n/cmd_w$n.csv"); r1=$(grep -c "Rejected" "$log" 2> /dev/null); t1=$(date +%s.%N)
+      rho=$(tail -1 "$OUT/w$n/clk_w$n.csv" 2> /dev/null | awk -F, '{print $(NF-1)}'); rho=${rho:-1}
+      read -r hz rpm bad < <(python3 -c "import sys; c,r,dt,rho=map(float,sys.argv[1:]); hz=c/dt/max(rho,0.05); rpm=r/dt*60
+print(round(hz,1), round(rpm), int(hz < ${GUARD_CMD_HZ:-25} or rpm > ${GUARD_REJECT_PER_MIN:-130}))" $((c1 - c0)) $((r1 - r0)) "$(echo "$t1 - $t0" | bc)" "$rho")
+      echo "$(date +%T) w$n cmd ${hz} Hz(sim) rejected ${rpm}/min rho $rho" >> "$OUT/env_guard.log"
+      if [[ $bad == 1 ]]; then
+        echo "w$n cmd ${hz} Hz(sim) rejected ${rpm}/min rho $rho at $(date +%T)" > "$OUT/ENV_INVALID"; stamp "ENV_INVALID: $(cat "$OUT/ENV_INVALID")"
+        kill $(cat /root/actor/managers.pids) 2> /dev/null; break 2
+      fi
+    done
+    sleep 270
+  done) &
 for p in $(cat /root/actor/managers.pids); do wait "$p"; done
 stamp "laps done"
 

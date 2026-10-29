@@ -32,6 +32,11 @@
 #   terminate are logged to PODS_LOG (/home/opc/morai-campaign/shared/pods.log). VERSION=vN: Discord prefix "[vN] "
 #   (before MSG_PREFIX) and every delivered lap's lap_KK.json to RESULTS_DIR/vN/ (campaign_results.py aggregates).
 #   NO_EVAL=1: stop after the deploy (pod kept, as CREATE_ONLY).
+#   HARNESS v2: ~/morai-eval/pod/<name>/driver.pid = this driver's PID (stop a run with kill "$(cat .../driver.pid)" only;
+#   never pkill/pgrep patterns: other sessions' drivers run on this host). CPU gate after ssh up (a new pod): CPU model
+#   not EPYC 7xxx / Xeon and a 10 M-iteration python loop (best of 3) <= CPU_BENCH_MAX_S (0.80; i5-13600K 0.52) or the
+#   pod is deleted and another created (CPU_RETRIES, 6). ENV_INVALID from eval3.sh (its guard): the run ends; a new
+#   pod (not ATTACH) is then replaced the same way.
 set -uo pipefail
 # run from a private copy: an edit of this file (git checkout, another session) cannot break a run in progress
 if [[ -z ${EVAL_POD_HERE:-} ]]; then
@@ -43,7 +48,7 @@ PODS_LOG=${PODS_LOG:-/home/opc/morai-campaign/shared/pods.log}; RESULTS_DIR=${RE
 [[ -n ${VERSION:-} ]] && MSG_PREFIX="[${VERSION}] ${MSG_PREFIX:-}"
 podlog() { echo "$(date '+%F %T %Z') $*" >> "$PODS_LOG"; }
 HERE=$EVAL_POD_HERE; REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
-NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
+ORIG_ARGS=("$@"); NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
 # no seed given: a new one per run (scenes S*1000+k, in laps.jsonl, every lap report and the results name NAME_sS); give
 # one only to replay scenes. draw: eval seeds are 0-99 (DAgger actors 1000+, PPO 2000+), never 7, 28 or 29 (the scenes of
 # earlier runs, user 10/28) or a seed of this run
@@ -58,7 +63,7 @@ NVIDIA GeForce RTX 3090
 NVIDIA GeForce RTX 4090
 NVIDIA RTX A5000
 NVIDIA GeForce RTX 3070}"
-LOCAL=$HOME/morai-eval/pod/$NAME; mkdir -p "$LOCAL"; SSHC=$LOCAL/ssh_config
+LOCAL=$HOME/morai-eval/pod/$NAME; mkdir -p "$LOCAL"; SSHC=$LOCAL/ssh_config; echo $$ > "$LOCAL/driver.pid"
 T0=$(date +%s.%N | cut -c1-14)
 log() { echo "$(date +%T) $*" | tee -a "$LOCAL/eval_pod.log"; }
 gql() { curl -s https://api.runpod.io/graphql -H 'content-type: application/json' -H "Authorization: Bearer $KEY" -d "$1"; }
@@ -155,6 +160,21 @@ late() { (( $(date +%s) - ${T0%.*} > $1 )) && { log "$2: gave up"; exit 1; }; tr
 [[ -z ${ATTACH:-} ]] && {
 until P true 2> /dev/null; do late 900 "no ssh 15 min after create (setup.sh died before sshd? /workspace/setup.<host>.log)"; sleep 3; done
 log "ssh up ($ip:$port)"
+read -r bench cpu < <(P "python3 -c 'import time
+b=9.9
+for _ in range(3):
+    t=time.perf_counter(); s=0
+    for i in range(10_000_000): s+=i*i
+    b=min(b, time.perf_counter()-t)
+m=[l.split(\":\",1)[1].strip() for l in open(\"/proc/cpuinfo\") if l.startswith(\"model name\")][0]
+print(round(b, 3), m)'")
+log "CPU: $cpu, bench ${bench:-?} s (max ${CPU_BENCH_MAX_S:-0.80})"
+if [[ -z $bench || $cpu == *EPYC\ 7* || $cpu == *Xeon* ]] || python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2]) else 1)" "$bench" "${CPU_BENCH_MAX_S:-0.80}"; then
+  podlog "reject $POD ($NAME): CPU $cpu bench ${bench:-?} s"
+  (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) || { log "CPU gate: $((CPU_RETRY)) pods rejected, giving up"; exit 1; }
+  bye; log "CPU gate: pod rejected, creating another"
+  CPU_RETRY=$(( ${CPU_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"
+fi
 if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
   M=/root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Version
   until P "grep -q '^\[fetch\] ' /workspace/fetch.log"; do late ${FETCH_MAX_S:-3000} "bundle fetch (/workspace/fetch.log)"; sleep 10; done   # all shards in
@@ -244,6 +264,11 @@ for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   done
   [[ ${LAP_DELIVER:-0} == 1 ]] && deliver "$WN"
   mkdir -p "$LOCAL/$WN"; rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4.raw' pod:/workspace/results/$WN/ pod:/workspace/results/$WN.log "$LOCAL/$WN/"
+  if P "test -e /workspace/results/$WN/ENV_INVALID"; then
+    log "ENV_INVALID: $(P "cat /workspace/results/$WN/ENV_INVALID")"; podlog "env-invalid $POD ($NAME): $(P "cat /workspace/results/$WN/ENV_INVALID")"
+    [[ -z ${ATTACH:-} && ${KEEP:-0} != 1 ]] && (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) && { bye; CPU_RETRY=$(( ${CPU_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"; }
+    break
+  fi
   P "test -e /workspace/results/$WN/DONE" && log "done: $LOCAL/$WN" || { log "eval3 stopped early: $LOCAL/$WN/$WN.log"; break; }
   cat "$LOCAL/$WN/summary.txt" 2> /dev/null
   # scenes that did not play as generated (GT replay check failed): drawn anew once, as one more wave
