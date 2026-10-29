@@ -7425,13 +7425,15 @@ class IntegratedTrajectory {
       return n;
     };
     profile(n);
-    const std::size_t hit=conflict();
-    std::size_t stop=n;
-    if(hit<n) {
-      stop=0;
-      while(stop+1<hit && path[stop+1].progress_m<=path[hit].progress_m-d.stop_buffer_m)++stop;
-      stop=std::max<std::size_t>(stop,1);
-      profile(stop);
+    // A slower profile reaches every sample later and can meet another body
+    // sooner: check again after each stop and move the stop forward if needed.
+    std::size_t stop=n,hit=conflict();
+    for(int pass=0;hit<n && pass<4;++pass) {
+      std::size_t next=0;
+      while(next+1<hit && path[next+1].progress_m<=path[hit].progress_m-d.stop_buffer_m)++next;
+      next=std::max<std::size_t>(next,1);
+      if(next>=stop)break;
+      stop=next;profile(stop);hit=conflict();
     }
     auto spatial=std::make_shared<std::vector<integrated_native::Pose2>>();
     for(const auto& point:path)spatial->push_back(point.pose);
@@ -7457,7 +7459,7 @@ class IntegratedTrajectory {
       timed.push_back(wait);
     }
     timed.front().spatial_reference=spatial;
-    if(hit<n)ROS_INFO_THROTTLE(1.,"[static detour] stop %.1f m ahead for a forecast body",path[stop].progress_m);
+    if(stop<n)ROS_INFO_THROTTLE(1.,"[static detour] stop %.1f m ahead for a forecast body",path[stop].progress_m);
     return timed;
   }
   bool detourId(std::uint32_t id) const {return std::find(detour_ids_.begin(),detour_ids_.end(),id)!=detour_ids_.end();}

@@ -305,3 +305,20 @@ TEST(StaticDetour, StartsFromRestWithNegativeAccelerationReading) {
   ASSERT_GT(path.points.size(), 2u);
   EXPECT_GT(maximumSpeed(path), 1.0);
 }
+
+// A committed bypass with a slow body walking north in its corridor stops
+// short of where that body will be.
+TEST(StaticDetour, StopsCommittedBypassForMovingBody) {
+  Scene scene;
+  scene.place(kApproachX, kApproachY, kApproachYaw, 5.0);
+  scene.add(-59.05, -143.32, kApproachYaw, 0.56, 0.56);
+  interfaces::Path path;
+  for (int scan = 0; scan < 3; ++scan) path = scene.plan();
+  ASSERT_LT(crossingX(path, -143.32), kLaneCentreX - 1.0);
+  scene.add(-61.0, -160.0, 1.5708, 0.6, 0.6, 0.0, 1.0, true);
+  path = scene.plan();
+  ASSERT_GT(path.points.size(), 1u);
+  EXPECT_LT(path.points.back().velocity, 0.1);
+  // The front bumper (3.85 m ahead of the rear axle) stays behind the body's 5 s position.
+  EXPECT_LT(path.points.back().pose.pose.position.y + 3.85, -155.0);
+}
