@@ -21,11 +21,6 @@ inline StopLineStateParameters loadStopLineStateParameters(const node_pipeline::
       !std::isfinite(result.intersection_after_m) || result.intersection_after_m < 0 ||
       !std::isfinite(result.intersection_deceleration_mps2) || result.intersection_deceleration_mps2 <= 0)
     throw std::invalid_argument("invalid intersection speed/distance/deceleration parameters");
-  if (params.has("jump_distance_m")) result.jump_distance_m = params.number("jump_distance_m");
-  if (params.has("jump_speed_mps")) result.jump_speed_mps = params.number("jump_speed_mps");
-  if (!std::isfinite(result.jump_distance_m) || result.jump_distance_m <= 0 ||
-      !std::isfinite(result.jump_speed_mps) || result.jump_speed_mps <= 0)
-    throw std::invalid_argument("invalid stop_line_state jump_distance_m/jump_speed_mps");
   if (params.has("stop_line_extension_m")) result.stop_line_extension_m = params.number("stop_line_extension_m");
   if (!std::isfinite(result.stop_line_extension_m) || result.stop_line_extension_m < 0 || result.stop_line_extension_m > 5)
     throw std::invalid_argument("stop_line_extension_m must be between 0 and 5 m");

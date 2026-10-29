@@ -13,15 +13,6 @@
 #include <vector>
 
 namespace velocity_planner {
-struct IntegratedStopDynamicParameters {
-  double blind_detection_distance_m = 0.0;  // 0 disables the blind-approach limit.
-  double blind_deceleration_mps2 = 2.5;
-  // >0: a YELLOW also latches the stop when the front axle (front_axle_m ahead of the rear axle) can
-  // still stop yellow_stop_margin_m before the line at this deceleration after the response time.
-  double yellow_stop_deceleration_mps2 = 0.0;
-  double front_axle_m = 3.0;
-  double yellow_stop_margin_m = 0.5;
-};
 // S5 dynamic-obstacle approach: circular GREEN or LEFT permits signal release.
 // Obstacle stop velocities from the upstream planner are always preserved.
 class IntegratedStopDynamic {
@@ -38,13 +29,11 @@ class IntegratedStopDynamic {
     if(timed && changed)reschedule(result.first,path.points.back().time_from_start.toSec());
     return result;
   }
-  IntegratedStopDynamic(IntegratedStopDynamicParameters parameters,StopLineState& state)
-      : parameters_(parameters),state_(state) {}
+  explicit IntegratedStopDynamic(StopLineState& state) : state_(state) {}
   std::pair<interfaces::Path, tf2_msgs::TFMessage> calculate(
       const interfaces::Path& path, const interfaces::TrafficLight& light,
       const interfaces::CompetitionVehicleStatus& competition, const tf2_msgs::TFMessage& tf) {
     interfaces::Path output = path;
-    if (releaseAfterJump(path)) go_line_id_ = 0;
     releasePassedLine(path);
     const auto& parameters = state_.parameters;
     if (state_.stopping &&
@@ -93,26 +82,18 @@ class IntegratedStopDynamic {
     }
     const auto contact = firstContact(detection, detection_station);
     if (contact.id != state_.released_stop_line_id) state_.released_stop_line_id = 0;
-    const double stop_offset_m = parameters.x_m;
-    const double stop_station_m = contact.station_m - stop_offset_m;
+    const double stop_station_m = contact.station_m - parameters.x_m;
     const double speed_mps = std::abs(static_cast<double>(competition.signed_velocity_mps));
     if (!state_.stopping && contact.id != 0 && contact.id != state_.released_stop_line_id &&
         (signal == Signal::Stop ||
-         (signal == Signal::Yellow && (speed_mps * speed_mps / (2 * parameters.z_mps2) <= stop_station_m ||
-                                       frontAxleCanStop(speed_mps, contact.station_m, parameters))))) {
+         (signal == Signal::Yellow && speed_mps * speed_mps / (2 * parameters.z_mps2) <= stop_station_m))) {
       state_.stopping = true;
       state_.stopping_started_sec = path.header.stamp.toSec();
       state_.stop_line_id = contact.id;
       state_.green_frames = 0;
     }
     limitIntersectionSpeed(output, contact);
-    // A GO observed on the current approach lifts the blind-approach limit until that line changes.
-    if (go_line_id_ != contact.id) go_line_id_ = 0;
-    if (contact.id != 0 && signal == Signal::Go) go_line_id_ = contact.id;
-    if (!state_.stopping) {
-      limitBlindApproach(output, station, contact, signal, stop_offset_m);
-      return {std::move(output), tf};
-    }
+    if (!state_.stopping) return {std::move(output), tf};
     if (contact.id == 0) {
       for (auto& point : output.points) {point.velocity=0;point.acceleration=0;}
       return {std::move(output),tf};
@@ -215,66 +196,6 @@ class IntegratedStopDynamic {
     double station_m = std::numeric_limits<double>::infinity();
   };
 
-  bool frontAxleCanStop(double speed_mps, double line_station_m, const StopLineStateParameters& state) const {
-    const double deceleration = parameters_.yellow_stop_deceleration_mps2;
-    if (deceleration <= 0) return false;
-    return speed_mps * speed_mps / (2 * deceleration) + speed_mps * state.stop_response_time_sec <=
-           line_station_m - parameters_.front_axle_m - parameters_.yellow_stop_margin_m;
-  }
-
-  // While the light of the approached line is unobserved (UNKNOWN/OFF) and no GO was seen for it,
-  // reach blind_detection_distance_m before the line no faster than the stop profile allows for a
-  // target at that distance, so a RED first observed there still stops before the line.
-  void limitBlindApproach(interfaces::Path& path, const std::vector<double>& station, const Contact& contact,
-                          Signal signal, double stop_offset_m) const {
-    const auto& p = state_.parameters;
-    const double detection_m = parameters_.blind_detection_distance_m;
-    if (detection_m <= 0 || contact.id == 0 || contact.id == state_.released_stop_line_id ||
-        contact.id == go_line_id_ || signal != Signal::Ignore) return;
-    const double response = p.z_mps2 * p.stop_response_time_sec;
-    const double braking = 2 * p.z_mps2 * std::max(0.0, detection_m - stop_offset_m);
-    const double creep_mps = braking / (std::sqrt(response * response + braking) + response);
-    for (std::size_t i = 0; i < path.points.size(); ++i) {
-      const double remaining_m = contact.station_m - station[i];
-      if (remaining_m <= 0) continue;
-      const double beyond_m = std::max(0.0, remaining_m - detection_m);
-      const double limit = std::sqrt(creep_mps * creep_mps + 2 * parameters_.blind_deceleration_mps2 * beyond_m);
-      auto& point = path.points[i];
-      if (limit < point.velocity) {
-        point.velocity = limit;
-        point.acceleration = std::min(point.acceleration, beyond_m > 0 ? -parameters_.blind_deceleration_mps2 : 0.0);
-      }
-    }
-  }
-
-  // A teleport or checkpoint return moves the path origin farther than driving allows since the
-  // previous cutoff call; a stop latched at the previous place does not apply to the new one.
-  bool releaseAfterJump(const interfaces::Path& path) {
-    if (path.points.empty()) return false;
-    constexpr double kMaximumElapsedSec = 2.0;
-    const auto& p = state_.parameters;
-    const auto& origin = path.points.front().pose.pose.position;
-    const double stamp_sec = path.header.stamp.toSec();
-    bool jumped = false;
-    if (state_.previous_path_stamp_sec >= 0) {
-      const double elapsed_sec = std::max(0.0, std::min(kMaximumElapsedSec, stamp_sec - state_.previous_path_stamp_sec));
-      const double moved_m = std::hypot(origin.x - state_.previous_path_x_m, origin.y - state_.previous_path_y_m);
-      jumped = stamp_sec < state_.previous_path_stamp_sec || moved_m > p.jump_distance_m + p.jump_speed_mps * elapsed_sec;
-      if (jumped) {
-        state_.stopping = false;
-        state_.stop_line_id = 0;
-        state_.released_stop_line_id = 0;
-        state_.green_frames = 0;
-        // A rewound clock gives older image stamps; GO confirmation must count them again.
-        state_.last_light_stamp_ns = 0;
-        state_.intersection_remaining_m = -1.0;
-      }
-    }
-    state_.previous_path_x_m = origin.x;
-    state_.previous_path_y_m = origin.y;
-    state_.previous_path_stamp_sec = stamp_sec;
-    return jumped;
-  }
   // Keep this calculation in each selected Core; the Bank carries only state.
   void limitIntersectionSpeed(interfaces::Path& path, const Contact& contact) {
     const auto& p = state_.parameters;
@@ -361,8 +282,6 @@ class IntegratedStopDynamic {
     return contact;
   }
 
-  IntegratedStopDynamicParameters parameters_;
   StopLineState& state_;
-  std::int64_t go_line_id_ = 0;
 };
 }  // namespace velocity_planner
