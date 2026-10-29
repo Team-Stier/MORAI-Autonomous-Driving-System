@@ -30,7 +30,9 @@ def signal_detection(d, c, scorer_dir):
         return None
     sys.path.insert(0, str(scorer_dir))
     from scorer import KMap, load_config
-    km = KMap.from_files(load_config())
+    cfg = load_config()
+    km = KMap.from_files(cfg)
+    judged = set(map(str, cfg["signal"]["stop_lines"]))        # the four the rules judge (7294, 6254, 4188, 4356)
     w0, w1 = c[0, 0], c[-1, 0]
     rows = [r for r in map(json.loads, open(f)) if "ego" in r and "tl" in r and w0 <= r["wall"] <= w1]
     if not rows:
@@ -38,6 +40,8 @@ def signal_detection(d, c, scorer_dir):
     xy = np.array([r["ego"][:2] for r in rows])
     out = {}
     for sid, s_stop in km.route_stops.items():
+        if str(sid) not in judged:
+            continue
         win = np.flatnonzero((km.s > s_stop - 150) & (km.s < s_stop + 20))
         if not len(win):
             continue
@@ -131,7 +135,7 @@ def report(d, k):
             f"터널 {r['tunnel']} | 동적 {dict(dyn)} | NPC {r['npcs']} | 재생 "
             + ("확인됨" if r["replay_ok"] else f"실패 {r['replay_failures']}" if r["replay_ok"] is False else "기록 없음"))
     ev, tl = os.environ.get("EVENT_T0"), d.parent / "timeline.txt"
-    first = [float(l.split()[0]) for l in (tl.read_text().splitlines() if tl.exists() else []) if l.split(" ", 2)[2:3] == ["first steps"]]
+    first = [float(l.split()[0]) for l in (tl.read_text(errors="replace").splitlines() if tl.exists() else []) if l.split(" ", 2)[2:3] == ["first steps"]]
     if k == 0 and ev and first:                      # deliver_watch.sh: the delivery event's epoch
         s = first[0] - float(ev); r["event_to_first_step_s"] = round(s)
         line += f" | 납품 이벤트→첫 주행 step {int(s // 60)}분 {int(s % 60)}초"
