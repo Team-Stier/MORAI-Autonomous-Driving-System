@@ -63,6 +63,8 @@ integrated_recovery_jerk_mps3: 8.0
 # Steering delay plus settling allowance; measured departures after nominal failure only.
 integrated_recovery_reentry_response_sec: 0.3
 integrated_recovery_lateral_acceleration_mps2: 6.0
+# Boxes fitted to one flat face can have a zero side; plan with at least 0.3 m.
+integrated_minimum_object_extent_m: 0.3
 
 # Publish the full optimized geometry separately from the timed trajectory.
 integrated_publish_lateral_reference: true

@@ -263,3 +263,25 @@ TEST(IntegratedDynamic, StoppedOffHeadingInCurveDrivesOn) {
   const auto path = scene.plan({});
   EXPECT_GT(maximumSpeed(path), 1.0);
 }
+
+// A zero-width box (one flat face) beside the zone lane is planned around, not a calculation-domain hold.
+TEST(IntegratedDynamic, ZeroWidthBoxKeepsPlanning) {
+  ros::Time::init();  // a failed plan logs through ROS_WARN_THROTTLE
+  Scene scene;
+  auto box = scene.object(15.0, -2.5, 0.0, 0.0, 1.13);
+  box.bbox_size.y = 0.0;
+  const auto path = scene.plan({box});
+  EXPECT_STRNE(scene.core.planningOutcome(), "calculation-domain");
+  EXPECT_GT(maximumSpeed(path), 1.0);
+}
+
+// Standing still with the brake released and a negative IMU reading, the plan still starts.
+TEST(IntegratedDynamic, StandstillNegativeImuStarts) {
+  ros::Time::init();  // a failed plan logs through ROS_WARN_THROTTLE
+  Scene scene;
+  scene.place(-60.41, 10.0, std::atan2(29.88, -0.165), 0.02, 6);
+  scene.competition.brake = 0;
+  scene.imu.linear_acceleration.x = -0.6;
+  const auto path = scene.plan({});
+  EXPECT_GT(maximumSpeed(path), 1.0);
+}

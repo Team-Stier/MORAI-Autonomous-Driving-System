@@ -8,6 +8,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace {
 const std::string kPackage = std::string(__FILE__).substr(0, std::string(__FILE__).rfind("/test/unit/"));
@@ -51,9 +52,10 @@ struct Scene {
     route = std::get<5>(global.process(ego, competition, none, tf, imu, remaining));
   }
 
-  interfaces::Path plan() {
+  interfaces::Path plan(const std::vector<interfaces::Object>& list = {}) {
     interfaces::Objects objects;
     objects.header = ego.header;
+    objects.objects = list;
     path_planner::PredictedObjects predictions;
     predictions.fill(objects);
     return core.process(ego, competition, objects, tf, imu, route, predictions, stamp);
@@ -115,4 +117,46 @@ TEST(IntegratedPath, JumpReplansLikeAFreshCore) {
     EXPECT_NEAR(after_jump.points[i].pose.pose.position.y, reference.points[i].pose.pose.position.y, 1e-6);
     EXPECT_NEAR(after_jump.points[i].velocity, reference.points[i].velocity, 1e-6);
   }
+}
+
+namespace {
+// A standing box at (x, y) fitted to one flat face: zero width, measured still.
+interfaces::Object flatBox(double x, double y, double yaw_rad) {
+  interfaces::Object o;
+  o.id = 3;
+  o.label = "unknown";
+  o.position.x = x;
+  o.position.y = y;
+  o.bbox_pose.position = o.position;
+  o.bbox_pose.orientation.z = std::sin(yaw_rad / 2);
+  o.bbox_pose.orientation.w = std::cos(yaw_rad / 2);
+  o.bbox_size.x = 1.13;
+  o.bbox_size.y = 0.0;
+  o.bbox_size.z = 1.0;
+  o.velocity_available = true;
+  return o;
+}
+}  // namespace
+
+// A zero-width box 15 m ahead beside the lane is planned around, not a calculation-domain hold.
+TEST(IntegratedPath, ZeroWidthBoxKeepsPlanning) {
+  ros::Time::init();  // a failed plan logs through ROS_WARN_THROTTLE
+  Scene scene;
+  scene.place(-85.993, -241.306, 1.0664, 10.0);
+  const double x = -85.993 + 15 * std::cos(1.0664) - 2.5 * std::sin(1.0664);
+  const double y = -241.306 + 15 * std::sin(1.0664) + 2.5 * std::cos(1.0664);
+  const auto path = scene.plan({flatBox(x, y, 1.0664)});
+  EXPECT_STRNE(scene.core.planningOutcome(), "calculation-domain");
+  EXPECT_GT(maximumSpeed(path), 5.0);
+}
+
+// Standing still with the brake released and a negative IMU reading, the plan still starts.
+TEST(IntegratedPath, StandstillNegativeImuStarts) {
+  ros::Time::init();  // a failed plan logs through ROS_WARN_THROTTLE
+  Scene scene;
+  scene.place(-100.597, -267.710, 1.0668, 0.02);
+  scene.competition.brake = 0;
+  scene.imu.linear_acceleration.x = -0.6;
+  const auto path = scene.plan();
+  EXPECT_GT(maximumSpeed(path), 1.0);
 }

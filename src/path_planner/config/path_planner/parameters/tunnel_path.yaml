@@ -53,8 +53,8 @@ integrated_maximum_lateral_acceleration_mps2: 5.5
 integrated_preferred_lateral_acceleration_mps2: 2.8
 integrated_following_gap_m: 1.5
 integrated_following_headway_sec: 0.8
-# 45 km/h through section 15; the zone box covers the whole section.
-integrated_dynamic_zone_speed_mps: 12.5
+# 40 km/h through section 15 (low props show only within ~15 m); the zone box covers the whole section.
+integrated_dynamic_zone_speed_mps: 11.111111111111111
 integrated_dynamic_zone_approach_m: 30.0
 # Hold only for a body measured crossing the road at least this fast inside the stopping envelope.
 integrated_dynamic_zone_moving_speed_mps: 0.8
@@ -91,7 +91,12 @@ tunnel_vulnerable_min_height_m: 0.3
 tunnel_vulnerable_reach_m: 3.0
 tunnel_vulnerable_pass_speed_mps: 4.5
 tunnel_vulnerable_deceleration_mps2: 2.0
+# A pedestrian lost from view keeps limiting the speed for 2 s, its reach widened by 2 m/s meanwhile.
+tunnel_vulnerable_memory_sec: 2.0
+tunnel_vulnerable_walk_speed_mps: 2.0
 # Plan around small bodies with at least a 0.6 m footprint.
 tunnel_small_body_min_extent_m: 0.6
 # Box fragments seen at 3.4 Hz carry 0.2-0.8 m/s of false motion: plan bodies slower than 0.9 m/s as standing still.
 tunnel_still_speed_mps: 0.9
+# A box fitted to one flat face can have a zero side: plan every body with at least 0.3 m sides.
+minimum_object_extent_m: 0.3

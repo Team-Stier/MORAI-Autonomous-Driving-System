@@ -6981,6 +6981,8 @@ struct IntegratedDynamicTrajectoryParameters {
   // Inside the dynamic zone a small body whose motion is not yet measured or
   // inferred may be walking: its forecast body grows at this speed, capped.
   double unknown_walker_speed_mps=0,unknown_walker_max_m=0;
+  // A box fitted to one flat face can have a zero side; plan with at least this extent.
+  double minimum_object_extent_m=0;
 };
 
 
@@ -7015,11 +7017,12 @@ class IntegratedTrajectory {
       // from zero acceleration when the vehicle is held by its brake.
       if(state.speed_mps<.001 && std::abs(state.acceleration_mps2)<.05)
         state.acceleration_mps2=0;
-      if(status.brake>0 && state.acceleration_mps2<0) {
-        // Brake force cannot be extended through rest into reverse motion.
-        // Project only an infeasible braking seed onto the forward-only
-        // reference model. Measured speed and all road/obstacle limits stay
-        // unchanged; assuming less braking is conservative for stopping space.
+      if(state.acceleration_mps2<0) {
+        // Braking, or a negative IMU reading with the brake released, cannot be
+        // extended through rest into reverse motion. Project only an infeasible
+        // braking seed onto the forward-only reference model. Measured speed and
+        // all road/obstacle limits stay unchanged; assuming less braking is
+        // conservative for stopping space.
         const double release_bound=std::sqrt(2*p_.solver.max_longitudinal_jerk_mps3*state.speed_mps);
         state.acceleration_mps2=state.speed_mps<.05 ? 0. :
             std::max(state.acceleration_mps2,-release_bound*(1-1e-8));
@@ -7239,6 +7242,7 @@ class IntegratedTrajectory {
     integrated_native::Predictions result;result.reference_stamp_sec=current.header.stamp.toSec();
     for(const auto& input:current.objects) {
       auto o=object(input);o.source_stamp_sec=result.reference_stamp_sec;
+      o.length_m=std::max(o.length_m,parameters.minimum_object_extent_m);o.width_m=std::max(o.width_m,parameters.minimum_object_extent_m);
       bool measured=input.velocity_available;
       if(!input.velocity_available) {
         const auto inferred=std::find_if(future[0].objects.begin(),future[0].objects.end(),

@@ -68,6 +68,9 @@ inline IntegratedDynamicTrajectoryParameters loadIntegratedDynamicTrajectoryPara
     if(!std::isfinite(value) || value<0)throw std::invalid_argument("invalid integrated dynamic interaction parameter");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
+  if(r.has("integrated_minimum_object_extent_m"))p.minimum_object_extent_m=r.number("integrated_minimum_object_extent_m");
+  if(!std::isfinite(p.minimum_object_extent_m) || p.minimum_object_extent_m<0 || p.minimum_object_extent_m>1)
+    throw std::invalid_argument("invalid integrated minimum object extent");
   if(r.has("integrated_recovery_lateral_acceleration_mps2"))p.recovery_lateral_acceleration_mps2=r.number("integrated_recovery_lateral_acceleration_mps2");
   if(!std::isfinite(p.recovery_lateral_acceleration_mps2) || p.recovery_lateral_acceleration_mps2<s.max_lateral_accel_mps2 || p.recovery_lateral_acceleration_mps2>6.)
     throw std::invalid_argument("invalid integrated recovery lateral bound");

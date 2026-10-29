@@ -114,11 +114,11 @@ TEST(TunnelPath, RouteExistsInTunnel) {
 }
 
 TEST(TunnelPath, CapsSpeedThroughTunnel) {
-  Scene scene(12.0);
+  Scene scene(10.0);
   const auto path = scene.plan({});
   ASSERT_GT(path.points.size(), 2u);
-  EXPECT_GT(maximumSpeed(path), 12.0);
-  EXPECT_LE(maximumSpeed(path), 12.5 + 1e-6);
+  EXPECT_GT(maximumSpeed(path), 10.5);
+  EXPECT_LE(maximumSpeed(path), 40.0 / 3.6 + 1e-6);
 }
 
 TEST(TunnelPath, ApproachesWalkwayPedestrianAtStoppableSpeed) {
@@ -173,6 +173,42 @@ TEST(TunnelPath, PlansSlowFragmentsAsStandingStill) {
   }
 }
 
+TEST(TunnelPath, DropsSidewaysMotionOfVehicleSizedBody) {
+  // A box 5 x 2 m 15 m ahead half in our lane whose outline drifts 1.2 m/s across the road plans like a standing one.
+  Scene drifting(8.0), standing(8.0);
+  auto box = drifting.body(15.0, -1.8, 5.0, 2.0, 2.4);
+  box.velocity.x = -1.2 * std::sin(drifting.yaw_rad);
+  box.velocity.y = 1.2 * std::cos(drifting.yaw_rad);
+  const auto moved = drifting.plan({box});
+  const auto still = standing.plan({standing.body(15.0, -1.8, 5.0, 2.0, 2.4)});
+  ASSERT_GT(still.points.size(), 2u);
+  ASSERT_EQ(moved.points.size(), still.points.size());
+  for (std::size_t i = 0; i < still.points.size(); ++i) {
+    EXPECT_NEAR(moved.points[i].pose.pose.position.x, still.points[i].pose.pose.position.x, 1e-6);
+    EXPECT_NEAR(moved.points[i].pose.pose.position.y, still.points[i].pose.pose.position.y, 1e-6);
+    EXPECT_NEAR(moved.points[i].velocity, still.points[i].velocity, 1e-6);
+  }
+}
+
+TEST(TunnelPath, PlansAroundLongZeroWidthFace) {
+  // One flat face 2 m long and 0 m deep at our right lane edge 12 m ahead: the solver still gets a positive footprint.
+  Scene scene(6.0);
+  const auto path = scene.plan({scene.body(12.0, -1.6, 2.0, 0.0, 1.2)});
+  EXPECT_STRNE(scene.core.planningOutcome(), "calculation-domain");
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_GT(maximumSpeed(path), 1.0);
+}
+
+TEST(TunnelPath, StartsFromRestWithNegativeAccelerationReading) {
+  // Standing still with no brake applied, a small negative IMU reading is not a deceleration into reverse.
+  Scene scene(0.0);
+  scene.competition.brake = 0.0;
+  scene.imu.linear_acceleration.x = -0.4;
+  const auto path = scene.plan({});
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_GT(maximumSpeed(path), 1.0);
+}
+
 TEST(TunnelPath, PassesPedestrianNoFasterThanPassSpeedUntilBumperIsBy) {
   Scene beside(4.0);
   const auto passing = beside.plan({beside.body(4.5, -2.3, 0.5, 0.5, 1.7)});
@@ -183,6 +219,21 @@ TEST(TunnelPath, PassesPedestrianNoFasterThanPassSpeedUntilBumperIsBy) {
   const auto after = passed.plan({passed.body(3.0, -2.3, 0.5, 0.5, 1.7)});
   ASSERT_GT(after.points.size(), 2u);
   EXPECT_GT(maximumSpeed(after), 6.5);
+}
+
+TEST(TunnelPath, KeepsLimitingForPedestrianBrieflyLostFromView) {
+  // Seen once 22 m ahead on the right walkway, then missing from the scans: the ceiling holds for 2 s, then lapses.
+  Scene scene(9.0);
+  const double ceiling = std::sqrt(4.5 * 4.5 + 2 * 2.0 * (22.0 - 0.25 - 3.845008));
+  ASSERT_GT(scene.plan({scene.body(22.0, -2.3, 0.5, 0.5, 1.7)}).points.size(), 2u);
+  scene.stamp += ros::Duration(0.5);
+  scene.ego.header.stamp = scene.stamp;
+  const auto lost = scene.plan({});
+  ASSERT_GT(lost.points.size(), 2u);
+  EXPECT_LE(maximumSpeed(lost), ceiling + 1e-6);
+  scene.stamp += ros::Duration(2.0);
+  scene.ego.header.stamp = scene.stamp;
+  EXPECT_GT(maximumSpeed(scene.plan({})), ceiling + 1.0);
 }
 
 TEST(TunnelPath, CountsWalkerSmearedAlongItsPathAsPedestrian) {
@@ -196,13 +247,13 @@ TEST(TunnelPath, CountsWalkerSmearedAlongItsPathAsPedestrian) {
 
 TEST(TunnelPath, IgnoresLowBodiesAndBodiesBeyondReach) {
   Scene low(9.0);
-  EXPECT_GT(maximumSpeed(low.plan({low.body(22.0, -2.3, 0.5, 0.5, 0.2)})), 12.0);
+  EXPECT_GT(maximumSpeed(low.plan({low.body(22.0, -2.3, 0.5, 0.5, 0.2)})), 10.5);
   // Across the oncoming lane on the far walkway: 6 m left of our centre, beyond 1.08 + 3 m.
   Scene far(9.0);
-  EXPECT_GT(maximumSpeed(far.plan({far.body(22.0, 6.0, 0.5, 0.5, 1.7)})), 12.0);
+  EXPECT_GT(maximumSpeed(far.plan({far.body(22.0, 6.0, 0.5, 0.5, 1.7)})), 10.5);
   // A car-sized body is not a pedestrian.
   Scene car(9.0);
-  EXPECT_GT(maximumSpeed(car.plan({car.body(22.0, -4.0, 4.5, 1.9, 1.5)})), 12.0);
+  EXPECT_GT(maximumSpeed(car.plan({car.body(22.0, -4.0, 4.5, 1.9, 1.5)})), 10.5);
 }
 
 TEST(TunnelPath, PlansAroundSmallBodyWithMinimumFootprint) {

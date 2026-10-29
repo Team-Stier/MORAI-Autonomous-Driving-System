@@ -6968,6 +6968,8 @@ struct IntegratedPathTrajectoryParameters {
   double recovery_deceleration_mps2=8.,recovery_jerk_mps3=8.,recovery_response_sec=.3;
   double recovery_lateral_acceleration_mps2=6.;
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
+  // A box fitted to one flat face can have a zero side; plan with at least this extent.
+  double minimum_object_extent_m=0;
 };
 
 
@@ -7002,11 +7004,12 @@ class IntegratedTrajectory {
       // from zero acceleration when the vehicle is held by its brake.
       if(state.speed_mps<.001 && std::abs(state.acceleration_mps2)<.05)
         state.acceleration_mps2=0;
-      if(status.brake>0 && state.acceleration_mps2<0) {
-        // Brake force cannot be extended through rest into reverse motion.
-        // Project only an infeasible braking seed onto the forward-only
-        // reference model. Measured speed and all road/obstacle limits stay
-        // unchanged; assuming less braking is conservative for stopping space.
+      if(state.acceleration_mps2<0) {
+        // Braking, or a negative IMU reading with the brake released, cannot be
+        // extended through rest into reverse motion. Project only an infeasible
+        // braking seed onto the forward-only reference model. Measured speed and
+        // all road/obstacle limits stay unchanged; assuming less braking is
+        // conservative for stopping space.
         const double release_bound=std::sqrt(2*p_.solver.max_longitudinal_jerk_mps3*state.speed_mps);
         state.acceleration_mps2=state.speed_mps<.05 ? 0. :
             std::max(state.acceleration_mps2,-release_bound*(1-1e-8));
@@ -7062,7 +7065,7 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
-      auto native=convert(objects,predictions);
+      auto native=convert(objects,predictions,p_.minimum_object_extent_m);
 
       std::vector<bool> coverage;
 
@@ -7205,10 +7208,12 @@ class IntegratedTrajectory {
     o.length_m=input.bbox_size.x;o.width_m=input.bbox_size.y;
     return o;
   }
-  static integrated_native::Predictions convert(const interfaces::Objects& current,const PredictedObjects& future) {
+  static integrated_native::Predictions convert(const interfaces::Objects& current,const PredictedObjects& future,
+      double minimum_extent_m) {
     integrated_native::Predictions result;result.reference_stamp_sec=current.header.stamp.toSec();
     for(const auto& input:current.objects) {
       auto o=object(input);o.source_stamp_sec=result.reference_stamp_sec;
+      o.length_m=std::max(o.length_m,minimum_extent_m);o.width_m=std::max(o.width_m,minimum_extent_m);
       if(!input.velocity_available) {
         const auto inferred=std::find_if(future[0].objects.begin(),future[0].objects.end(),
             [&](const interfaces::Object& q){return q.id==input.id && q.velocity_available;});
