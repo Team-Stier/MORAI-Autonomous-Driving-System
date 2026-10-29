@@ -23,7 +23,7 @@ off the drivable area outside the shadow zone, stuck after a collision, or the c
   - off road: all four wheels off the lanelets and the 2 m route corridor (tools/scorer's drive_inoperable test)
     outside the shadow zone for OFF_ROAD_S;
   - stuck (class Stuck, shared with rl_episode.py): less than PROGRESS_M of route progress for CRASH_STUCK_S after a
-    collision, for STUCK_S (red-light and yield time excluded), or for WAIT_MAX_S in all;
+    collision, for STUCK_S (time the light holds the Ego's movement and yield time excluded), or for WAIT_MAX_S in all;
   - order broken: route progress SKIP_M past the next checkpoint without having come within 3 m of it.
 The Ego goes to the last checkpoint passed (START before CP1) with MORAI's checkpoint Spawn program (MORAI_Spawn_Linux,
 10/13: point number on stdin; SetTransform to the 10/7 table pose, z and yaw as listed, speed left as it is).
@@ -158,8 +158,8 @@ class Stuck:
     """No-progress returns: update() each step -> None, "stuck" or "stuck_after_collision"; reset() after a return or at
     the start. objs: Object Info records (id, kind, x, y, ...) of this step, [] without Object Info."""
 
-    def __init__(self, tau, s=0.0):
-        self.prev = {}
+    def __init__(self, tau, s=0.0, left=()):
+        self.prev, self.left = {}, set(left)   # left: lights of a left-turn stop line (they hold the Ego until the arrow)
         self.reset(tau, s)
 
     def reset(self, tau, s):
@@ -183,7 +183,10 @@ class Stuck:
         yld = self.yielding(tau, e, objs)
         if hit:
             self.crash = tau
-        red = bool(e["tl"] and e["color"] & 1 and not e["color"] & 16)
+        # the light holds the Ego's movement (scorer _signal_state): no green (16) or, at a left-turn line, no green-left
+        # arrow (32); a yellow or a plain green at S7 4356 is waiting too (stuck while 052 showed 16 then 4, wtl 10/29)
+        c = e["color"]
+        red = bool(e["tl"] and c is not None and c > 0 and not c & (32 if e["tl"] in self.left else 16))
         if s > self.s + PROGRESS_M:
             self.s, self.t, self.t0 = s, tau, tau
         elif red or yld:
@@ -522,7 +525,8 @@ class Manager:
         tr.i, clock.last, passed = (self.cp_i[j0] if j0 else 0), None, j0
         t_play, w_play, t_move, x0 = None, time.time(), None, None
         best_s = float(tr.s[self.cp_i[j0]]) if j0 else 0.0
-        off_t, grace, st = None, math.inf, Stuck(clock.tau, best_s)
+        left = {l for v in self.cfg.get("signal", {}).get("stop_lines", {}).values() if v.get("movement") == "left" for l in v.get("lights", ())}
+        off_t, grace, st = None, math.inf, Stuck(clock.tau, best_s, left)
         end = t_end = None
         lt = lap_s = 0.0
         interrupted = False
