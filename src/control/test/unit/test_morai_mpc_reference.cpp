@@ -154,7 +154,7 @@ auto runCore(control::MoraiMpc& core,const interfaces::Path& path,double elapsed
   status.velocity_x_mps=speed;
   const ros::Time stamp=path.header.stamp+ros::Duration(elapsed);
   ego.header.stamp=stamp;
-  return core.process(path,ego,status,stamp);
+  return core.process(path,ego,status,stamp,path);
 }
 std::vector<node_pipeline::Kind> pathIssues(const interfaces::Path& path) {
   node_pipeline::HealthLimits limits;
@@ -268,7 +268,7 @@ TEST(MoraiMpcConnection, HistoricalBodyPathMatchesCurrentBodyPathAfterMeasuredMo
   ego.child_frame_id="base_link";ego.pose.pose.orientation.w=1;ego.twist.twist.linear.x=1;
   interfaces::CompetitionVehicleStatus status;status.velocity_x_mps=1;
   control::MoraiMpc historical(coreParameters()), current(coreParameters());
-  historical.process(path,ego,status,ego.header.stamp);current.process(path,ego,status,ego.header.stamp);
+  historical.process(path,ego,status,ego.header.stamp,path);current.process(path,ego,status,ego.header.stamp,path);
   ego.header.stamp+=ros::Duration(.25);ego.pose.pose.position.x=.25;ego.pose.pose.position.y=.2;
   ego.twist.twist.linear.y=.8;
   auto rebased=path;rebased.header.stamp=ego.header.stamp;
@@ -277,8 +277,8 @@ TEST(MoraiMpcConnection, HistoricalBodyPathMatchesCurrentBodyPathAfterMeasuredMo
     point.pose.header=rebased.header;point.pose.pose.position.x-=.25;point.pose.pose.position.y-=.2;
   }
   const auto saved=path;
-  const auto actual=historical.process(path,ego,status,ego.header.stamp);
-  const auto expected=current.process(rebased,ego,status,ego.header.stamp);
+  const auto actual=historical.process(path,ego,status,ego.header.stamp,path);
+  const auto expected=current.process(rebased,ego,status,ego.header.stamp,rebased);
   EXPECT_LT(actual.steering,-.01);
   EXPECT_NEAR(actual.steering,expected.steering,1e-10);
   EXPECT_DOUBLE_EQ(actual.accel,expected.accel);EXPECT_DOUBLE_EQ(actual.brake,expected.brake);
@@ -300,7 +300,7 @@ TEST(MoraiMpcConnection, HistoricalPathRotationMatchesWorldReferenceWithoutChang
     ego.child_frame_id="base_link";ego.pose.pose.orientation.w=1;ego.twist.twist.linear.x=1;
     interfaces::CompetitionVehicleStatus status;status.velocity_x_mps=1;
     control::MoraiMpc historical(coreParameters()), current(coreParameters());
-    historical.process(path,ego,status,ego.header.stamp);current.process(path,ego,status,ego.header.stamp);
+    historical.process(path,ego,status,ego.header.stamp,path);current.process(path,ego,status,ego.header.stamp,path);
     ego.header.stamp+=ros::Duration(.25);ego.pose.pose.position.x=.25;
     ego.pose.pose.orientation.z=std::sin(yaw/2);ego.pose.pose.orientation.w=std::cos(yaw/2);
     ego.twist.twist.angular.z=yaw/.25;
@@ -312,8 +312,8 @@ TEST(MoraiMpcConnection, HistoricalPathRotationMatchesWorldReferenceWithoutChang
       point.pose.pose.position.x=std::cos(yaw)*x;point.pose.pose.position.y=-std::sin(yaw)*x;
       point.pose.pose.orientation.z=std::sin(-yaw/2);point.pose.pose.orientation.w=std::cos(yaw/2);
     }
-    const auto actual=historical.process(path,ego,status,ego.header.stamp);
-    const auto expected=current.process(rebased,ego,status,ego.header.stamp);
+    const auto actual=historical.process(path,ego,status,ego.header.stamp,path);
+    const auto expected=current.process(rebased,ego,status,ego.header.stamp,rebased);
     EXPECT_NEAR(actual.steering,expected.steering,1e-10);
     EXPECT_DOUBLE_EQ(actual.accel,expected.accel);EXPECT_DOUBLE_EQ(actual.brake,expected.brake);
   }
@@ -335,7 +335,7 @@ TEST(MoraiMpcConnection, LongInputGapDoesNotInterpolateAcrossAnUnobservedJourney
   setPathFrame(path,ego.pose.pose,ego.header.stamp);
   interfaces::CompetitionVehicleStatus status;status.velocity_x_mps=1;
   control::MoraiMpc historical(coreParameters()), current(coreParameters());
-  historical.process(path,ego,status,ego.header.stamp);current.process(path,ego,status,ego.header.stamp);
+  historical.process(path,ego,status,ego.header.stamp,path);current.process(path,ego,status,ego.header.stamp,path);
   ego.header.stamp=ros::Time(105);ego.pose.pose.position.x=10;ego.pose.pose.position.y=0;
   path.header.stamp=ros::Time(104,750000000);
   auto source_pose=ego.pose.pose;source_pose.position.x-=.25;
@@ -346,8 +346,8 @@ TEST(MoraiMpcConnection, LongInputGapDoesNotInterpolateAcrossAnUnobservedJourney
   for(auto& point:rebased.points) {
     point.pose.header=rebased.header;point.pose.pose.position.x-=.25;
   }
-  const auto actual=historical.process(path,ego,status,ego.header.stamp);
-  const auto expected=current.process(rebased,ego,status,ego.header.stamp);
+  const auto actual=historical.process(path,ego,status,ego.header.stamp,path);
+  const auto expected=current.process(rebased,ego,status,ego.header.stamp,rebased);
   EXPECT_NEAR(actual.steering,0,1e-10);
   EXPECT_NEAR(actual.steering,expected.steering,1e-10);
   EXPECT_DOUBLE_EQ(actual.accel,expected.accel);EXPECT_DOUBLE_EQ(actual.brake,expected.brake);
@@ -377,8 +377,8 @@ TEST(MoraiMpcConnection, ActualSourceFrameDoesNotRetimestampTheSpeedProfile) {
   interfaces::CompetitionVehicleStatus status;status.velocity_x_mps=1;
   control::MoraiMpc actual(coreParameters()),expected(coreParameters());
   const auto saved=actual_path;
-  const auto a=actual.process(actual_path,ego,status,ego.header.stamp);
-  const auto b=expected.process(expected_path,ego,status,ego.header.stamp);
+  const auto a=actual.process(actual_path,ego,status,ego.header.stamp,actual_path);
+  const auto b=expected.process(expected_path,ego,status,ego.header.stamp,expected_path);
   EXPECT_NEAR(a.steering,b.steering,1e-10);
   EXPECT_DOUBLE_EQ(a.accel,b.accel);EXPECT_DOUBLE_EQ(a.brake,b.brake);
   EXPECT_EQ(actual_path,saved);

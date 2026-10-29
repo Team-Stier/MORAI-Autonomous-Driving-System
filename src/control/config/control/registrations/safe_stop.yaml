@@ -1,2 +1,3 @@
 stage: track
-inputs: []
+inputs: [competition]
+validator: morai_mpc_inputs.hpp

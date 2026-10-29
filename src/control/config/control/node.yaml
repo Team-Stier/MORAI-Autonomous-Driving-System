@@ -9,6 +9,12 @@ inputs:
     range: [0.0, 111.11111111111111]
     stale_after_sec: 0.5
     receive_timeout_sec: 0.5
+  planner_path:
+    type: interfaces/Path
+    topic: /local_path
+    frame: map
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
   ego:
     type: nav_msgs/Odometry
     topic: /localization/ego

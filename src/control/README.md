@@ -8,12 +8,13 @@
 | 구분 | 토픽 | 타입 | 계약 |
 | --- | --- | --- | --- |
 | 구독 | `/local_path/velocity_injected` | `interfaces/Path` | base_link 경로·주입된 목표속도·가속도 |
+| 구독 | `/local_path` | `interfaces/Path` | map 원본 경로 발행 상태 검사 |
 | 구독 | `/localization/ego` | `nav_msgs/Odometry` | map pose, base_link 횡속도·yaw rate; 공분산 미사용 |
 | 구독 | `/vehicle/competition_status` | `interfaces/CompetitionVehicleStatus` | base_link 전방 속도 `velocity_x_mps` |
 | 구독 | `/section_annotation` | `interfaces/SectionAnnotation` | section 선택 |
 | 발행 | `/control_cmd` | `morai_msgs/CtrlCmd` | 페달 [0,1], 최대 조향각으로 나눈 조향 [−1,1], longlCmdType=1 |
 
-`process(path, ego, competition, stamp)`는 실제 입력 메시지를 개별 인자로 받고 완성한
+`process(path, ego, competition, stamp, planner_path)`는 실제 입력 메시지를 개별 인자로 받고 완성한
 CtrlCmd를 반환한다. Core는 ROS 통신·입력 검사·fallback·발행을 수행하지 않는다.
 계산 상태는 Core가 소유하며 입력 오류 시 자동 reset하지 않는다.
 
@@ -38,15 +39,16 @@ MPC의 모델 속도 제약과 페달·조향 제약은 Core 계산에 적용한
 
 | Core | 입력 |
 | --- | --- |
-| `morai_mpc.hpp` | path·ego·competition·stamp |
+| `morai_mpc.hpp` | path·ego·competition·stamp·planner_path |
 | `path_tracking.hpp` | path·ego·competition |
 | `autoware_universe.hpp` | path·ego·competition·imu |
-| `safe_stop.hpp` | 없음 |
+| `safe_stop.hpp` | competition |
 
 공통 검사층이 frame·NaN/Inf·stamp·stale·수신 timeout·입력 시차를, 기본 Core의 Validator `morai_mpc_inputs.hpp`가 경로점 수·형상·quaternion·point frame·목표속도 범위와 ego `child_frame_id`를 검사한다.
 목표속도 범위는 `config/control/node.yaml`의 path `range`다.
 Policy `remove_all.hpp`는 issue가 있는 입력을 제거해 Missing으로 만든다. 필수 입력이 Missing이면 Core 호출과 발행을 거부한다.
-`safe_stop.hpp`는 accel=0·steering=0·설정 brake(`config/control/parameters/safe_stop.yaml`)의 CtrlCmd를 반환한다.
+원본 map 경로가 비거나 Missing이면 `safe_stop.hpp`를 선택한다. 원본 경로는 필수 인자로 받아 계약만 검사하며 MPC의 경로·속도·조향 계산에는 사용하지 않는다.
+`safe_stop.hpp`는 accel=0·설정 brake의 CtrlCmd를 반환하며, competition의 MORAI CW 조향각을 CCW 정규화 값으로 변환해 제동 중 현재 조향을 유지한다. 한도는 `config/control/parameters/safe_stop.yaml`에 둔다. competition이 없거나 조향각이 비유한 값이면 발행하지 않으며 기존 Bridge Watchdog을 따른다.
 CtrlCmd에는 Header가 없으므로 헤더를 주입하지 않는다. 출력 검사와 payload 변경은 수행하지 않는다.
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.

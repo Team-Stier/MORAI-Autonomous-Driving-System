@@ -92,14 +92,18 @@ TEST(PathTrackingParameters, LoadsEveryConfiguredKey) {
   EXPECT_THROW(control::loadPathTrackingParameters(node_pipeline::ParamReader::fromString("nominal_dt_sec: 0.05\n")),
                std::invalid_argument);
 }
-TEST(SafeStop, PublishesConfiguredBrakeWithoutInputs) {
-  control::SafeStop core(control::loadSafeStopParameters(node_pipeline::ParamReader::fromString("brake: 0.5\n")));
-  const auto command = core.process();
+TEST(SafeStop, PublishesConfiguredBrakeWithStationaryStatus) {
+  control::SafeStop core(control::loadSafeStopParameters(
+      node_pipeline::ParamReader::fromString("brake: 0.5\nsteering_limit_deg: 40\n")));
+  const interfaces::CompetitionVehicleStatus status;
+  const auto command = core.process(status);
   EXPECT_EQ(command.longlCmdType, 1);
   EXPECT_DOUBLE_EQ(command.accel, 0);
   EXPECT_DOUBLE_EQ(command.steering, 0);
   EXPECT_DOUBLE_EQ(command.brake, 0.5);
-  EXPECT_THROW(control::loadSafeStopParameters(node_pipeline::ParamReader::fromString("brake: 0\n")), std::invalid_argument);
+  EXPECT_THROW(control::loadSafeStopParameters(
+                   node_pipeline::ParamReader::fromString("brake: 0\nsteering_limit_deg: 40\n")),
+               std::invalid_argument);
 }
 TEST(TrackingInputs, RejectsDegeneratePathsAndOverspeed) {
   node_pipeline::HealthLimits limits;

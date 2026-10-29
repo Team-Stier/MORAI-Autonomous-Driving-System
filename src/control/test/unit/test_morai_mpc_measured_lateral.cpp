@@ -20,7 +20,7 @@ morai_msgs::CtrlCmd firstCommand(double speed,double yaw_rate) {
   nav_msgs::Odometry ego;ego.header.frame_id="map";ego.header.stamp=path.header.stamp;
   ego.child_frame_id="base_link";ego.pose.pose.orientation.w=1;ego.twist.twist.linear.x=speed;ego.twist.twist.angular.z=yaw_rate;
   interfaces::CompetitionVehicleStatus status;status.header=ego.header;status.velocity_x_mps=speed;
-  return core.process(path,ego,status,ego.header.stamp);
+  return core.process(path,ego,status,ego.header.stamp,path);
 }
 TEST(MoraiMpcMeasuredLateral, CounteractsMeasuredRotationBeforePoseErrorAppears) {
   for(double speed:{6.,12.,25.}) {

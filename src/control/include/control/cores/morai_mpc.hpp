@@ -1277,7 +1277,10 @@ class MoraiMpc {
 
   morai_msgs::CtrlCmd process(const interfaces::Path& path, const nav_msgs::Odometry& ego,
                              const interfaces::CompetitionVehicleStatus& status,
-                             const ros::Time& control_stamp) {
+                             const ros::Time& control_stamp,
+                             const interfaces::Path& planner_path) {
+    // 원본 경로는 필수 계약 검사에만 사용하며 제어 계산은 주입 경로를 따른다.
+    static_cast<void>(planner_path);
     ROS_INFO_ONCE("[control] executing morai_mpc.hpp with timed horizon reference");
     const auto stamp = control_stamp.toNSec();
     const double dt = has_previous_stamp_ ?

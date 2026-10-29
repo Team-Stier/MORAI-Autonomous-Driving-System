@@ -18,6 +18,9 @@ track:
     "15": morai_mpc.hpp
     "16": morai_mpc.hpp
   health_core_map:
+    - when: [{input: planner_path, issue: Missing}]
+      priority: 104
+      core: safe_stop.hpp
     # - when: [{input: path, issue: Missing}]
     #   priority: 103
     #   core: safe_stop.hpp

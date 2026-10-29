@@ -26,6 +26,14 @@ struct MoraiMpcInputs {
   }
   void operator()(const interfaces::Path& m, const node_pipeline::HealthLimits& limits,
                   std::vector<node_pipeline::Kind>& issues) const {
+    // #PLANNER_FAILURE_INTERLOCK
+    // map 원본 경로는 MPC의 계산 입력이 아니라 발행 실패를 즉시 알리는
+    // 건강 입력이다. 빈 원본은 Missing으로 선택기에 전달하며, 기존 base_link
+    // 경로의 TF·시간·형상 검사는 아래에서 그대로 수행한다.
+    if (limits.frame == "map") {
+      if (m.points.empty()) issues.push_back(node_pipeline::Kind::Missing);
+      return;
+    }
     // #EXACT_PATH_FRAME: 실제 변환이 없는 경로를 identity로 가정하지 않는다.
     const auto& frame=m.map_from_path_frame;
     if(frame.header.frame_id!="map" || frame.child_frame_id!=limits.frame)

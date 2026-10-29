@@ -1,1 +1,2 @@
-brake: 0.50
+brake: 1.0
+steering_limit_deg: 40.0

@@ -251,7 +251,6 @@ class CorePathPlanner {
   struct PlanGeometryCache {
     std::map<std::tuple<GeometrySchedule,bool,double,bool>,std::vector<PathPoint>> generated;
     std::map<std::pair<GeometrySchedule,bool>,std::vector<PathPoint>> cartesian;
-    const std::vector<Vec2>* independent_entries=nullptr;
   };
   struct Geometry {
 static constexpr double kPi = 3.14159265358979323846;
@@ -764,8 +763,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
   std::vector<PathPoint> plan(const EgoState& ego, const std::vector<ReferencePoint>& reference_map,
                                 const Predictions& predictions, const PlanningConstraints& requested_limits,
                                 const std::vector<PathPoint>& previous = {},bool pending_lane_change=false,
-                                const std::vector<ReferencePoint>* hold_reference=nullptr,
-                                const std::vector<Vec2>* independent_entries=nullptr) const {
+                                const std::vector<ReferencePoint>* hold_reference=nullptr) const {
     // #COLLISION_SEARCH_BUDGET
     // map 객체가 있으면 시간별 swept SAT가 많은 속도 후보에서 반복된다.
     // 동일한 전체 기하/속도 탐색을 작은 beam으로 먼저 수행하고, 모든 도로·
@@ -775,7 +773,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // 각 실패 기하마다 큰 탐색을 반복하지 않으며, 객체가 없는 곡선은 원래
     // beam을 유지한다. GT ID·센서·경로 시각·제어 입력 만료는 바꾸지 않는다.
     constexpr std::size_t fast_beam_width=32;
-    PlanGeometryCache geometry_cache;geometry_cache.independent_entries=independent_entries;
+    PlanGeometryCache geometry_cache;
     bool truncated=false;
     // #HIGHWAY_SEARCH_ALLOCATION
     // 고속 변경에서 축소 beam의 후보 비교 뒤 전체 beam을 재계산하면
@@ -983,15 +981,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     const auto timed_connection=[&](const std::vector<PathPoint>& connected) -> std::vector<PathPoint> {
       if(connected.empty())return {};
       ArcPath connected_arc(connected);
-      // #CONNECTED_CURVATURE_SEARCH
-      // map 초기 곡선을 QP로 보정하면 명시 곡률 외에 공간 보간 곡률도 생긴다.
-      // 차선 변경과 같은 기존 공간 곡률 계산을 보정 후보의 속도 탐색에도
-      // 적용해, 최종 검사에서 같은 이유로 탈락할 속도 후보를 반복하지 않는다.
-      // output_step_m과 실제 뒷차축 형상·v/a·객체 시각은 그대로 사용한다.
-      // 정상 원본 C2의 선택과 도로 복귀 탐색은 유지하며, 보정 후에도 기존
-      // 전체 도로/ROI·차체·예측 충돌·곡률·가감속·jerk 검사로 출력한다.
-      if(c.native_region && !c.native_region->recovery_original)
-        connected_arc.includeSpatialCurvature(p_.output_step_m);
+      if(align_spatial_curvature)connected_arc.includeSpatialCurvature(p_.output_step_m);
       const double connected_stop=stopArc(ego,reference,connected_arc,limits);
       if(connected_stop<0 && limits.release_time_sec>0)return {};
       auto candidate=planSpeed(c,connected_arc,ego,limits,duration,connected_stop,reference_map,beam_width,truncated);
@@ -1160,41 +1150,6 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
                 return point.time_sec>comparison_time || point.speed_mps>=ego.speed_mps-1e-6;
               }) && trajectoryCost(c,scaled,following_ceiling)<trajectoryCost(c,path,following_ceiling))
             return scaled;
-          // #WIDENING_C2_CONNECTION
-          // map에서 짧은 합법 변경 lanelet 뒤로 연결 도로가 계속 열려 있어도
-          // 참조선의 짧은 전환을 그대로 따라가면 큰 곡률 때문에 접근부터 감속한다.
-          // 원본 map 좌표의 차로 개방 지점까지 기존 분할 C2로 접근한 다음,
-          // 같은 공간 창의 나머지를 하나의 C2로 연결해 완만한 변경도 비교한다.
-          // 개방 지점은 뒤쪽 output_step 격자로 올림해 이르지 않게 잡고,
-          // 접근 구간을 정수 격자로 나눠 기존 600구간 예산을 넘기지 않는다.
-          // 빠른 탐색을 가로막지 않도록 전체 beam에서만 한 후보를 추가하며,
-          // 기존 두 배 비교 시간 동안 초기 속도 유지와 더 낮은 비용을 요구한다.
-          // 원본 v/a·전체 차체·합법 도로·객체 예측·곡률·횡가속도·가감속·jerk
-          // 검사를 모두 통과해야 한다. GT ID나 특정 지도 좌표를 사용하지 않으며,
-          // 같은 map 객체 계약을 공급하는 LiDAR에도 적용된다. 복귀 중에는 쓰지
-          // 않고 실패하면 기존 후보를 보존한다. GlobalPath/경유점과 MPC는 유지한다.
-          if(beam_width==p_.speed_beam_width && ego.acceleration_mps2>=0 &&
-             c.native_region && !c.native_region->recovery_original &&
-             geometry_cache && geometry_cache->independent_entries) {
-            for(const auto& entry:*geometry_cache->independent_entries) {
-              const double opening=reference.project(entry,origin.s,reference.length()).s-origin.s;
-              if(opening<=p_.min_horizon_m || opening>=horizon-p_.min_horizon_m)continue;
-              const int steps=static_cast<int>(std::ceil(opening/p_.output_step_m));
-              const double approach=steps*p_.output_step_m;
-              if(approach<=p_.min_horizon_m || approach>=horizon-p_.min_horizon_m)continue;
-              const int count=static_cast<int>(std::ceil(approach/p_.horizon_m));
-              GeometrySchedule goals;
-              for(int i=0;i<count;++i)
-                goals.push_back({(steps/count+(i<steps%count ? 1 : 0))*p_.output_step_m,0});
-              goals.push_back({horizon-approach,0});
-              auto direct=timed_connection(center_geometry(goals));
-              if(!direct.empty() && std::all_of(direct.begin(),direct.end(),[&](const PathPoint& point) {
-                    return point.time_sec>std::min(duration,2*comparison_time) || point.speed_mps>=ego.speed_mps-1e-6;
-                  }) && trajectoryCost(c,direct,following_ceiling)<trajectoryCost(c,path,following_ceiling))
-                return direct;
-              break;
-            }
-          }
         }
         if(segment_extent!=p_.horizon_m) return path;
         auto alternative=center_candidate(horizon,2*p_.horizon_m);
@@ -2712,12 +2667,12 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       }
     }
     // #SPATIAL_CURVATURE_SEARCH
-    // 실제 map 인접 차선 변경의 중앙 후보와 초기 기하 보정 후보에 최종
-    // 검사와 같은 output_step_m 균일 공간 곡률을 먼저 반영한다. 시간 표본 복원 뒤에야 곡률 초과를
+    // 실제 map 인접 차선 변경의 중앙 후보에 최종 검사와 같은 output_step_m
+    // 균일 공간 곡률을 먼저 반영한다. 시간 표본 복원 뒤에야 곡률 초과를
     // 발견하면 같은 속도 후보를 수백 번 거부해 제어 입력 만료를 유발한다.
     // 원래 위치의 3점 곡률을 그 범위와 겹치는 기존 arc 구간 상한에 넣고,
     // 속도 탐색 후 원래 전체 최종 검사를 계속 수행한다. 현재 후보만 바꾸며
-    // 보정 전 일반 곡선·도로 복귀와 다른 형상의 기존 계산/선택은 유지한다.
+    // 일반 곡선·도로 복귀와 다른 형상의 기존 계산/선택은 유지한다.
     // 초기 v/a·차체/도로/충돌/곡률/횡가속도/jerk 한도와 시각은 유지한다.
     // 새 계수·후보·GT ID는 없으며 LiDAR/ROI 통합도 같은 map bbox·예측
     // 시각과 최종 전체 검사를 유지해야 한다.
@@ -4018,9 +3973,8 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // error into spurious acceleration/jerk during the independent recheck.
     std::vector<double> events;
     const auto event=[&](double t) { if(t>0 && t<duration) events.push_back(t); };
-    const double measured_brake_release_sec=ego.acceleration_mps2<-p_.max_deceleration_mps2 ?
-        (-p_.max_deceleration_mps2-ego.acceleration_mps2)/p_.max_longitudinal_jerk_mps3 : 0;
-    if(measured_brake_release_sec>0)event(measured_brake_release_sec);
+    if(ego.acceleration_mps2<-p_.max_deceleration_mps2)
+      event((-p_.max_deceleration_mps2-ego.acceleration_mps2)/p_.max_longitudinal_jerk_mps3);
     if(limits.release_time_sec>0 && limits.release_time_sec<duration) event(limits.release_time_sec);
     for(std::size_t i=0;i<recovery.count;++i) {
       const double t=recovery.phase[i].t+recovery.phase[i].h;
@@ -4036,22 +3990,8 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     }
     // Only regular samples can be replaced. A short saturated-acceleration
     // phase or a stop just before the horizon still needs both analytic knots.
-    // #BRAKING_EVENT_CLOCK
-    // 실제 초과 제동을 해제하는 동안 a(t)=a0+J*t가 강제되므로 정규 격자는
-    // 새로운 제어 선택을 추가하지 않는다. 해제 경계가 0.500254초일 때
-    // 0.5초 정규 점도 남기면 0.254ms Hermite 구간에서 반올림만으로
-    // jerk 4가 4.000000025가 되어 가능한 전진 경로를 전부 거부했다.
-    // 기존 출력 knot의 1ms 안정화 범위와 같이, 해제 경계 직전의 불필요한
-    // 정규 점만 생략한다. 작은 정규 간격에는 그 간격의 1/4까지만 쓴다.
-    // 실제 해제·정지·상한 전환 등 모든 해석적 이벤트와 초기 상태·전체
-    // 예측 시간은 보존한다. 원래 jerk 허용 오차나 가감속 한도는 바꾸지
-    // 않고 새 다항식도 전체 차체/도로·예측 충돌·속도·jerk로 재검증한다.
-    // 역주행이 불가피한 상태는 여전히 거부하며 GT/LiDAR·ROI와 무관하다.
     clock.erase(std::remove_if(clock.begin(),clock.end(),[&](double t) {
-      if(t<=0)return false;
-      if(t<measured_brake_release_sec &&
-         measured_brake_release_sec-t<std::min(.001,p_.speed_time_step_sec/4))return true;
-      return std::any_of(events.begin(),events.end(),[&](double q){return std::abs(t-q)<1e-6;});
+      return t>0 && std::any_of(events.begin(),events.end(),[&](double q){return std::abs(t-q)<1e-6;});
     }),clock.end());
     clock.insert(clock.end(),events.begin(),events.end());
     clock.push_back(duration); std::sort(clock.begin(),clock.end());
@@ -4939,8 +4879,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     }
     const auto hold_reference=laneHoldReference(maneuver_route,state);
     previous_path_ = plan(state, reference, native_predictions, mission_limits, previous_path_,
-        pending_lane_change || static_cast<bool>(hold_reference),hold_reference ? &hold_reference->points : nullptr,
-        &native_reference->independent_entries);
+        pending_lane_change || static_cast<bool>(hold_reference),hold_reference ? &hold_reference->points : nullptr);
     // #PLANNING_DIAGNOSTICS: 실패 시 계산에 실제 사용한 초기 조건만 기록한다.
     // 경로·제약을 보정하거나 제어 토픽을 발행하지 않으며 빈 경로의 원인을 추적한다.
     if (previous_path_.empty()) {
@@ -4998,7 +4937,6 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     std::vector<LaneKey> route_ids;
     std::vector<ReferencePoint> points;
     std::vector<Eigen::Vector3d> heights;
-    std::vector<Vec2> independent_entries;
   };
   std::shared_ptr<const NativeReference> native_reference_cache_,mission_reference_cache_;
   static Eigen::Vector3d nearestCenterlinePoint(const lanelet::BasicLineString3d& line,
@@ -5157,7 +5095,6 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
         // 기존 완료 거리를 유지한다. 실선·분기·허용 도로,
         // 차체·객체·곡률·횡가속도·가감속·시간 검사는 그대로 적용한다.
         const bool independent_connector=connected_end>end && !previous_group_transition;
-        if(independent_connector)result->independent_entries.push_back({source.front().x(),source.front().y()});
         const double transition_extent=std::min(total,(independent_connector ? 2 : 1)*p_.horizon_m);
         const double transition_start=approach_transition?total-transition_extent:0;
         line.push_back(source.front());

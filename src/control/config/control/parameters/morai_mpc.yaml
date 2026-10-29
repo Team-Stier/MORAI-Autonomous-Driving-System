@@ -47,7 +47,7 @@ longitudinal:
   coordinate_initial_step: 0.2
   coordinate_minimum_step: 0.01
   command_step_decay: 0.5
-  maximum_accel_command: 0.3
+  maximum_accel_command: 0.35
   maximum_brake_command: 1.0
   command_rate_limit_per_sec: 20.0
   acceleration_gain_mps2: 5.74
@@ -79,5 +79,5 @@ longitudinal:
   braking_gain_transition_high_mps: 6.5
 steering_prediction:
   delay_sec: 0.08
-  time_constant_sec: 0.04
+  time_constant_sec: 0.08
   gain: 0.78
