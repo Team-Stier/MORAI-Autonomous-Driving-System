@@ -128,6 +128,11 @@ detour_completion_offset_m: 0.3
 detour_standoff_m: 9.0
 detour_minimum_standoff_m: 3.0
 detour_standoff_deceleration_mps2: 3.0
+# The bypass is timed here: 1.5 m/s^2 up, 2.5 m/s^2 down, 0.5 m from forecast bodies, stop 1 m short of a conflict.
+detour_acceleration_mps2: 1.5
+detour_deceleration_mps2: 2.5
+detour_timing_margin_m: 0.5
+detour_stop_buffer_m: 1.0
 # Union the route reference corridor into the road region (Lanelet gap near stop line 4188).
 route_corridor_patch: true
 # Boxes fitted to one flat face can have a zero side; plan with at least 0.3 m.

@@ -6991,6 +6991,8 @@ struct StaticDetourGeometryParameters {
   double approach_min_x_m=0,approach_max_x_m=0,approach_min_y_m=0,approach_max_y_m=0,approach_speed_mps=20./3.6;
   // Without a bypass, stop this far before a blocking obstacle, never closer than the minimum.
   double standoff_m=9.,minimum_standoff_m=3.,standoff_deceleration_mps2=3.;
+  // Bypass timing: comfortable acceleration and braking, and the gap kept to forecast bodies.
+  double acceleration_mps2=1.5,deceleration_mps2=2.5,timing_margin_m=.5,stop_buffer_m=1.;
 };
 struct StaticDetourTrajectoryParameters {
   StaticDetourGeometryParameters detour;
@@ -7144,17 +7146,9 @@ class IntegratedTrajectory {
         double detour_speed=0,standoff=std::numeric_limits<double>::infinity();
         const auto detour=detourGeometry(state,reference,objects,predictions,detour_speed,standoff);
         limits.stop_line_progress_m=standoff;
-        if(!detour.empty()) {
-          // The bypass geometry is fixed here; the solver times it against the
-          // forecast bodies, with the bypassed obstacles held where they stand.
-          auto bypass=limits;
-          bypass.maximum_speed_mps=std::min(bypass.maximum_speed_mps,detour_speed);
-          bypass.preferred_speed_mps=std::min(bypass.preferred_speed_mps,bypass.maximum_speed_mps);
-          bypass.stop_line_progress_m=std::numeric_limits<double>::infinity();
-          planned=solver_.planInMap(state,reference,holdStationary(native),bypass,route,previous_,{},coverage,&detour,corridor_reference);
-          if(planned.empty())
-            ROS_WARN_THROTTLE(1.,"[static detour] timing failed: %s %s",solver_.failureReason(),solver_.diagnostics().c_str());
-        }
+        // The bypass geometry is fixed here and timed against the forecast
+        // bodies, with the bypassed obstacles held where they stand.
+        if(!detour.empty())planned=timeDetour(state,detour,native,std::min(limits.maximum_speed_mps,detour_speed));
       }
       const bool bypassing=!planned.empty();
       if(!bypassing)planned=solver_.planInMap(state,reference,native,limits,route,previous_,{},coverage,nullptr,corridor_reference);
@@ -7388,16 +7382,85 @@ class IntegratedTrajectory {
   };
 
   void resetDetour() {detour_boxes_.clear();detour_ids_.clear();plan_=DetourPlan{};}
-  bool detourId(std::uint32_t id) const {return std::find(detour_ids_.begin(),detour_ids_.end(),id)!=detour_ids_.end();}
-  // Bypassed obstacles stand still: a drifting centroid of a partly seen box is not motion.
-  integrated_native::Predictions holdStationary(integrated_native::Predictions native) const {
-    for(auto& object:native.current) {
-      if(!detourId(object.id))continue;
-      object.velocity_mps={0,0};object.interpolation_acceleration_mps2=0;
-      for(auto& frame:native.future)for(auto& future:frame)if(future.id==object.id)future=object;
+  // Speed along the fixed bypass from the measured speed: accelerate and brake
+  // comfortably under the cap and the curvature limit, and stop short of the
+  // first sample where the body would meet a forecast body at that time.
+  std::vector<integrated_native::PathPoint> timeDetour(const integrated_native::EgoState& state,
+      std::vector<integrated_native::PathPoint> path,const integrated_native::Predictions& forecast,double cap) const {
+    const auto& d=p_.detour;const auto& vehicle=p_.solver.vehicle;
+    const std::size_t n=path.size();
+    std::vector<double> limit(n),speed(n);
+    for(std::size_t i=0;i<n;++i)
+      limit[i]=std::min(cap,std::sqrt(d.lateral_acceleration_mps2/std::max(std::abs(path[i].curvature_inv_m),1e-6)));
+    const auto profile=[&](std::size_t stop) {
+      speed[0]=state.speed_mps;
+      for(std::size_t i=1;i<n;++i) {
+        const double ds=path[i].progress_m-path[i-1].progress_m;
+        speed[i]=i>=stop?0.:std::min(limit[i],std::sqrt(speed[i-1]*speed[i-1]+2*d.acceleration_mps2*ds));
+      }
+      for(std::size_t i=n-1;i>1;--i) {
+        const double ds=path[i].progress_m-path[i-1].progress_m;
+        speed[i-1]=std::min(speed[i-1],std::sqrt(speed[i]*speed[i]+2*d.deceleration_mps2*ds));
+      }
+    };
+    const double offset=state.stamp_sec-forecast.reference_stamp_sec;
+    const auto conflict=[&]() {
+      double t=0;
+      for(std::size_t i=1;i<n;++i) {
+        const double mean=(speed[i]+speed[i-1])/2;
+        if(mean<1e-3)return n;
+        t+=(path[i].progress_m-path[i-1].progress_m)/mean;
+        const double horizon=t+offset;
+        if(horizon>forecast.step_sec*integrated_native::kPredictionSteps)return n;
+        const int k=static_cast<int>(std::lround(horizon/forecast.step_sec))-1;
+        const auto& slice=k<0?forecast.current:forecast.future[static_cast<std::size_t>(std::min(k,9))];
+        const auto& pose=path[i].pose;
+        const integrated_native::Vec2 centre{pose.position.x+std::cos(pose.yaw_rad)*(vehicle.front_m-vehicle.rear_m)/2,
+                                             pose.position.y+std::sin(pose.yaw_rad)*(vehicle.front_m-vehicle.rear_m)/2};
+        // Bypassed obstacles are cleared by the geometry checks; time every other body.
+        for(const auto& body:slice)
+          if(!detourId(body.id) && boxesOverlap(centre,pose.yaw_rad,(vehicle.front_m+vehicle.rear_m)/2,vehicle.width_m/2,body.pose.position,body.pose.yaw_rad,
+              body.length_m/2+body.radius_error_m+d.timing_margin_m,body.width_m/2+body.radius_error_m+d.timing_margin_m))return i;
+      }
+      return n;
+    };
+    profile(n);
+    const std::size_t hit=conflict();
+    std::size_t stop=n;
+    if(hit<n) {
+      stop=0;
+      while(stop+1<hit && path[stop+1].progress_m<=path[hit].progress_m-d.stop_buffer_m)++stop;
+      stop=std::max<std::size_t>(stop,1);
+      profile(stop);
     }
-    return native;
+    auto spatial=std::make_shared<std::vector<integrated_native::Pose2>>();
+    for(const auto& point:path)spatial->push_back(point.pose);
+    std::vector<integrated_native::PathPoint> timed;
+    double t=0;
+    for(std::size_t i=0;i<n;++i) {
+      auto point=path[i];
+      point.speed_mps=speed[i];
+      if(i>0) {
+        const double ds=path[i].progress_m-path[i-1].progress_m,mean=(speed[i]+speed[i-1])/2;
+        if(mean<1e-3)break;
+        t+=ds/mean;
+      }
+      point.time_sec=t;
+      point.acceleration_mps2=i+1<n?(speed[i+1]*speed[i+1]-speed[i]*speed[i])/
+          (2*std::max(1e-6,path[i+1].progress_m-path[i].progress_m)):0.;
+      timed.push_back(point);
+      if(i>0 && speed[i]==0)break;
+    }
+    if(timed.back().speed_mps==0) {
+      timed.back().acceleration_mps2=0;
+      auto wait=timed.back();wait.time_sec=std::max(wait.time_sec+.1,forecast.step_sec*integrated_native::kPredictionSteps);
+      timed.push_back(wait);
+    }
+    timed.front().spatial_reference=spatial;
+    if(hit<n)ROS_INFO_THROTTLE(1.,"[static detour] stop %.1f m ahead for a forecast body",path[stop].progress_m);
+    return timed;
   }
+  bool detourId(std::uint32_t id) const {return std::find(detour_ids_.begin(),detour_ids_.end(),id)!=detour_ids_.end();}
   DetourExtent detourExtent(const DetourFrame& frame,const DetourBox& box) const {
     const double inf=std::numeric_limits<double>::infinity();
     DetourExtent e{inf,-inf,inf,-inf};

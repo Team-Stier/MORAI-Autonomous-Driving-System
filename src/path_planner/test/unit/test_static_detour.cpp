@@ -135,6 +135,13 @@ double maximumSpeed(const interfaces::Path& path) {
   return speed;
 }
 
+// Time of the first timed point faster than 0.3 m/s (infinity if none).
+double firstMoveTime(const interfaces::Path& path) {
+  for (const auto& point : path.points)
+    if (point.velocity > 0.3) return point.time_from_start.toSec();
+  return std::numeric_limits<double>::infinity();
+}
+
 double maximumLeftShift(const interfaces::Path& path, double y_min, double y_max) {
   double shift = -std::numeric_limits<double>::infinity();
   for (const auto& pose : path.lateral_reference)
@@ -278,6 +285,8 @@ TEST(StaticDetour, BypassesZeroWidthBoxFromRest) {
   for (int scan = 0; scan < 3; ++scan) path = scene.plan();
   ASSERT_GT(path.points.size(), 2u);
   EXPECT_GT(maximumSpeed(path), 1.0);
+  // Re-planned every cycle from rest, the bypass must start at once, not after a wait.
+  EXPECT_LT(firstMoveTime(path), 1.0);
   // Box edge x = -60.97; the rear-axle line keeps the body 0.5 m clear.
   const double beside = crossingX(path, -143.13);
   ASSERT_TRUE(std::isfinite(beside));

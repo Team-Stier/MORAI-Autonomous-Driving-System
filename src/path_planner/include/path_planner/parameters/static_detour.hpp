@@ -246,12 +246,16 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   number("detour_standoff_m",d.standoff_m);
   number("detour_minimum_standoff_m",d.minimum_standoff_m);
   number("detour_standoff_deceleration_mps2",d.standoff_deceleration_mps2);
+  number("detour_acceleration_mps2",d.acceleration_mps2);
+  number("detour_deceleration_mps2",d.deceleration_mps2);
+  number("detour_timing_margin_m",d.timing_margin_m);
+  number("detour_stop_buffer_m",d.stop_buffer_m);
   for(const double value:{d.lookahead_m,d.stationary_speed_mps,d.unseen_sec,d.match_jump_m,d.clearance_m,d.check_clearance_m,
       d.face_depth_m,d.face_width_m,d.face_length_m,d.maximum_offset_m,d.maximum_curvature_inv_m,
       d.lateral_acceleration_mps2,d.maximum_speed_mps,d.minimum_speed_mps,d.blend_time_sec,d.minimum_blend_m,
       d.maximum_blend_m,d.sample_step_m,d.area_offset_m,d.wheel_half_track_m,d.paint_contact_m,d.maximum_paint_contact_m,
       d.moving_offset_m,d.completion_offset_m,d.approach_speed_mps,d.standoff_m,d.minimum_standoff_m,
-      d.standoff_deceleration_mps2})
+      d.standoff_deceleration_mps2,d.acceleration_mps2,d.deceleration_mps2,d.timing_margin_m,d.stop_buffer_m})
     if(!std::isfinite(value) || value<=0)throw std::invalid_argument("invalid static detour parameter");
   for(const double value:{d.in_lane_clearance_m,d.front_gap_m,d.rear_gap_m,d.area_margin_m,d.moving_margin_m})
     if(!std::isfinite(value) || value<0)throw std::invalid_argument("invalid static detour reserve");
