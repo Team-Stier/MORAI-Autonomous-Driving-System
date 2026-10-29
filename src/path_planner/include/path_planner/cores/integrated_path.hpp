@@ -1178,7 +1178,7 @@ struct PathParameters {
   std::size_t max_lateral_samples = 41;
   // Numerical/engineering limits, to be calibrated with MORAI Ioniq5 control.
   // They are not assertions about physical braking capability or latency.
-  double max_acceleration_mps2 = 2.0;
+  double max_acceleration_mps2 = 2.5;
   double max_deceleration_mps2 = 5.0;
   double max_longitudinal_jerk_mps3 = 4.0;
   double speed_time_step_sec = 0.5;

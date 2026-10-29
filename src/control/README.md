@@ -68,3 +68,5 @@ CtrlCmd에는 Header가 없으므로 헤더를 주입하지 않는다. 출력 �
 `GPS_FUSED`에서는 기존 속도 계획을 사용하며 GPS 원본을 다시 판정하지 않는다.
 상태의 UNKNOWN·frame·stamp·만료·수신 timeout은 공통 검사와 기존 Policy로 처리한다.
 필수 상태 입력이 없으면 해당 Core 호출·명령 발행을 거부한다.
+
+`integrated_mpc.hpp`는 기존 동적 구간 또는 `IMU_LIDAR` 모드에서 경로의 모든 목표속도가0이면 accel=0·brake=1을 발행한다. 양의 목표속도를 포함한 감속·회피 경로는 MPC 제어를 사용한다.

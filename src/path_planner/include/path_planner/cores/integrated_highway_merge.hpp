@@ -319,7 +319,16 @@ class HighwayMergeMission {
       // Match the leader's speed before reaching the requested gap; also avoid
       // continuing to fall behind while recovering from a short gap.
       correction-=speed-lead;
-      const double desired=std::max(0.0,lead+correction);
+      double desired=std::max(0.0,lead+correction);
+      if(!object.velocity_available) {
+        // Unknown motion reserves the full following gap plus braking distance;
+        // leader-speed feedback would repeatedly drive its target to zero.
+        // Reserve braking capacity for the controller's delayed speed response.
+        const double braking=.8*parameters_.stopping_deceleration_mps2;
+        const double response=braking*parameters_.following_time_sec;
+        desired=std::sqrt(response*response+2*braking*
+            std::max(0.0,gap-std::max(parameters_.following_gap_m,parameters_.stop_buffer_m)))-response;
+      }
       target=std::min(target,desired);
       const double closing=std::max(0.0,speed-lead);
       deceleration=std::max(deceleration,std::min(parameters_.stopping_deceleration_mps2,

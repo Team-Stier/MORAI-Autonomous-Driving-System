@@ -1,4 +1,5 @@
 execution: {mode: on_input, trigger_input: cloud, queue_capacity: 8, max_health_checks: 10}
+section_topic: /section_annotation
 max_skew_sec: 0.1
 inputs:
   cloud:

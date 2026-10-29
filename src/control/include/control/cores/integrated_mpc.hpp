@@ -1379,7 +1379,7 @@ class IntegratedMpc {
       stations.push_back(distance);speeds.push_back(std::min(point->velocity, speed_ceiling));
     }
     const auto pedals = longitudinal_.update(target_speed, status.velocity_x_mps, dt,stations,speeds);
-    const bool emergency = dynamic_zone && std::all_of(path.points.begin(), path.points.end(),
+    const bool emergency = (dynamic_zone || localization_status.mode == interfaces::LocalizationStatus::IMU_LIDAR) && std::all_of(path.points.begin(), path.points.end(),
         [](const interfaces::PathPoint& point) {return point.velocity == 0;});
 
     previous_steering_rad_ = angle;

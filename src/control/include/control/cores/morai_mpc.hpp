@@ -215,6 +215,11 @@ class SteeringPrediction {
   SteeringPrediction(double delay_sec, double time_constant_sec);
   double advance(double time_sec);
   void sent(double time_sec, double effective_steering_rad);
+  void synchronize(double time_sec, double effective_steering_rad) {
+    time_sec_ = time_sec;
+    angle_rad_ = command_rad_ = effective_steering_rad;
+    events_.clear();
+  }
 
  private:
   double delay_sec_;
@@ -239,6 +244,11 @@ class AutowareLateral {
  public:
   AutowareLateral(const LateralParameters& parameters,
                  const SteeringPredictionParameters& steering);
+  void synchronize(double steering_rad) {
+    std::fill(input_buffer_.begin(), input_buffer_.end(), steering_rad);
+    queued_command_ = false;
+    for (int i = 0; i < 100; ++i) lpf_steering_cmd_.filter(steering_rad);
+  }
   void sent(double steering_rad) {
     if(input_buffer_.empty())return;
     if(queued_command_)input_buffer_.back()=steering_rad;
@@ -1210,6 +1220,19 @@ class MoraiMpc {
                              const interfaces::LocalizationStatus& localization_status) {
     ROS_INFO_ONCE("[control] executing morai_mpc.hpp");
     const auto stamp = path.header.stamp.toNSec();
+    if (!has_previous_stamp_ || stamp < previous_stamp_ ||
+        (static_cast<double>(stamp) - static_cast<double>(previous_stamp_)) * 1e-9 > 1.0) {
+      // MORAI reports the commanded angle with the opposite steering sign.
+      // Apply model gain only to the predicted effective angle.
+      const double limit = parameters_.lateral.steer_lim_deg * autoware_ai_mpc::kPi / 180.0;
+      previous_steering_rad_ = std::max(-limit, std::min(limit, -double(status.steering_angle_rad)));
+      lateral_ = autoware_ai_mpc::AutowareLateral(parameters_.lateral, parameters_.steering_prediction);
+      lateral_.synchronize(previous_steering_rad_);
+      steering_.synchronize(path.header.stamp.toSec(),
+          previous_steering_rad_ * parameters_.steering_prediction.gain);
+      path_history_ = MpcPathHistory{};
+      has_previous_stamp_ = false;
+    }
     const double dt = has_previous_stamp_ ?
         std::max(parameters_.minimum_control_dt_sec,
           std::min(parameters_.maximum_control_dt_sec,

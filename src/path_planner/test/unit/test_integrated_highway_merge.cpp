@@ -96,6 +96,67 @@ TEST(IntegratedHighwayMerge, StationaryObstacleStillCommandsImmediateStop) {
  }
 }
 
+TEST(IntegratedHighwayMerge, UnknownMotionDoesNotRepeatedlyBrakeBelowStoppingEnvelope) {
+ HighwayLidarFixture f;const auto root=std::string(NP_PACKAGE_DIR);
+ f.params=pp::loadIntegratedHighwayMergeParameters(node_pipeline::ParamReader::fromFile(
+     root+"/config/path_planner/parameters/integrated_highway_merge.yaml",root)).mission;
+ f.params.mission_end_y_m=1;
+ pp::Route route=lanelet::routing::LaneletPath({(*f.route)[0]});
+ pp::IntegratedHighwayMerge core(f.integrated(),f.shared);
+ auto status=f.status();status.velocity_x_mps=8;
+ for(int tick=0;tick<20;++tick) {
+  const double time=1+.1*tick,x=8*.1*tick;
+  auto objects=f.objects(time,x+35+f.params.vehicle_front_m+2,1000,false,0);
+  objects.objects.front().id=100+tick;
+  auto ego=f.ego(time,x);ego.twist.twist.linear.x=8;
+  const auto path=core.process(ego,status,objects,route);
+  ASSERT_FALSE(path.points.empty());
+  EXPECT_GE(path.points.front().velocity,8)<<tick;
+ }
+}
+
+TEST(IntegratedHighwayMerge, UnknownStationaryObstacleStillStopsWithDelayedResponse) {
+ HighwayLidarFixture f;const auto root=std::string(NP_PACKAGE_DIR);
+ f.params=pp::loadIntegratedHighwayMergeParameters(node_pipeline::ParamReader::fromFile(
+     root+"/config/path_planner/parameters/integrated_highway_merge.yaml",root)).mission;
+ f.params.mission_end_y_m=1;
+ pp::Route route=lanelet::routing::LaneletPath({(*f.route)[0]});
+ f.params.entry_speed_mps=f.params.cruise_speed_mps;
+ for(const auto& scenario:std::vector<std::pair<double,double>>{{10,35},{60./3.6,90},{100./3.6,180}}) {
+ pp::IntegratedHighwayMerge core(f.integrated(),f.shared);
+ const double obstacle=scenario.second+f.params.vehicle_front_m+2,dt=.1;
+ double x=0,speed=scenario.first,min_gap=scenario.second;
+ std::deque<double> commands(8,speed);
+ for(int tick=0;tick<300;++tick) {
+  const double time=1+dt*tick;
+  auto status=f.status();status.velocity_x_mps=speed;
+  auto ego=f.ego(time,x);ego.twist.twist.linear.x=speed;
+  auto objects=f.objects(time,obstacle,1000,false,0);
+  objects.objects.front().id=100+tick;
+  const auto path=core.process(ego,status,objects,route);
+  ASSERT_FALSE(path.points.empty());
+  commands.push_back(path.points.front().velocity);
+  const double acceleration=std::max(-3.,std::min(1.,(commands.front()-speed)/.4));
+  commands.pop_front();
+  const double next=std::max(0.,speed+acceleration*dt);
+  x+=.5*(speed+next)*dt;speed=next;
+  min_gap=std::min(min_gap,obstacle-x-f.params.vehicle_front_m-2);
+ }
+ RecordProperty("unknown_obstacle_minimum_gap_at_"+std::to_string(scenario.first)+"_mps",std::to_string(min_gap));
+ EXPECT_GT(min_gap,f.params.stop_buffer_m)<<scenario.first;
+ EXPECT_LT(speed,.1)<<scenario.first;
+ }
+}
+
+TEST(IntegratedHighwayMerge, CloseUnknownObstacleStillCommandsImmediateStop) {
+ HighwayLidarFixture f;f.params.mission_end_y_m=1;
+ pp::Route route=lanelet::routing::LaneletPath({(*f.route)[0]});
+ pp::IntegratedHighwayMerge core(f.integrated(),f.shared);
+ const auto path=core.process(f.ego(1),f.status(),
+     f.objects(1,2+f.params.vehicle_front_m+2,1000,false,0),route);
+ ASSERT_FALSE(path.points.empty());EXPECT_DOUBLE_EQ(path.points.front().velocity,0);
+}
+
 TEST(IntegratedHighwayMerge, ClearedEmergencyDoesNotKeepRequestingAStopWhileMoving) {
  HighwayLidarFixture f;f.params.mission_end_y_m=1;f.params.entry_speed_mps=f.params.cruise_speed_mps;
  pp::Route route=lanelet::routing::LaneletPath({(*f.route)[0]});pp::IntegratedHighwayMerge core(f.integrated(),f.shared);

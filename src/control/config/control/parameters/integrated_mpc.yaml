@@ -77,7 +77,7 @@ longitudinal:
   acceleration_estimate_filter_time_constant_sec: 0.2
   speed_weight: 8.0
   acceleration_weight: 0.2
-  jerk_weight: 1.2
+  jerk_weight: 0.8
   command_weight: 0.08
   command_rate_weight: 2.5
   terminal_speed_weight: 24.0

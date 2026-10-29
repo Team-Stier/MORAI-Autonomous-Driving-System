@@ -69,7 +69,7 @@ TEST(TunnelSpeedControl, MoraiSpatialReferenceMatchesThe25KphCeiling) {
 TEST(TunnelSpeedControl, LowerTargetsAndStopsArePreservedInBothControllers) {
   for(double speed:{5.,0.}) {
     Fixture f;
-    f.equivalent<control::IntegratedMpc>(control::loadIntegratedMpcParameters(f.params("integrated_mpc")),speed);
+    if(speed>0)f.equivalent<control::IntegratedMpc>(control::loadIntegratedMpcParameters(f.params("integrated_mpc")),speed);
     f.equivalent<control::MoraiMpc>(control::loadMoraiMpcParameters(f.params("morai_mpc")),speed);
   }
 }
@@ -104,4 +104,29 @@ TEST(TunnelSpeedControl, GpsModeRetainsExistingDynamicZoneAccelerationReference)
 
 TEST(TunnelSpeedControl, TimedReferenceAtTheCeilingDoesNotRequestPositiveAcceleration) {
   Fixture f;f.equivalent<control::IntegratedMpc>(control::loadIntegratedMpcParameters(f.params("integrated_mpc")),25./3.6,true,1.5);
+}
+
+TEST(TunnelSpeedControl, TunnelZeroSpeedPathCommandsFullBrakeUntilBypassIsAvailable) {
+  Fixture f;
+  control::IntegratedMpc core(control::loadIntegratedMpcParameters(f.params("integrated_mpc")));
+  for(double speed:{7.,1.,0.}) {
+    f.vehicle.velocity_x_mps=speed;f.ego.header.stamp+=ros::Duration(.03);
+    const auto command=f.call(core,f.path(0,true),f.tunnel);
+    EXPECT_DOUBLE_EQ(command.accel,0);
+    EXPECT_DOUBLE_EQ(command.brake,1);
+  }
+  morai_msgs::CtrlCmd command;
+  for(int i=0;i<30;++i) {
+    f.ego.header.stamp+=ros::Duration(.03);
+    command=f.call(core,f.path(8./3.6),f.tunnel);
+  }
+  EXPECT_GT(command.accel,0);
+  EXPECT_DOUBLE_EQ(command.brake,0);
+}
+TEST(TunnelSpeedControl, TunnelFutureStopWithPositiveApproachSpeedDoesNotForceFullBrake) {
+  Fixture f;
+  control::IntegratedMpc core(control::loadIntegratedMpcParameters(f.params("integrated_mpc")));
+  auto path=f.path(7.);path.points.back().velocity=0;
+  const auto command=f.call(core,path,f.tunnel);
+  EXPECT_LT(command.brake,1);
 }
