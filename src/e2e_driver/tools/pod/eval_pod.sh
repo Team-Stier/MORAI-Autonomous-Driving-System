@@ -240,7 +240,7 @@ dm() {  # TEXT [FILE] -> HTTP code: a Discord DM to the user (memory discord-urg
 deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and report to the user's DM
   local R=/workspace/results/$1 f line url vid code
   for f in $(P "ls $R/lap_*.ready 2> /dev/null"); do
-    [[ -e $LOCAL/$(basename "$f").sent ]] && continue
+    [[ -e $LOCAL/${1}_$(basename "$f").sent ]] && continue   # per run: a lap_KK of an earlier run on this NAME is another lap
     IFS=$'\t' read -r line url vid < <(P "cat $f")
     mkdir -p "$LOCAL/laps"; scp -q -F "$SSHC" "pod:$vid" "$LOCAL/laps/" 2> /dev/null
     line="${MSG_PREFIX:-}$line"
@@ -252,7 +252,7 @@ deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and r
       scp -q -F "$SSHC" "pod:$R/$K/$K.json" "$RESULTS_DIR/$VERSION/${RUN}_$K.json" 2> /dev/null &&
         python3 "$HERE/campaign_results.py" "$RESULTS_DIR" "$VERSION" >> "$LOCAL/eval_pod.log" 2>&1
     fi
-    echo "$code" > "$LOCAL/$(basename "$f").sent"; log "lap $(basename "$f" .ready) sent to Discord ($code)"
+    echo "$code" > "$LOCAL/${1}_$(basename "$f").sent"; log "lap $(basename "$f" .ready) sent to Discord ($code)"
   done
 }
 
