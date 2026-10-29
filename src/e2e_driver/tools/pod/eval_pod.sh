@@ -28,7 +28,7 @@
 #   goes to the pod's /workspace/drive, drive_setup.sh builds it (ONNX Runtime GPU, rosdep, catkin_make) after setup.sh.
 #   ATTACH=<pod> with BRANCH=<ref>: the stacks go down, the new ref is synced and built, then the eval runs on it.
 #   ACCOUNT=1 (with ATTACH): copy ~/.morai-secrets to the pod and unpack it (an account that came after the boot).
-#   Defaults: GPUS RTX 5080 / 3080 / 3090 / 4090 / A5000 / 3070 (Vulkan), CLOUD=COMMUNITY, VCPU 12, MEM_GB 28, DISK_GB 100. Pod create and
+#   Defaults: GPUS RTX 4090 / 5080 / 3090 / A5000 / 3080 / 3070 (Vulkan; 3080 late: no-Vulkan hosts), CLOUD=COMMUNITY, VCPU 12, MEM_GB 28, DISK_GB 100. Pod create and
 #   terminate are logged to PODS_LOG (/home/opc/morai-campaign/shared/pods.log). VERSION=vN: Discord prefix "[vN] "
 #   (before MSG_PREFIX) and every delivered lap's lap_KK.json to RESULTS_DIR/vN/ (campaign_results.py aggregates).
 #   NO_EVAL=1: stop after the deploy (pod kept, as CREATE_ONLY). START_CP=J END_CP=K: section laps (eval3.sh).
@@ -60,11 +60,11 @@ draw() { python3 -c 'import random,sys; print(random.choice([s for s in range(10
 RUN=${NAME}_s$(IFS=-; echo "${SEEDS[*]}")   # results and B2 runs/eval_vps/RUN; LOCAL (ssh_config) keeps NAME
 KEY=${RUNPOD_API_KEY:-$(sed -n -E "s/^api_?key *= *[\"']?([^\"']*)[\"']?.*/\1/p" ~/.runpod/config.toml)}
 read -r -a VOLUMES <<< "${EVAL_POD_VOLUMES:-1tra2qsxbl:EU-CZ-1}"     # VOLUME_ID:DATA_CENTER ..., tried in order
-IFS=$'\n' read -r -d '' -a GPUS <<< "${EVAL_POD_GPUS:-NVIDIA GeForce RTX 5080
-NVIDIA GeForce RTX 3080
+IFS=$'\n' read -r -d '' -a GPUS <<< "${EVAL_POD_GPUS:-NVIDIA GeForce RTX 4090
+NVIDIA GeForce RTX 5080
 NVIDIA GeForce RTX 3090
-NVIDIA GeForce RTX 4090
 NVIDIA RTX A5000
+NVIDIA GeForce RTX 3080
 NVIDIA GeForce RTX 3070}"
 LOCAL=$HOME/morai-eval/pod/$NAME; mkdir -p "$LOCAL"; SSHC=$LOCAL/ssh_config; echo $$ > "$LOCAL/driver.pid"
 T0=$(date +%s.%N | cut -c1-14)
