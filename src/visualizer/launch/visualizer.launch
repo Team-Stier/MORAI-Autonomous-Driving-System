@@ -1,69 +1,11 @@
 <launch>
-  <arg name="ego_topic" default="/localization/ego"/>
-  <arg name="global_path_topic" default="/visualizer/global_path"/>
-  <arg name="local_path_topic" default="/local_path/velocity_injected"/>
-  <arg name="objects_topic" default="/objects"/>
-  <arg name="object_info_enabled" default="true"/>
-  <arg name="object_info_port" default="7505"/>
-  <arg name="udp_enabled" default="true"/>
-  <arg name="udp_bind_ip" default="0.0.0.0"/>
-  <arg name="udp_port" default="9095"/>
-  <arg name="udp_source_ip" default=""/>
   <arg name="rviz" default="true"/>
-  <node pkg="visualizer" type="ego_gt_visualizer_node" name="ego_gt_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="ego_visualizer_node" name="ego_visualizer_node" output="screen">
-    <remap from="/localization/ego" to="$(arg ego_topic)"/>
-  </node>
-  <node pkg="visualizer" type="local_path_visualizer_node" name="local_path_visualizer_node" output="screen">
-    <remap from="/local_path/velocity_injected" to="$(arg local_path_topic)"/>
-  </node>
-  <node pkg="visualizer" type="map_visualizer_node" name="map_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="object_info_visualizer_node" name="object_info_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="object_visualizer_node" name="object_visualizer_node" output="screen">
-    <remap from="/objects" to="$(arg objects_topic)"/>
-  </node>
-  <node pkg="visualizer" type="prediction_0_5s_visualizer_node" name="prediction_0_5s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_1_0s_visualizer_node" name="prediction_1_0s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_1_5s_visualizer_node" name="prediction_1_5s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_2_0s_visualizer_node" name="prediction_2_0s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_2_5s_visualizer_node" name="prediction_2_5s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_3_0s_visualizer_node" name="prediction_3_0s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_3_5s_visualizer_node" name="prediction_3_5s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_4_0s_visualizer_node" name="prediction_4_0s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_4_5s_visualizer_node" name="prediction_4_5s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="prediction_5_0s_visualizer_node" name="prediction_5_0s_visualizer_node" output="screen">
-  </node>
-  <node pkg="visualizer" type="route_visualizer_node" name="route_visualizer_node" output="screen">
-    <remap from="/visualizer/global_path" to="$(arg global_path_topic)"/>
-  </node>
-  <node pkg="visualizer" type="traffic_light_visualizer_node" name="traffic_light_visualizer_node" output="screen">
-  </node>
-  <node if="$(arg object_info_enabled)" pkg="visualizer" type="object_info_udp.py"
-        name="visualizer_object_info_udp" output="screen">
-    <param name="bind_ip" value="$(arg udp_bind_ip)"/>
-    <param name="port" value="$(arg object_info_port)"/>
-    <param name="source_ip" value="$(arg udp_source_ip)"/>
-  </node>
-  <node if="$(arg udp_enabled)" pkg="visualizer" type="ego_udp.py"
-        name="visualizer_ego_udp" output="screen">
-    <param name="bind_ip" value="$(arg udp_bind_ip)"/>
-    <param name="port" value="$(arg udp_port)"/>
-    <param name="source_ip" value="$(arg udp_source_ip)"/>
-  </node>
+  <param name="/visualizer/robot_description"
+         textfile="$(find visualizer)/urdf/ioniq5.urdf"/>
+  <node pkg="visualizer" type="map_visualizer_node" name="map_visualizer_node" output="screen"/>
+  <node pkg="visualizer" type="local_path_visualizer_node" name="local_path_visualizer_node" output="screen"/>
+  <node pkg="visualizer" type="object_visualizer_node" name="object_visualizer_node" output="screen"/>
+  <node pkg="visualizer" type="traffic_light_visualizer_node" name="traffic_light_visualizer_node" output="screen"/>
   <node if="$(arg rviz)" pkg="rviz" type="rviz" name="visualizer_rviz"
-        args="-d $(find visualizer)/rviz/visualizer.rviz" output="screen">
-    <env name="DISABLE_ROS1_EOL_WARNINGS" value="1"/>
-  </node>
+        args="-d $(find visualizer)/rviz/visualizer.rviz" output="screen"/>
 </launch>

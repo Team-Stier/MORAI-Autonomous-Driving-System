@@ -5,3 +5,9 @@
 # 경로와 point pose의 stamp는 입력 값을 유지하며 frame_id는 출력 좌표계로 설정한다.
 std_msgs/Header header
 interfaces/PathPoint[] points
+
+# Optional full spatial reference for lateral tracking. Poses use Path.header frame.
+# points remains the longitudinal v/a/time trajectory.
+# Both arrays start at the same route station; the timed trajectory may start at ego pose.
+# An empty lateral_reference uses points for both lateral and longitudinal tracking.
+geometry_msgs/Pose[] lateral_reference

@@ -1,6 +1,15 @@
+stop_line_extension_m: 4.0
+# Signal intersections: reach 40 km/h 25 m before the line; retain for 40 m after.
+intersection_speed_mps: 11.11111111111111
+intersection_before_m: 25.0
+intersection_after_m: 40.0
+intersection_deceleration_mps2: 2.5
+# Rear-axle stop offset and distance-profile range; y_m is not an immediate-stop threshold.
 x_m: 5.0
 y_m: 100.0
+stop_response_time_sec: 0.35
+stop_position_tolerance_m: 0.2
 z_mps2: 3.0
 n_frames: 3
 stop_timeout_sec: 100.0
-map_file: ../map/kcity_lanelet2.osm
+map_file: ../map/kcity_lanelet2_final_circle.osm

@@ -1,7 +1,0 @@
-stage: local
-inputs: [ego, competition, objects, tf, imu, route, predictions]
-validator: route_present.hpp
-policy: remove_invalid.hpp
-allowed_issues:
-  ego: [Stale, ReceiveTimeout, Skew]
-bank: shared_map.hpp

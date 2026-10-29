@@ -1,4 +1,0 @@
-stage: track
-inputs: [path, ego, competition]
-validator: tracking_inputs.hpp
-policy: remove_all.hpp

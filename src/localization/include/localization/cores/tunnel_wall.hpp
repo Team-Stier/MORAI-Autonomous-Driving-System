@@ -187,6 +187,13 @@ class TunnelWall {
                          const Eigen::Vector3d& acceleration,
                          const Eigen::Vector3d& position,
                          const Eigen::Quaterniond& body_from_level) const {
+    const double lateral_position = normal_.dot(position -
+      Eigen::Vector3d(parameters_.origin_x_m, parameters_.origin_y_m, 0));
+    // Surveyed walls outside the LiDAR observation range cannot constrain
+    // the vehicle; continue the existing inertial/velocity estimate there.
+    if (lateral_position < parameters_.right_wall_m - parameters_.wall_max_range_m ||
+        lateral_position > parameters_.left_wall_m + parameters_.wall_max_range_m)
+      return WallInformation{};
     std::uint32_t offsets[4];
     const char* names[] = {"x", "y", "z", "time"};
     for (std::size_t i = 0; i < 4; ++i) offsets[i] = std::find_if(

@@ -1,0 +1,4 @@
+stage: limit
+inputs: [command, competition]
+policy: remove_invalid.hpp
+allowed_issues: {command: [ReceiveTimeout], competition: [Stale, ReceiveTimeout]}

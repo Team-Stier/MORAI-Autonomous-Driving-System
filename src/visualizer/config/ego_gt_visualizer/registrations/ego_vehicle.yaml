@@ -1,4 +1,0 @@
-stage: render
-inputs:
-- source
-validator: ego_pose.hpp

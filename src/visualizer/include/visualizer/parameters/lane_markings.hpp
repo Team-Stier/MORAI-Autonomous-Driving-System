@@ -5,6 +5,7 @@
 #include <boost/property_tree/xml_parser.hpp>
 #include <ros/console.h>
 #include <cmath>
+#include <array>
 #include <map>
 #include <set>
 #include <sstream>
@@ -21,6 +22,28 @@ inline LaneMarkingsParameters loadLaneMarkingsParameters(const node_pipeline::Pa
   for (const auto value : {parameters.dash_length_m, parameters.dash_gap_m,
                           parameters.double_line_gap_m, parameters.line_width_m})
     if (!std::isfinite(value) || value <= 0) throw std::invalid_argument("invalid lane marking spacing");
+  if (params.has("checkpoints_file")) {
+    std::istringstream csv(params.asset("checkpoints_file"));
+    std::string row;
+    if (!std::getline(csv, row) || row != "x,y,z,yaw,lanelet_id")
+      throw std::invalid_argument("invalid checkpoint CSV header");
+    while (std::getline(csv, row)) {
+      std::istringstream fields(row);
+      std::array<double, 4> values{};
+      for (auto& value : values) {
+        std::string field;
+        if (!std::getline(fields, field, ',')) throw std::invalid_argument("missing checkpoint coordinate");
+        std::size_t consumed = 0; value = std::stod(field, &consumed);
+        if (consumed != field.size() || !std::isfinite(value)) throw std::invalid_argument("invalid checkpoint coordinate");
+      }
+      std::string id;
+      if (!std::getline(fields, id) || id.empty() || id.find_first_not_of("0123456789") != std::string::npos)
+        throw std::invalid_argument("invalid checkpoint lanelet id");
+      geometry_msgs::Point point; point.x = values[0]; point.y = values[1]; point.z = values[2];
+      parameters.checkpoints.push_back(point);
+    }
+    if (parameters.checkpoints.size() != 16) throw std::invalid_argument("expected 16 checkpoints");
+  }
   const double period = parameters.dash_length_m + parameters.dash_gap_m;
   if (!std::isfinite(period)) throw std::invalid_argument("lane marking dash period must be finite");
 

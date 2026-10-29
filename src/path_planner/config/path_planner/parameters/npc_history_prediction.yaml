@@ -1,3 +1,0 @@
-trajectory_file: models/npc_trajectory_1s.txt
-nominal_fit_slack_m: 0.02
-path_rms_limit_m: 0.5

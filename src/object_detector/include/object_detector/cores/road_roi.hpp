@@ -2,6 +2,8 @@
 #include <interfaces/CompetitionVehicleStatus.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf2_msgs/TFMessage.h>
+#include <node_pipeline/extension.hpp>
+#include <visualization_msgs/Marker.h>
 #include <lanelet2_core/LaneletMap.h>
 #include <lanelet2_routing/RoutingGraph.h>
 #include <lanelet2_traffic_rules/TrafficRulesFactory.h>
@@ -22,10 +24,10 @@ namespace object_detector {
 struct RoadRoiParameters {
   lanelet::LaneletMapPtr map;
   double forward_distance_m = 50;
-  double left_inflation_m = 1;
-  double right_inflation_m = 1;
-  double z_min_m = 0.2;
-  double z_max_m = 2;
+  double left_inflation_m = 0;
+  double right_inflation_m = 0;
+  double z_min_m = -2.0;
+  double z_max_m = 3.0;
 };
 class RoadRoi {
  public:
@@ -71,6 +73,7 @@ class RoadRoi {
     const double cy = std::cos(yaw), sy = std::sin(yaw);
     const Point ego(transform.translation.x, transform.translation.y);
     const auto regions = road(ego, Point(cy, sy));
+    publishRoi(regions, cloud.header.stamp, transform.translation.z);
     const double cr = std::cos(competition.roll_rad), sr = std::sin(competition.roll_rad);
     const double cp = std::cos(competition.pitch_rad), sp = std::sin(competition.pitch_rad);
     const auto field_offset = [&](const char* name) {
@@ -265,6 +268,32 @@ class RoadRoi {
     return result;
   }
 
+  void publishRoi(const std::vector<Region>& regions, const ros::Time& stamp, double height) {
+    visualization_msgs::Marker marker;
+    marker.header.frame_id = "map"; marker.header.stamp = stamp;
+    marker.ns = "lidar_roi"; marker.id = 0;
+    marker.type = visualization_msgs::Marker::POINTS;
+    marker.action = visualization_msgs::Marker::ADD;
+    marker.pose.orientation.w = 1;
+    marker.scale.x = marker.scale.y = .45;
+    marker.color.g = 1; marker.color.b = .25; marker.color.a = .28;
+    marker.lifetime = ros::Duration(.5);
+    std::set<std::pair<int,int>> cells;
+    for (const auto& region : regions) {
+      const auto& geometry = *region.geometry;
+      for (int x = static_cast<int>(std::ceil(geometry.minimum.x()/.75)); x*.75 <= geometry.maximum.x(); ++x)
+        for (int y = static_cast<int>(std::ceil(geometry.minimum.y()/.75)); y*.75 <= geometry.maximum.y(); ++y) {
+          const Point p(x*.75, y*.75);
+          if (!contains(geometry.expanded, p)) continue;
+          const double station = project(geometry.center, p).station;
+          if (station < region.begin - 1e-8 || station > region.end + 1e-8 || !cells.emplace(x,y).second) continue;
+          geometry_msgs::Point q; q.x = p.x(); q.y = p.y(); q.z = height + .1;
+          marker.points.push_back(q);
+        }
+    }
+    roi_view_.publish(marker);
+  }
+  node_pipeline::Visualizer<visualization_msgs::Marker> roi_view_{"object_motion"};
   RoadRoiParameters parameters_;
   std::map<Key, Geometry> lanes_;
 };

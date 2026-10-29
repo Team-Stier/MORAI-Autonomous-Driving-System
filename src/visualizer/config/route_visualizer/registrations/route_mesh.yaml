@@ -1,4 +1,0 @@
-stage: render
-inputs:
-- source
-validator: path_points.hpp

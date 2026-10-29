@@ -8,7 +8,7 @@ Checkpoint → GlobalPath → Prediction → LocalPath의 네 Stage 파이프라
 | 노드 | `path_planner_node` |
 | 구독 | `/localization/ego`, `/vehicle/competition_status`, `/objects`, `/tf`, `/sensors/imu/data`, `/section_annotation` |
 | 발행 | `/local_path` (`map`, 입력 조립 기준 stamp; 각 point pose header 포함) |
-| 실행 | 20 Hz 주기 |
+| 실행 | 30 Hz 주기 |
 
 `launch.sh`가 ROS·워크스페이스 환경을 준비하고 자기 노드만 실행한다.
 
@@ -63,3 +63,5 @@ Prediction Core의 반환과 LocalPath Core의 입력은 **Objects 메시지를 
 
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
+
+새 워크스페이스의 일반·정적장애물·톨게이트 구간은 링크에서 이식한 DP/QP로 횡방향 경로를 탐색하고 속도·가속도·시간을 계획한다. `Path.lateral_reference`에는 선택된 최적화 경로의 전체 공간 형상을 전달하고 `Path.points`에는 시간 계획 구간을 전달한다. 회전교차로(S8~S10·S16)와 고주로(S11~S13)는 기존 수현 경로·미션 판단을 유지한다. GT 객체는 비교에만 사용한다.

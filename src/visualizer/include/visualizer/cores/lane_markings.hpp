@@ -1,5 +1,7 @@
 #pragma once
 #include <visualization_msgs/Marker.h>
+#include <visualization_msgs/MarkerArray.h>
+#include <node_pipeline/extension.hpp>
 #include <algorithm>
 #include <cmath>
 #include <string>
@@ -18,6 +20,7 @@ struct LaneMarkingsParameters {
     bool virtual_boundary = false;
   };
   std::vector<Line> lines;
+  std::vector<geometry_msgs::Point> checkpoints;
   double dash_length_m = 3;
   double dash_gap_m = 3;
   double double_line_gap_m = 0.15;
@@ -58,10 +61,42 @@ class LaneMarkings {
       }
       marker.colors.insert(marker.colors.end(), marker.points.size() - marker.colors.size(), color);
     }
+    publishCheckpoints();
     return marker;
   }
 
  private:
+  void publishCheckpoints() {
+    visualization_msgs::MarkerArray markers;
+    visualization_msgs::Marker clear;
+    clear.header.frame_id = "map";
+    clear.action = visualization_msgs::Marker::DELETEALL;
+    markers.markers.push_back(clear);
+    for (std::size_t i = 0; i < parameters_.checkpoints.size(); ++i) {
+      visualization_msgs::Marker point;
+      point.header.frame_id = "map";
+      point.ns = "checkpoints";
+      point.id = static_cast<int>(2*i);
+      point.type = visualization_msgs::Marker::CYLINDER;
+      point.action = visualization_msgs::Marker::ADD;
+      point.pose.position = parameters_.checkpoints[i];
+      if (parameters_.flatten_z) point.pose.position.z = 0;
+      point.pose.position.z += 0.2;
+      point.pose.orientation.w = 1;
+      point.scale.x = point.scale.y = 2;
+      point.scale.z = 0.4;
+      point.color.r = 0.1; point.color.g = 0.9; point.color.b = 1; point.color.a = 1;
+      markers.markers.push_back(point);
+      point.id += 1;
+      point.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+      point.pose.position.z += 1.5;
+      point.scale.z = 1.8;
+      point.color.r = point.color.g = point.color.b = 1;
+      point.text = "S" + std::to_string(i+1) + (i == 0 ? " START" : "");
+      markers.markers.push_back(point);
+    }
+    checkpoint_visualizer_.publish(markers);
+  }
   static geometry_msgs::Point offsetPoint(const LaneMarkingsParameters::Line& line,
                                          std::size_t index, double offset) {
     auto point = line.points[index];
@@ -118,5 +153,6 @@ class LaneMarkings {
   }
 
   LaneMarkingsParameters parameters_;
+  node_pipeline::Visualizer<visualization_msgs::MarkerArray> checkpoint_visualizer_{"checkpoints"};
 };
 }  // namespace visualizer

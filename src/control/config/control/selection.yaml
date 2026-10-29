@@ -1,29 +1,20 @@
 track:
   section_core_map:
-    "0": pp.hpp
-    "1": pp.hpp
-    "2": pp.hpp
-    "3": pp.hpp
-    "4": pp.hpp
-    "5": pp.hpp
-    "6": pp.hpp
-    "7": pp.hpp
-    "8": pp.hpp
-    "9": pp.hpp
-    "10": pp.hpp
-    "11": pp.hpp
-    "12": pp.hpp
-    "13": pp.hpp
-    "14": pp.hpp
-    "15": pp.hpp
-    "16": pp.hpp
-  health_core_map:
-    # - when: [{input: path, issue: Missing}]
-    #   priority: 103
-    #   core: safe_stop.hpp
-    # - when: [{input: ego, issue: Missing}]
-    #   priority: 102
-    #   core: safe_stop.hpp
-    # - when: [{input: competition, issue: Missing}]
-    #   priority: 101
-    #   core: safe_stop.hpp
+    '0': integrated_mpc.hpp
+    '1': integrated_mpc.hpp
+    '2': integrated_mpc.hpp
+    '3': integrated_mpc.hpp
+    '4': integrated_mpc.hpp
+    '5': integrated_mpc.hpp
+    '6': integrated_mpc.hpp
+    '7': integrated_mpc.hpp
+    '8': morai_mpc.hpp
+    '9': morai_mpc.hpp
+    '10': morai_mpc.hpp
+    '11': morai_mpc.hpp
+    '12': morai_mpc.hpp
+    '13': morai_mpc.hpp
+    '14': integrated_mpc.hpp
+    '15': integrated_mpc.hpp
+    '16': morai_mpc.hpp
+  health_core_map: []

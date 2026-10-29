@@ -1,0 +1,4 @@
+history_duration_sec: 1.0
+maximum_extrapolation_sec: 0.03
+compensate_translation: true
+minimum_plane_improvement_ratio: 0.95

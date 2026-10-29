@@ -36,6 +36,7 @@ stages:
     outputs:
       - {name: clusters, type: object_detector::Clusters, header: object_detector/libraries/types.hpp}
       - {name: competition, from: competition}
+      - {name: tf, from: tf}
   - name: bbox_fitting
     outputs:
       - {name: objects, type: interfaces/Objects}

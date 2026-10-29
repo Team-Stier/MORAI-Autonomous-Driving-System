@@ -1,5 +1,6 @@
 #pragma once
 #include <ros/console.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <osqp.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
@@ -49,6 +50,7 @@ struct LongitudinalMpcConfig {
   double command_weight{0.08};
   double command_rate_weight{2.5};
   double terminal_speed_weight{24.0};
+  double stop_position_weight{1000.0};
 };
 
 struct LongitudinalMpcResult {
@@ -66,7 +68,8 @@ class LongitudinalMpc {
  public:
   explicit LongitudinalMpc(const LongitudinalMpcConfig& config);
   LongitudinalMpcResult update(double target_speed_mps,
-                               double measured_speed_mps, double dt_sec);
+                               double measured_speed_mps, double dt_sec,
+                               const std::vector<double>& stations={},const std::vector<double>& speeds={});
   void reset();
 
  private:
@@ -85,6 +88,10 @@ class LongitudinalMpc {
 
   LongitudinalMpcConfig config_;
   std::vector<double> warm_start_;
+  bool stop_release_pending_ = false;
+  std::vector<double> reference_stations_,reference_speeds_;
+  double reference_stop_station_=std::numeric_limits<double>::infinity();
+  double referenceSpeed(double station,double fallback) const;
   bool has_previous_speed_{false};
   double previous_speed_mps_{0.0};
   double estimated_acceleration_mps2_{0.0};
@@ -130,6 +137,7 @@ struct LateralParameters {
   double morai_weight_curvature_low = 0.005;
   double morai_weight_curvature_high = 0.03;
   double morai_weight_first_steer_change = 2.0;
+  double morai_straight_steer_change_scale = 1.0;
   double morai_weight_front_point_error = 0.0;
   double morai_front_overhang_m = 0.845;
 };
@@ -142,11 +150,22 @@ struct SteeringPredictionParameters {
 };
 
 struct Parameters {
+  bool dynamic_zone_enabled = false;
+  double dynamic_zone_min_x_m = -75;
+  double dynamic_zone_max_x_m = -40;
+  double dynamic_zone_min_y_m = -100;
+  double dynamic_zone_max_y_m = 85;
+  double dynamic_zone_speed_mps = 40.0/3.6;
+  double dynamic_zone_approach_m = 30;
+
   LateralParameters lateral;
   LongitudinalMpcConfig longitudinal;
   SteeringPredictionParameters steering_prediction;
+  double reference_history_length_m = 4.0;
   double minimum_control_dt_sec = 0.005;
   double maximum_control_dt_sec = 0.10;
+  double stationary_hold_speed_mps = 0.1;
+  double stationary_hold_brake = 0.3;
 };
 
 constexpr double kPi = 3.14159265358979323846;
@@ -219,6 +238,12 @@ class AutowareLateral {
  public:
   AutowareLateral(const LateralParameters& parameters,
                  const SteeringPredictionParameters& steering);
+  void sent(double steering_rad) {
+    if(input_buffer_.empty())return;
+    if(queued_command_)input_buffer_.back()=steering_rad;
+    else {input_buffer_.push_back(steering_rad);input_buffer_.pop_front();}
+    queued_command_=false;
+  }
   double calculate(const control::autoware_ai_mpc::autoware::Lane& path, double speed_mps,
                    double modeled_steering_rad, double previous_steering_rad);
 
@@ -231,6 +256,7 @@ class AutowareLateral {
   std::unique_ptr<autoware::KinematicsBicycleModel> vehicle_model_ptr_;
   std::unique_ptr<autoware::QPSolverQpoasesHotstart> qpsolver_ptr_;
   std::deque<double> input_buffer_;
+  bool queued_command_=false;
   Eigen::Matrix2d front_point_weight_;
 };
 }}  // namespace control::autoware_ai_mpc
@@ -446,6 +472,7 @@ inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
   double speed = std::max(0.0, measured_speed_mps);
   double acceleration = estimated_acceleration_mps2_;
   double previous_command = previous_signed_command_;
+  double station=0;
   result.maximum_speed_mps = speed;
   const double dt = config_.prediction_dt_sec;
   const double actuator_alpha =
@@ -469,9 +496,13 @@ inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
                               acceleration - maximum_acceleration_change,
                               acceleration + maximum_acceleration_change);
     }  // Physical rollout must not silently clip the plant to comfort limits.
+    const double previous_speed=speed;
     speed = std::max(0.0, speed + next_acceleration * dt);
+    station+=(previous_speed+speed)*dt/2;
     result.maximum_speed_mps = std::max(result.maximum_speed_mps, speed);
-    const double speed_error = target_speed_mps - speed;
+    const double stop_overshoot=std::max(0.0,station-reference_stop_station_);
+    result.cost+=config_.stop_position_weight*stop_overshoot*stop_overshoot;
+    const double speed_error = referenceSpeed(station,target_speed_mps) - speed;
     const double jerk = (next_acceleration - acceleration) / dt;
     const double command_change = command - previous_command;
     result.cost += config_.speed_weight * speed_error * speed_error +
@@ -484,7 +515,7 @@ inline LongitudinalMpc::RolloutResult LongitudinalMpc::rollout(
     acceleration = next_acceleration;
     previous_command = command;
   }
-  const double terminal_error = target_speed_mps - speed;
+  const double terminal_error = referenceSpeed(station,target_speed_mps) - speed;
   result.cost += config_.terminal_speed_weight * terminal_error * terminal_error;
   return result;
 }
@@ -611,7 +642,11 @@ inline void LongitudinalMpc::solve(double target_speed_mps, double measured_spee
 
 inline LongitudinalMpcResult LongitudinalMpc::update(double target_speed_mps,
                                               double measured_speed_mps,
-                                              double dt_sec) {
+                                              double dt_sec,const std::vector<double>& stations,
+                                              const std::vector<double>& speeds) {
+  reference_stations_=stations;reference_speeds_=speeds;
+  reference_stop_station_=std::numeric_limits<double>::infinity();
+  for(std::size_t i=0;i<speeds.size();++i)if(speeds[i]==0){reference_stop_station_=stations[i];break;}
   LongitudinalMpcResult result;
   // Competition longitudinal velocity is signed. MPC controls speed magnitude;
   // reverse/gear authority remains with MORAI and the gear interlock.
@@ -630,9 +665,37 @@ inline LongitudinalMpcResult LongitudinalMpc::update(double target_speed_mps,
   has_previous_speed_ = true;
 
   std::vector<double> commands = warm_start_;
+  // At crawl speed, the clipped zero-speed rollout has a flat all-braking basin.
+  // Seed above the pedal dead zone when restarting. The same path-stop costs
+  // and command/jerk limits still decide the optimized command.
+  if(measured_speed_mps<1.0 && target_speed_mps>measured_speed_mps)
+    for(auto& command:commands)command=std::max(
+        std::min(.3,config_.maximum_accel_command),command);
+  if (target_speed_mps == 0.0) stop_release_pending_ = true;
+  if (measured_speed_mps < 1.0) stop_release_pending_ = false;
+  const bool recovering_stop = stop_release_pending_ && target_speed_mps > measured_speed_mps;
+  if (recovering_stop) stop_release_pending_ = false;
+  const bool compare_coasting = recovering_stop &&
+      std::any_of(commands.begin(), commands.end(), [](double command) { return command < 0.0; });
   solve(target_speed_mps, measured_speed_mps, &commands,
                        &result.cost, &result.predicted_maximum_speed_mps,
                        &result.iterations);
+  // A released stop can leave SQP in an all-braking local minimum. Compare a
+  // coasting initialization using the same objective, stop cost and constraints.
+  if (compare_coasting) {
+    auto coasting = warm_start_;
+    for (auto& command : coasting) command = std::max(0.0, command);
+    double coast_cost = 0.0, coast_maximum_speed = 0.0;
+    int coast_iterations = 0;
+    solve(target_speed_mps, measured_speed_mps, &coasting,
+          &coast_cost, &coast_maximum_speed, &coast_iterations);
+    result.iterations += coast_iterations;
+    if (coast_cost < result.cost) {
+      commands = std::move(coasting);
+      result.cost = coast_cost;
+      result.predicted_maximum_speed_mps = coast_maximum_speed;
+    }
+  }
   result.estimated_acceleration_mps2 = estimated_acceleration_mps2_;
 
   double command = commands.front();
@@ -655,9 +718,19 @@ inline LongitudinalMpcResult LongitudinalMpc::update(double target_speed_mps,
   return result;
 }
 
+inline double LongitudinalMpc::referenceSpeed(double station,double fallback) const {
+  if(reference_stations_.empty())return fallback;
+  const auto it=std::upper_bound(reference_stations_.begin(),reference_stations_.end(),station);
+  if(it==reference_stations_.begin())return reference_speeds_.front();
+  if(it==reference_stations_.end())return reference_speeds_.back();
+  const auto right=static_cast<std::size_t>(it-reference_stations_.begin()),left=right-1;
+  const double ratio=(station-reference_stations_[left])/(reference_stations_[right]-reference_stations_[left]);
+  return reference_speeds_[left]+ratio*(reference_speeds_[right]-reference_speeds_[left]);
+}
 inline void LongitudinalMpc::reset() {
   std::fill(warm_start_.begin(), warm_start_.end(), 0.0);
   has_previous_speed_ = false;
+  stop_release_pending_ = false;
   previous_speed_mps_ = 0.0;
   estimated_acceleration_mps2_ = 0.0;
   previous_signed_command_ = 0.0;
@@ -789,6 +862,7 @@ inline void AutowareLateral::prepareTrajectory(const control::autoware_ai_mpc::a
 
 inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autoware::Lane& path, double speed_mps,
                                 double modeled_steering_rad, double previous_steering_rad) {
+  queued_command_=false;
   prepareTrajectory(path, speed_mps);
   // Input path is already expressed at the rear-axle base_link origin.
   geometry_msgs::Pose control_pose;
@@ -803,9 +877,13 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
 
   /* calculate nearest point on reference trajectory (used as initial state) */
   unsigned int nearest_index = 0;
-  double yaw_err, dist_err, nearest_traj_time;
+  double yaw_err = 0.0, dist_err = 0.0, nearest_traj_time = 0.0;
   geometry_msgs::Pose nearest_pose;
-  MPCUtils::calcNearestPoseInterp(ref_traj_, control_pose, nearest_pose, nearest_index, dist_err, yaw_err, nearest_traj_time);
+  if (!MPCUtils::calcNearestPoseInterp(ref_traj_, control_pose, nearest_pose,
+      nearest_index, dist_err, yaw_err, nearest_traj_time)) {
+    ROS_WARN_THROTTLE(1.0, "[control] MPC reference matching failed; retaining steering command");
+    return previous_steering_rad;
+  }
 
   /* set mpc initial time */
   const double mpc_start_time = nearest_traj_time;
@@ -880,9 +958,14 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
     mpc_time_v.push_back(mpc_curr_time + i * DT);
   }
   MPCTrajectory mpc_resampled_ref_traj;
-  MPCUtils::interp1dMPCTraj(ref_traj_.relative_time, ref_traj_, mpc_time_v, mpc_resampled_ref_traj);
+  if (!MPCUtils::interp1dMPCTraj(ref_traj_.relative_time, ref_traj_,
+      mpc_time_v, mpc_resampled_ref_traj)) {
+    ROS_WARN_THROTTLE(1.0, "[control] MPC horizon interpolation failed; retaining steering command");
+    return previous_steering_rad;
+  }
 
   /* predict dynamics for N times */
+  double maximum_curve_blend=0;
   for (int i = 0; i < N; ++i)
   {
     const double ref_k = mpc_resampled_ref_traj.k[i];
@@ -904,6 +987,7 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
     Q_adaptive(1, 1) += ref_vx_squared * p_.mpc_weight_heading_error_squared_vel_coeff;
     R_adaptive(0, 0) += ref_vx_squared * p_.mpc_weight_steering_input_squared_vel_coeff;
     const double curve_blend = moraiCurvatureWeightBlend(ref_k, p_.morai_weight_curvature_low, p_.morai_weight_curvature_high);
+    maximum_curve_blend=std::max(maximum_curve_blend,curve_blend);
     Q_adaptive(0, 0) *= p_.morai_straight_lat_weight_scale + (1.0-p_.morai_straight_lat_weight_scale) * curve_blend;
     R_adaptive(0, 0) *= 1.0 + (p_.morai_curve_steer_weight_scale-1.0) * curve_blend;
     // Same reference vehicle pose, not a shifted path: e_front ~= e_y + d*e_yaw.
@@ -979,7 +1063,8 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
   Eigen::MatrixXd f = (Cex * (Aex * x0 + Wex)).transpose() * QCB + reference_input_gradient;
   // First transition spans the control period, not the longer prediction step.
   // Feedback is the Core's final bounded command, not measured tire angle.
-  const double first_change_weight=p_.morai_weight_first_steer_change *
+  const double straight_scale=1+(p_.morai_straight_steer_change_scale-1)*(1-maximum_curve_blend);
+  const double first_change_weight=straight_scale*p_.morai_weight_first_steer_change *
       speed_mps * speed_mps * DT / p_.ctrl_period;
   H(0,0)+=first_change_weight;
   f(0,0)-=first_change_weight*previous_steering_rad;
@@ -1010,7 +1095,11 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
   }
 
   Eigen::VectorXd Uex;
-  qpsolver_ptr_->solve(H, f.transpose(), A, lb, ub, lbA, ubA, Uex);
+  if (!qpsolver_ptr_->solve(H, f.transpose(), A, lb, ub, lbA, ubA, Uex) ||
+      Uex.size() != DIM_U * N || !Uex.allFinite()) {
+    ROS_WARN_THROTTLE(1.0, "[control] MPC optimization failed; retaining steering command");
+    return previous_steering_rad;
+  }
 
 
   /* saturation */
@@ -1021,11 +1110,11 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
   // silently reduces achievable slew and adds dynamics absent from the model.
   const double u_filtered = p_.morai_use_output_steering_filter ? lpf_steering_cmd_.filter(u_sat) : u_sat;
 
-  // Keep the original optimizer-output delay buffer. The next call's first
-  // transition separately references the final bounded Core command.
+  // The Core replaces the newest entry with its final bounded command.
   if (!input_buffer_.empty()) {
     input_buffer_.push_back(u_filtered);
     input_buffer_.pop_front();
+    queued_command_=true;
   }
   return u_filtered;
 }
@@ -1042,6 +1131,69 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
 #include <utility>
 
 namespace control {
+// Geometry retained from the same previously supplied reference, never ego breadcrumbs.
+class MpcPathHistory {
+ public:
+  interfaces::Path update(const interfaces::Path& path, const nav_msgs::Odometry& ego, double length_m) {
+    tf2::Transform world;
+    tf2::fromMsg(ego.pose.pose, world);
+    const auto inverse = world.inverse();
+    interfaces::Path result = path;
+    if (length_m > 0 && points_.size() > 1) {
+      tf2::Transform first;
+      tf2::fromMsg(path.points.front().pose.pose, first);
+      const auto origin = (world * first).getOrigin();
+      double best = std::numeric_limits<double>::infinity(), station = 0, nearest = 0;
+      std::vector<double> stations(points_.size(), 0);
+      for (std::size_t i = 1; i < points_.size(); ++i) {
+        const auto delta = points_[i].getOrigin() - points_[i-1].getOrigin();
+        const double squared = delta.x()*delta.x()+delta.y()*delta.y();
+        const double segment = std::sqrt(squared);
+        stations[i] = station + segment;
+        if (squared > 0) {
+          const auto relative = origin - points_[i-1].getOrigin();
+          const double t = std::max(0.0, std::min(1.0,
+              (relative.x()*delta.x()+relative.y()*delta.y())/squared));
+          const auto error = points_[i-1].getOrigin()+t*delta-origin;
+          const double distance = error.x()*error.x()+error.y()*error.y();
+          if (distance < best) {best=distance;nearest=station+t*segment;}
+        }
+        station += segment;
+      }
+      // A different reference corridor must not inherit an unrelated historical tail.
+      if (best < 0.25) {
+        std::vector<interfaces::PathPoint> prefix;
+        for (double d = std::max(0.0, nearest-length_m); d < nearest-0.01; d += 0.25) {
+          const auto upper = std::upper_bound(stations.begin(), stations.end(), d);
+          const std::size_t right = std::min(stations.size()-1,
+              std::max<std::size_t>(1, upper-stations.begin()));
+          const std::size_t left = right-1;
+          const double t = (d-stations[left])/(stations[right]-stations[left]);
+          tf2::Transform pose;
+          pose.setOrigin(points_[left].getOrigin().lerp(points_[right].getOrigin(), t));
+          pose.setRotation(points_[left].getRotation().slerp(points_[right].getRotation(), t));
+          auto point = path.points.front();
+          tf2::toMsg(inverse*pose, point.pose.pose);
+          prefix.push_back(point);
+        }
+        result.points.insert(result.points.begin(), prefix.begin(), prefix.end());
+      }
+    }
+    points_.clear();
+    // Bound memory by spatial sampling even when repeated calls advance millimetres.
+    for (const auto& point : result.points) {
+      tf2::Transform pose;
+      tf2::fromMsg(point.pose.pose, pose);
+      pose = world*pose;
+      if (points_.empty() || (pose.getOrigin()-points_.back().getOrigin()).length() >= 0.2)
+        points_.push_back(pose);
+    }
+    return result;
+  }
+ private:
+  std::vector<tf2::Transform> points_;
+};
+
 class MoraiMpc {
  public:
   explicit MoraiMpc(autoware_ai_mpc::Parameters parameters = {})
@@ -1075,8 +1227,9 @@ class MoraiMpc {
     // not a longitudinal horizon reference for this controller.
     const double speed_mps = ego.twist.twist.linear.x;
     control::autoware_ai_mpc::autoware::Lane waypoints;
-    waypoints.waypoints.reserve(path.points.size());
-    for (const auto& point : path.points) {
+    const auto reference = path_history_.update(path, ego, parameters_.reference_history_length_m);
+    waypoints.waypoints.reserve(reference.points.size());
+    for (const auto& point : reference.points) {
       control::autoware_ai_mpc::autoware::Waypoint waypoint;
       waypoint.pose = point.pose;
       waypoint.twist.twist.linear.x = std::max(0.5, std::abs(speed_mps));
@@ -1090,7 +1243,26 @@ class MoraiMpc {
     double angle = std::max(-limit, std::min(limit, requested));
     angle = std::max(previous_steering_rad_ - step,
                      std::min(previous_steering_rad_ + step, angle));
-    const auto pedals = longitudinal_.update(nearest->velocity, status.velocity_x_mps, dt);
+    lateral_.sent(angle);
+    const auto& position = ego.pose.pose.position;
+    const bool dynamic_zone = parameters_.dynamic_zone_enabled &&
+        position.x >= parameters_.dynamic_zone_min_x_m && position.x <= parameters_.dynamic_zone_max_x_m &&
+        position.y >= parameters_.dynamic_zone_min_y_m && position.y <= parameters_.dynamic_zone_max_y_m;
+    const bool approach = parameters_.dynamic_zone_enabled &&
+        position.x >= parameters_.dynamic_zone_min_x_m && position.x <= parameters_.dynamic_zone_max_x_m &&
+        position.y >= parameters_.dynamic_zone_min_y_m-parameters_.dynamic_zone_approach_m &&
+        position.y <= parameters_.dynamic_zone_max_y_m;
+    const double target_speed = approach ? std::min(nearest->velocity, parameters_.dynamic_zone_speed_mps) : nearest->velocity;
+    std::vector<double> stations{0},speeds{target_speed};double distance=0;
+    for(auto point=nearest+1;point!=path.points.end();++point) {
+      const auto& a=(point-1)->pose.pose.position;const auto& b=point->pose.pose.position;
+      distance+=std::hypot(b.x-a.x,b.y-a.y);
+      if(distance<=stations.back()+1e-6)continue;
+      stations.push_back(distance);speeds.push_back(approach?std::min(point->velocity,parameters_.dynamic_zone_speed_mps):point->velocity);
+    }
+    const auto pedals = longitudinal_.update(target_speed, status.velocity_x_mps, dt,stations,speeds);
+    const bool emergency = dynamic_zone && std::all_of(path.points.begin(), path.points.end(),
+        [](const interfaces::PathPoint& point) {return point.velocity == 0;});
 
     previous_steering_rad_ = angle;
     steering_.sent(time_sec, angle * parameters_.steering_prediction.gain);
@@ -1099,11 +1271,17 @@ class MoraiMpc {
     command.steering = angle / autoware_ai_mpc::kBridgeSteeringLimitRad;
     command.accel = pedals.accel;
     command.brake = pedals.brake;
+    if (target_speed == 0.0 && std::abs(status.velocity_x_mps) <= parameters_.stationary_hold_speed_mps) {
+      command.accel = 0;
+      command.brake = std::max(command.brake, parameters_.stationary_hold_brake);
+    }
+    if (emergency) {command.accel=0;command.brake=1;}
     return command;
   }
 
  private:
   autoware_ai_mpc::Parameters parameters_;
+  MpcPathHistory path_history_;
   autoware_ai_mpc::AutowareLateral lateral_;
   autoware_ai_mpc::LongitudinalMpc longitudinal_;
   autoware_ai_mpc::SteeringPrediction steering_;

@@ -4,6 +4,18 @@ set -o pipefail
 WORKSPACE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$WORKSPACE" || exit 1
 
+# Detached package launchers have no controlling terminal. Let sudo request
+# authentication through the desktop instead of failing in the background.
+if [[ -z "${SUDO_ASKPASS:-}" && -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] &&
+   command -v zenity >/dev/null 2>&1; then
+    export SUDO_ASKPASS="$WORKSPACE/src/visualizer/scripts/sudo_askpass.sh"
+fi
+
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' 'Usage: ./run.sh' 'Starts the driving stack and RViz.'
+    exit 0
+fi
+
 FAILURES=()
 CHILD_PIDS=()
 CHILD_NAMES=()
@@ -171,15 +183,13 @@ start_package tf_publisher
 start_package lidar_leveler
 start_package localization
 start_package section_annotator
-start_package morai_test
+start_package object_detector
 start_package traffic_light
 start_package path_planner
 start_package velocity_planner
 start_package control
 start_package speed_filter
-if [[ -f "$WORKSPACE/src/visualizer/launch.sh" ]]; then
-    start_package visualizer
-fi
+start_package visualizer
 
 stop_child_groups() {
     local signal="$1"

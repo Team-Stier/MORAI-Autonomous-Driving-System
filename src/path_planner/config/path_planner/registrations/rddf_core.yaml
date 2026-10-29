@@ -1,4 +1,0 @@
-stage: local
-inputs: [ego]
-validator: rddf_ego.hpp
-policy: remove_invalid.hpp

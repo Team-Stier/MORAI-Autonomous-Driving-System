@@ -25,6 +25,8 @@
   <depend>rviz</depend>
   <depend>pluginlib</depend>
   <exec_depend>tf</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
   <export>
     <rviz plugin="${prefix}/rviz_plugins.xml"/>
   </export>

@@ -10,7 +10,7 @@
 namespace object_detector {
 class ClusterTf {
  public:
-  std::tuple<Clusters, interfaces::CompetitionVehicleStatus> process(
+  std::tuple<Clusters, interfaces::CompetitionVehicleStatus, tf2_msgs::TFMessage> process(
       const Clusters& clusters, const interfaces::CompetitionVehicleStatus& competition,
       const tf2_msgs::TFMessage& tf) {
     const auto transform = std::find_if(tf.transforms.begin(), tf.transforms.end(),
@@ -27,7 +27,7 @@ class ClusterTf {
         point.x = position.x(); point.y = position.y(); point.z = position.z();
       }
     }
-    return std::make_tuple(std::move(output), competition);
+    return std::make_tuple(std::move(output), competition, tf);
   }
 };
 }  // namespace object_detector

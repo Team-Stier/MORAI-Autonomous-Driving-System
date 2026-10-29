@@ -9,4 +9,4 @@ confidence:
 nms_iou: 0.45
 ambiguity_margin: 0.05
 history_size: 5
-minimum_votes: 3
+minimum_votes: 1

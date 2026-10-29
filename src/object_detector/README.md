@@ -9,7 +9,7 @@
 | 구독 | `/velodyne_points/leveled`, `/vehicle/competition_status`, `/tf`, `/section_annotation` |
 | 발행 | `/objects` (`map`, 입력 점군 stamp) |
 | 실행 | `/velodyne_points/leveled` 입력마다 |
-| Stage | `roi`: `process(cloud, competition, tf)` → cloud·competition·tf, `clustering`: `process(cloud, competition, tf)` → clusters·competition·tf, `tf`: `process(clusters, competition, tf)` → clusters·competition, `bbox_fitting`: `process(clusters, competition)` → objects·competition, `track`: `process(objects, stamp)` → objects |
+| Stage | `roi`: `process(cloud, competition, tf)` → cloud·competition·tf, `clustering`: `process(cloud, competition, tf)` → clusters·competition·tf, `tf`: `process(clusters, competition, tf)` → clusters·competition·tf, `bbox_fitting`: clusters·competition·tf → objects·competition, `track`: `process(objects, stamp)` → objects |
 
 - `tracker.hpp`와 `objects_pass_through.hpp`는 등록된 대체 Core다.
 - `clusters`는 voxel downsampling과 DBSCAN 크기 필터를 통과한 클러스터별 `pcl::PointCloud<pcl::PointXYZ>` 배열이며, `obb.hpp`가 각 클러스터의 최소 면적 OBB를 계산한다.
@@ -21,3 +21,5 @@
 - `launch.sh`가 ROS·워크스페이스 환경을 준비하고 자기 노드만 실행한다.
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
+
+`viewpoint_bbox.hpp`는 `process(clusters, competition, tf)`로 관측 위치와 도로 방향을 사용해 차량 박스를 완성하는 대체 Core다. 관측된 점을 포함하면서 차량 크기 사전값으로 가려진 면을 보완한다. `obb.hpp`는 기존 `process(clusters, competition)` 계약을 유지한다.

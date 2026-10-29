@@ -1,3 +1,0 @@
-map_file: ../map/kcity_lanelet2.osm
-route_match_distance_m: 1.0
-flatten_z: true

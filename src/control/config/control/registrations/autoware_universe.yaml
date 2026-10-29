@@ -1,4 +1,0 @@
-stage: track
-inputs: [path, ego, competition, imu]
-validator: mpc_inputs.hpp
-policy: remove_all.hpp

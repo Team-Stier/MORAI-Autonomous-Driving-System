@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.0.2)
 project(object_detector)
-find_package(catkin REQUIRED COMPONENTS node_pipeline interfaces tf2_msgs sensor_msgs pcl_conversions
+find_package(catkin REQUIRED COMPONENTS node_pipeline interfaces tf2_msgs sensor_msgs visualization_msgs pcl_conversions
   lanelet2_core lanelet2_io lanelet2_routing lanelet2_traffic_rules)
 find_package(PCL REQUIRED COMPONENTS common filters kdtree search)
 find_package(pugixml REQUIRED CONFIG)

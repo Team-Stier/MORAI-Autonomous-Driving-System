@@ -6,136 +6,91 @@ Panels:
 Visualization Manager:
   Class: ''
   Global Options:
-    Background Color: 24; 28; 34
+    Background Color: 25; 25; 25
     Fixed Frame: map
     Frame Rate: 30
   Displays:
-  - Class: rviz/Grid
-    Name: Grid
-    Enabled: true
-    Cell Size: 10
-    Plane Cell Count: 200
-    Color: 55; 60; 68
-    Reference Frame: map
   - Class: rviz/Marker
-    Name: Lanes white / center lines yellow
+    Name: K-City map
     Enabled: true
     Marker Topic: /visualizer/map
     Queue Size: 1
-  - Class: rviz/Marker
-    Name: Global route lanelets (yellow)
+  - Class: rviz/MarkerArray
+    Name: Checkpoints S1-S16
     Enabled: true
-    Marker Topic: /visualizer/route
+    Marker Topic: /visualizer/checkpoints
     Queue Size: 1
   - Class: rviz/Marker
-    Name: Ego GT (orange)
-    Enabled: true
-    Marker Topic: /visualizer/ego_gt
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Ego localization (cyan)
-    Enabled: true
-    Marker Topic: /visualizer/ego
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Local path (speed colors, follows ego TF)
+    Name: Local path (orange)
     Enabled: true
     Marker Topic: /visualizer/local_path
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Obstacles - static blue, dynamic red, unknown yellow
+    Enabled: true
+    Marker Topic: /visualizer/object_motion
+    Queue Size: 1
+  - Class: rviz/Marker
+    Name: Detected object boxes
+    Enabled: true
+    Marker Topic: /visualizer/objects
+    Queue Size: 1
+  - Class: rviz/MarkerArray
+    Name: Object ID speed and size
+    Enabled: true
+    Marker Topic: /visualizer/object_details
     Queue Size: 1
   - Class: visualizer/TrafficSignalOverlay
     Name: Traffic light state (top right)
     Enabled: true
-  - Class: rviz/MarkerArray
-    Name: Frenet candidate paths
+  - Class: rviz/RobotModel
+    Name: IONIQ 5 body and wheels
     Enabled: true
-    Marker Topic: /visualizer/frenet_candidates
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Detected objects (magenta)
+    Robot Description: /visualizer/robot_description
+    Visual Enabled: true
+    Collision Enabled: false
+    TF Prefix: ''
+    Update Interval: 0
+    Alpha: 0.85
+  - Class: rviz/Odometry
+    Name: Vehicle position and heading
     Enabled: true
-    Marker Topic: /visualizer/objects
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +0.5s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_0_5s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +1.0s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_1_0s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +1.5s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_1_5s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +2.0s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_2_0s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +2.5s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_2_5s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +3.0s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_3_0s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +3.5s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_3_5s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +4.0s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_4_0s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +4.5s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_4_5s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Prediction +5.0s
-    Enabled: true
-    Marker Topic: /visualizer/predicted_objects_5_0s_markers
-    Queue Size: 1
-  - Class: rviz/Marker
-    Name: Object Info verified boxes / model origins
-    Enabled: true
-    Marker Topic: /visualizer/morai_objects
-    Queue Size: 1
-  - Class: rviz/TF
-    Name: TF
-    Enabled: false
-    Show Arrows: true
-    Show Axes: true
-    Show Names: true
+    Topic: /localization/ego
+    Keep: 1
+    Shape: Arrow
+    Color: 255; 170; 0
+    Position Tolerance: 0
+    Angle Tolerance: 0
+    Shaft Length: 2
+    Shaft Radius: 0.05
+    Head Length: 0.5
+    Head Radius: 0.15
   - Class: rviz/PointCloud2
-    Name: LiDAR in base_link_level
+    Name: Leveled LiDAR
     Enabled: true
     Topic: /velodyne_points/leveled
     Queue Size: 1
-    Size (m): 0.05
+    Position Transformer: XYZ
     Style: Points
-    Color Transformer: Intensity
-    Decay Time: 0.0
+    Size (Pixels): 2
+    Size (m): 0.02
+    Color Transformer: FlatColor
+    Color: 120; 220; 150
+    Alpha: 0.65
+    Decay Time: 0
+    Use Fixed Frame: true
   Tools:
   - Class: rviz/Interact
   - Class: rviz/MoveCamera
   - Class: rviz/Select
+  - Class: rviz/FocusCamera
   Views:
     Current:
       Class: rviz/TopDownOrtho
-      Name: Ego top view
+      Name: Vehicle follow
       Target Frame: base_link
-      Scale: 8
-      Angle: 0
+      Scale: 20
+      Angle: -1.5708
       X: 0
       Y: 0
     Saved:
@@ -147,5 +102,5 @@ Visualization Manager:
       X: 180
       Y: -80
 Window Geometry:
-  Width: 1440
-  Height: 1000
+  Width: 1600
+  Height: 950

@@ -1,5 +1,5 @@
 speed_limit_kph: 0.0  # 0이면 속도 제한 비활성, 양수이면 해당 km/h로 제한.
-stop_tolerance_sec: 30.0
+stop_tolerance_sec: 90.0
 start_duration_sec: 1.0
 start_accel: 0.2
 stop_speed_mps: 0.1

@@ -17,4 +17,13 @@ estimate:
     "14": full_ekf.hpp
     "15": tunnel_wall.hpp
     "16": full_ekf.hpp
-  health_core_map: []
+  health_core_map:
+    - when: [{input: gps, issue: Missing}]
+      priority: 110
+      core: tunnel_wall.hpp
+    - when: [{input: gps, issue: Stale}]
+      priority: 100
+      core: tunnel_wall.hpp
+    - when: [{input: gps, issue: ReceiveTimeout}]
+      priority: 90
+      core: tunnel_wall.hpp

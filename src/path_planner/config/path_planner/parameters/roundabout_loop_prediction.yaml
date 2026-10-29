@@ -1,0 +1,14 @@
+map_file: ../map/kcity_lanelet2_final_circle.osm
+ring_lanelet_ids: [110223, 110285, 110289, 110309, 110153, 110157, 110180, 110846, 110850, 110866, 110203]
+history_sec: 0.8
+minimum_history_sec: 0.2
+minimum_partial_history_sec: 0.6
+pair_baseline_sec: 0.1
+maximum_observation_gap_sec: 0.28
+track_expiry_sec: 1.0
+ring_match_distance_m: 3.0
+tangent_window_m: 1.5
+maximum_speed_mps: 25.0
+maximum_lateral_speed_mps: 1.5
+maximum_longitudinal_acceleration_mps2: 1.5
+acceleration_horizon_sec: 1.0

@@ -1,5 +1,0 @@
-stage: local
-inputs: [ego, competition, objects, predictions, stamp]
-validator: roundabout_merge_inputs.hpp
-policy: remove_invalid.hpp
-allowed_issues: {}

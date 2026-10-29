@@ -1,89 +1,85 @@
 checkpoint:
   section_core_map:
-    "0": checkpoint_00.hpp
-    "1": checkpoint_01.hpp
-    "2": checkpoint_02.hpp
-    "3": checkpoint_03.hpp
-    "4": checkpoint_04.hpp
-    "5": checkpoint_05.hpp
-    "6": checkpoint_06.hpp
-    "7": checkpoint_07.hpp
-    "8": checkpoint_08.hpp
-    "9": checkpoint_09.hpp
-    "10": checkpoint_10.hpp
-    "11": checkpoint_11.hpp
-    "12": checkpoint_12.hpp
-    "13": checkpoint_13.hpp
-    "14": checkpoint_14.hpp
-    "15": checkpoint_15.hpp
-    "16": checkpoint_16.hpp
+    '0': checkpoint_00.hpp
+    '1': checkpoint_01.hpp
+    '2': checkpoint_02.hpp
+    '3': checkpoint_03.hpp
+    '4': checkpoint_04.hpp
+    '5': checkpoint_05.hpp
+    '6': checkpoint_06.hpp
+    '7': checkpoint_07.hpp
+    '8': checkpoint_08.hpp
+    '9': checkpoint_09.hpp
+    '10': checkpoint_10.hpp
+    '11': checkpoint_11.hpp
+    '12': checkpoint_12.hpp
+    '13': checkpoint_13.hpp
+    '14': checkpoint_14.hpp
+    '15': checkpoint_15.hpp
+    '16': checkpoint_16.hpp
   health_core_map: []
 global:
   section_core_map:
-    "0": global_path.hpp
-    "1": global_path.hpp
-    "2": global_path.hpp
-    "3": global_path.hpp
-    "4": global_path.hpp
-    "5": global_path.hpp
-    "6": global_path.hpp
-    "7": global_path.hpp
-    "8": global_path.hpp
-    "9": global_path.hpp
-    "10": global_path.hpp
-    "11": global_path.hpp
-    "12": global_path.hpp
-    "13": global_path.hpp
-    "14": global_path.hpp
-    "15": global_path.hpp
-    "16": global_path.hpp
+    '0': global_path.hpp
+    '1': global_path.hpp
+    '2': global_path.hpp
+    '3': global_path.hpp
+    '4': global_path.hpp
+    '5': global_path.hpp
+    '6': global_path.hpp
+    '7': global_path.hpp
+    '8': global_path.hpp
+    '9': global_path.hpp
+    '10': global_path.hpp
+    '11': global_path.hpp
+    '12': global_path.hpp
+    '13': global_path.hpp
+    '14': global_path.hpp
+    '15': global_path.hpp
+    '16': final_circle_global_path.hpp
   health_core_map: []
 prediction:
   section_core_map:
-    "0": core_prediction.hpp
-    "1": core_prediction.hpp
-    "2": core_prediction.hpp
-    "3": core_prediction.hpp
-    "4": core_prediction.hpp
-    "5": core_prediction.hpp
-    "6": core_prediction.hpp
-    "7": core_prediction.hpp
-    "8": core_prediction.hpp
-    "9": npc_history_prediction.hpp
-    "10": core_prediction.hpp
-    "11": core_prediction.hpp
-    "12": core_prediction.hpp
-    "13": core_prediction.hpp
-    "14": core_prediction.hpp
-    "15": core_prediction.hpp
-    "16": core_prediction.hpp
+    '0': integrated_prediction.hpp
+    '1': integrated_prediction.hpp
+    '2': integrated_prediction.hpp
+    '3': integrated_prediction.hpp
+    '4': integrated_prediction.hpp
+    '5': integrated_prediction.hpp
+    '6': integrated_prediction.hpp
+    '7': integrated_prediction.hpp
+    '8': input_bridge.hpp
+    '9': roundabout_loop_prediction.hpp
+    '10': input_bridge.hpp
+    '11': input_bridge.hpp
+    '12': input_bridge.hpp
+    '13': input_bridge.hpp
+    '14': integrated_prediction.hpp
+    '15': integrated_prediction.hpp
+    '16': input_bridge.hpp
   health_core_map:
-    - when: [{input: objects, issue: Missing}]
-      priority: 100
-      core: prediction_pass_through.hpp
+  - when:
+    - input: objects
+      issue: Missing
+    priority: 100
+    core: prediction_pass_through.hpp
 local:
   section_core_map:
-    "0": frenet_path.hpp
-    "1": frenet_path.hpp
-    "2": frenet_path.hpp
-    "3": frenet_path.hpp
-    "4": hybrid_astar.hpp
-    "5": hybrid_astar.hpp
-    "6": hybrid_astar.hpp
-    "7": frenet_path.hpp
-    "8": frenet_path.hpp
-    "9": roundabout_merge.hpp
-    "10": frenet_path.hpp
-    "11": frenet_speed_path.hpp
-    "12": frenet_speed_path.hpp
-    "13": frenet_path.hpp
-    "14": frenet_path.hpp
-    "15": frenet_path.hpp
-    "16": frenet_path.hpp
-  health_core_map:
-    - when: [{input: objects, issue: Missing}]
-      priority: 110
-      core: frenet_path.hpp
-    - when: [{input: predictions, issue: Missing}]
-      priority: 100
-      core: frenet_path.hpp
+    '0': integrated_path.hpp
+    '1': integrated_path.hpp
+    '2': integrated_path.hpp
+    '3': integrated_path.hpp
+    '4': integrated_static.hpp
+    '5': integrated_static.hpp
+    '6': integrated_path.hpp
+    '7': integrated_path.hpp
+    '8': integrated_final_circle.hpp
+    '9': integrated_roundabout.hpp
+    '10': integrated_highway_approach.hpp
+    '11': integrated_highway.hpp
+    '12': integrated_highway.hpp
+    '13': integrated_highway.hpp
+    '14': integrated_path.hpp
+    '15': integrated_path.hpp
+    '16': integrated_final_circle.hpp
+  health_core_map: []

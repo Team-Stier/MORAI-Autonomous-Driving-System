@@ -1,4 +1,4 @@
-execution: {mode: periodic, frequency_hz: 5.0, require_new_snapshot: true, queue_capacity: 8, max_health_checks: 10}
+execution: {mode: periodic, frequency_hz: 10.0, require_new_snapshot: true, queue_capacity: 8, max_health_checks: 10}
 section_topic: /section_annotation
 inputs:
   image:

@@ -1,2 +1,2 @@
-map_file: ../map/kcity_lanelet2.osm
+map_file: ../map/kcity_lanelet2_smooth_circle.osm
 checkpoints_file: ../map/checkpoints.csv

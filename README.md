@@ -401,9 +401,9 @@ flowchart TD
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf` | 동적 좌표 변환 | `tf2_msgs/TFMessage` | 각 변환의 `header.frame_id`가 부모, `child_frame_id`가 자식 | ego stamp 유지 | `/localization/ego` 콜백마다 |
 | `/tf_static` | 센서 고정 장착 변환 | `tf2_msgs/TFMessage` | `base_link` → 센서 frame (`velodyne`, `imu_link`, `gps_link`, 카메라 optical frame) | 0 (조립 기준 입력 없음) | 시작 시 1회 (latched) |
-| `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 입력 조립 기준 stamp(전체 입력 큐의 최대 stamp); 각 point pose stamp도 동일 | 20 Hz 주기 |
+| `/local_path` | 계획된 경로 | `interfaces/Path` | `map`; 각 point의 pose도 `map` | 입력 조립 기준 stamp(전체 입력 큐의 최대 stamp); 각 point pose stamp도 동일 | 30 Hz 주기 |
 | `/local_path/velocity_injected` | 속도 프로파일이 주입된 경로 | `interfaces/Path` | `base_link`; 각 point의 pose도 `base_link` | 입력 경로 및 각 point pose stamp 유지 | `/local_path` 콜백마다 |
-| `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | 20 Hz 주기; 유효 입력 조립 시 |
+| `/control_cmd` | 필터 적용 전 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; 수신자가 수신 시각 기록 | 30 Hz 주기; 유효 입력 조립 시 |
 | `/morai_udp_bridge/control_cmd` | 최종 명령 | `morai_msgs/CtrlCmd` | frame 필드 없음; 차량 조향·종방향 명령 | timestamp 필드 없음; Bridge가 수신 시각 기록 | `/control_cmd` 콜백마다 |
 
 
@@ -469,11 +469,6 @@ map
 파일을 직접 호출하지 않는다. 해당 패키지의 `launch.sh`만 호출한다. Velodyne은 공식
 드라이버의 제공 launch 파일을 사용한다.
 
-개발 단계에서는 임시 패키지 `morai_test`가 MORAI Object Info UDP를 받아 `/objects`를 발행하며,
-`run.sh`가 `object_detector` 대신 실행한다. `morai_test`는 `/objects` 발행 외에 다른 노드·토픽과
-연결하지 않는다. 제거할 때는 `run.sh`의 패키지 실행 항목을 `object_detector`로 되돌리고
-`src/morai_test/`를 제거하면 된다.
-
 ### 실행 순서
 
 `run.sh`는 아래 순서로 실행 패키지의 `launch.sh`를 호출한다. Velodyne은 공식 드라이버
@@ -488,7 +483,7 @@ map
 | 4 | `lidar_leveler` |
 | 5 | `localization` |
 | 6 | `section_annotator` |
-| 7 | `morai_test` (개발 단계 임시 `/objects` 발행기; `object_detector` 대체) |
+| 7 | `object_detector` |
 | 8 | `traffic_light` |
 | 9 | `path_planner` |
 | 10 | `velocity_planner` |

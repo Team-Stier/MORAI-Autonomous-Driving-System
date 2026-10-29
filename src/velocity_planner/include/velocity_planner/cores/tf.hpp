@@ -21,6 +21,11 @@ class Tf {
       tf2::fromMsg(point.pose.pose, pose);
       tf2::toMsg(base_from_map * pose, point.pose.pose);
     }
+    for (auto& point : message.lateral_reference) {
+      tf2::Transform pose;
+      tf2::fromMsg(point, pose);
+      tf2::toMsg(base_from_map * pose, point);
+    }
     return message;
   }
 };

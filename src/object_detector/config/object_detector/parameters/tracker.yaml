@@ -1,5 +1,0 @@
-association_gate_m: 2.5
-shape_weight: 0.2
-max_age_sec: 0.6
-history_size: 31
-min_acceleration_observations: 5

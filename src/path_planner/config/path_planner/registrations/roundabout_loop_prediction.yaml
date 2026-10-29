@@ -1,0 +1,6 @@
+stage: prediction
+inputs: [ego, competition, objects, tf, imu, route]
+validator: inputs.hpp
+policy: remove_invalid.hpp
+bank: shared_map.hpp
+allowed_issues: {}

@@ -23,6 +23,20 @@ inline void nonnegative(std::initializer_list<double> values) {
 }  // namespace
 
 inline void validateParameters(const Parameters& parameters) {
+  parameter_detail::positive({parameters.stationary_hold_speed_mps, parameters.stationary_hold_brake});
+  if (parameters.stationary_hold_brake > parameters.longitudinal.maximum_brake_command)
+    throw std::invalid_argument("stationary_hold_brake exceeds maximum_brake_command");
+  if (!std::isfinite(parameters.reference_history_length_m) ||
+      parameters.reference_history_length_m < 0 || parameters.reference_history_length_m > 10)
+    throw std::invalid_argument("reference_history_length_m must be between 0 and 10 m");
+  for (double number : {parameters.dynamic_zone_min_x_m,parameters.dynamic_zone_max_x_m,
+      parameters.dynamic_zone_min_y_m,parameters.dynamic_zone_max_y_m,parameters.dynamic_zone_speed_mps,
+      parameters.dynamic_zone_approach_m})
+    if (!std::isfinite(number)) throw std::invalid_argument("nonfinite dynamic zone parameter");
+  if (parameters.dynamic_zone_min_x_m>=parameters.dynamic_zone_max_x_m ||
+      parameters.dynamic_zone_min_y_m>=parameters.dynamic_zone_max_y_m ||
+      parameters.dynamic_zone_speed_mps<=0 || parameters.dynamic_zone_approach_m<0)
+    throw std::invalid_argument("invalid dynamic zone parameter");
   const auto& p = parameters.lateral;
   const auto& s = parameters.steering_prediction;
   parameter_detail::positive({p.ctrl_period, p.traj_resample_dist, p.vehicle_model_wheelbase,
@@ -107,6 +121,18 @@ namespace control {
 inline autoware_ai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::ParamReader& params) {
   using autoware_ai_mpc::Parameters;
   Parameters p;
+  if (params.has("stationary_hold_speed_mps")) p.stationary_hold_speed_mps=params.number("stationary_hold_speed_mps");
+  if (params.has("stationary_hold_brake")) p.stationary_hold_brake=params.number("stationary_hold_brake");
+  if (params.has("dynamic_zone_enabled")) p.dynamic_zone_enabled=params.flag("dynamic_zone_enabled");
+  if (params.has("dynamic_zone_min_x_m")) p.dynamic_zone_min_x_m=params.number("dynamic_zone_min_x_m");
+  if (params.has("dynamic_zone_max_x_m")) p.dynamic_zone_max_x_m=params.number("dynamic_zone_max_x_m");
+  if (params.has("dynamic_zone_min_y_m")) p.dynamic_zone_min_y_m=params.number("dynamic_zone_min_y_m");
+  if (params.has("dynamic_zone_max_y_m")) p.dynamic_zone_max_y_m=params.number("dynamic_zone_max_y_m");
+  if (params.has("dynamic_zone_speed_mps")) p.dynamic_zone_speed_mps=params.number("dynamic_zone_speed_mps");
+  if (params.has("dynamic_zone_approach_m")) p.dynamic_zone_approach_m=params.number("dynamic_zone_approach_m");
+
+  if (params.has("reference_history_length_m"))
+    p.reference_history_length_m = params.number("reference_history_length_m");
   p.minimum_control_dt_sec = params.number("minimum_control_dt_sec");
   p.maximum_control_dt_sec = params.number("maximum_control_dt_sec");
   p.lateral.ctrl_period = params.number("lateral/ctrl_period");
@@ -141,6 +167,11 @@ inline autoware_ai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::P
   p.lateral.morai_weight_curvature_low = params.number("lateral/morai_weight_curvature_low");
   p.lateral.morai_weight_curvature_high = params.number("lateral/morai_weight_curvature_high");
   p.lateral.morai_weight_first_steer_change = params.number("lateral/morai_weight_first_steer_change");
+  if(params.has("lateral/morai_straight_steer_change_scale"))
+    p.lateral.morai_straight_steer_change_scale=params.number("lateral/morai_straight_steer_change_scale");
+  if(!std::isfinite(p.lateral.morai_straight_steer_change_scale) ||
+      p.lateral.morai_straight_steer_change_scale<1 || p.lateral.morai_straight_steer_change_scale>4)
+    throw std::invalid_argument("invalid straight steering change scale");
   p.lateral.morai_weight_front_point_error = params.number("lateral/morai_weight_front_point_error");
   p.lateral.morai_front_overhang_m = params.number("lateral/morai_front_overhang_m");
   p.longitudinal.solver = params.text("longitudinal/solver");
@@ -173,6 +204,9 @@ inline autoware_ai_mpc::Parameters loadMoraiMpcParameters(const node_pipeline::P
   p.longitudinal.command_weight = params.number("longitudinal/command_weight");
   p.longitudinal.command_rate_weight = params.number("longitudinal/command_rate_weight");
   p.longitudinal.terminal_speed_weight = params.number("longitudinal/terminal_speed_weight");
+  if(params.has("longitudinal/stop_position_weight"))p.longitudinal.stop_position_weight=params.number("longitudinal/stop_position_weight");
+  if(!std::isfinite(p.longitudinal.stop_position_weight) || p.longitudinal.stop_position_weight<=0)
+    throw std::invalid_argument("invalid stop position weight");
   p.steering_prediction.delay_sec = params.number("steering_prediction/delay_sec");
   p.steering_prediction.time_constant_sec = params.number("steering_prediction/time_constant_sec");
   p.steering_prediction.gain = params.number("steering_prediction/gain");

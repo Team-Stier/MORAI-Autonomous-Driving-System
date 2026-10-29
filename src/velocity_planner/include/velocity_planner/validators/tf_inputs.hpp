@@ -28,6 +28,10 @@ struct TfInputs {
       quaternion(point.pose.pose.orientation, issues);
       if (point.pose.header.frame_id != limits.frame) issues.push_back(node_pipeline::Kind::FrameMismatch);
     }
+    for(const auto& pose:path.lateral_reference) {
+      numbers({pose.position.x,pose.position.y,pose.position.z},issues);
+      quaternion(pose.orientation,issues);
+    }
   }
   void operator()(const tf2_msgs::TFMessage& transforms, const node_pipeline::HealthLimits&,
                   std::vector<node_pipeline::Kind>& issues) const {

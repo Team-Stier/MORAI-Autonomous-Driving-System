@@ -1,0 +1,40 @@
+# Geometry comes only from the active Lanelet2 map, CP9 approach through CP10 exit.
+map_file: ../map/kcity_lanelet2_final_circle.osm
+reference_lanelet_ids: [101013, 108759, 110234, 110255, 110325, 110261, 110266, 110022, 110031, 110043, 110051]
+stop_line_id: 11921
+departure_lanelet_id: 110261
+reference_before_entry_m: 65.0
+reference_after_entry_m: 100.0
+control_step_m: 2.0
+integration_step_m: 0.05
+sample_step_m: 0.25
+local_path_length_m: 40.0
+# Traffic speed planning, all speed values are m/s.
+desired_speed_mps: 6.0
+max_acceleration_mps2: 2.0
+max_deceleration_mps2: 4.0
+max_jerk_mps3: 4.0
+max_lateral_acceleration_mps2: 3.0
+time_step_sec: 0.25
+command_step_sec: 0.8
+beam_width: 32
+collision_margin_m: 0.7
+prediction_uncertainty_mps: 0.2
+following_time_gap_sec: 0.8
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+# OSM stop line 11921, rear-axle target = line - front extent - margin.
+entry_stop_margin_m: 0.8
+entry_decision_distance_m: 2.0
+# Check the crossing conflict beyond the yield target within the available forecast.
+entry_check_length_m: 8.0
+entry_gap_confirmation_sec: 0.15
+approach_speed_mps: 3.0
+# Reserve lateral tracking margin for the speed controller on curved geometry.
+curve_speed_ratio: 0.90
+
+# Search horizon; the 10 prediction frames still cover 0.5 through 5.0 s.
+planning_horizon_sec: 3.0
+
+# A cleared launch remains committed; following traffic sets the speed afterward.

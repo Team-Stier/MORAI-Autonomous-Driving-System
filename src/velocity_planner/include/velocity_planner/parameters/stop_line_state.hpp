@@ -12,9 +12,26 @@
 namespace velocity_planner {
 inline StopLineStateParameters loadStopLineStateParameters(const node_pipeline::ParamReader& params) {
   StopLineStateParameters result;
+  if (params.has("intersection_speed_mps")) result.intersection_speed_mps = params.number("intersection_speed_mps");
+  if (params.has("intersection_before_m")) result.intersection_before_m = params.number("intersection_before_m");
+  if (params.has("intersection_after_m")) result.intersection_after_m = params.number("intersection_after_m");
+  if (params.has("intersection_deceleration_mps2")) result.intersection_deceleration_mps2 = params.number("intersection_deceleration_mps2");
+  if (!std::isfinite(result.intersection_speed_mps) || result.intersection_speed_mps < 0 ||
+      !std::isfinite(result.intersection_before_m) || result.intersection_before_m < 0 ||
+      !std::isfinite(result.intersection_after_m) || result.intersection_after_m < 0 ||
+      !std::isfinite(result.intersection_deceleration_mps2) || result.intersection_deceleration_mps2 <= 0)
+    throw std::invalid_argument("invalid intersection speed/distance/deceleration parameters");
+  if (params.has("stop_line_extension_m")) result.stop_line_extension_m = params.number("stop_line_extension_m");
+  if (!std::isfinite(result.stop_line_extension_m) || result.stop_line_extension_m < 0 || result.stop_line_extension_m > 5)
+    throw std::invalid_argument("stop_line_extension_m must be between 0 and 5 m");
   result.x_m = params.number("x_m");
   result.y_m = params.number("y_m");
   result.z_mps2 = params.number("z_mps2");
+  if (params.has("stop_response_time_sec")) result.stop_response_time_sec = params.number("stop_response_time_sec");
+  if (params.has("stop_position_tolerance_m")) result.stop_position_tolerance_m = params.number("stop_position_tolerance_m");
+  if (!std::isfinite(result.stop_response_time_sec) || result.stop_response_time_sec <= 0 ||
+      !std::isfinite(result.stop_position_tolerance_m) || result.stop_position_tolerance_m < 0)
+    throw std::invalid_argument("invalid stop response time or position tolerance");
   const auto n_frames = params.integer("n_frames");
   if (params.has("stop_timeout_sec")) result.stop_timeout_sec = params.number("stop_timeout_sec");
   if (!std::isfinite(result.x_m) || result.x_m < 0 || !std::isfinite(result.y_m) || result.y_m <= 0 ||
@@ -63,6 +80,8 @@ inline StopLineStateParameters loadStopLineStateParameters(const node_pipeline::
       continue;
     StopLineStateParameters::StopLine line;
     line.id = readId(way.attribute("id"));
+    // MORAI stop-line node order defines the approach normal (-dy, dx).
+    line.directional_extension = way.find_child_by_attribute("tag", "k", "mgeo:boundary_id");
     if (!line_ids.insert(line.id).second) throw std::invalid_argument("duplicate stop_line way id");
     for (const auto& reference : way.children("nd")) {
       const auto node = nodes.find(readId(reference.attribute("ref")));

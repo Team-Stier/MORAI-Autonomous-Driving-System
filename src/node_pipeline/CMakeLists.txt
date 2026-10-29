@@ -17,7 +17,7 @@ target_compile_options(node_pipeline PRIVATE -Wall -Wextra -Wpedantic)
 target_link_libraries(node_pipeline ${catkin_LIBRARIES} ${YAML_CPP_LIBRARIES})
 add_dependencies(node_pipeline ${catkin_EXPORTED_TARGETS})
 
-if(CATKIN_ENABLE_TESTING)
+if(CATKIN_ENABLE_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/unit")
   foreach(test_name test_pipeline test_param_reader test_ros_header_injector)
     catkin_add_gtest(${test_name} test/unit/${test_name}.cpp)
     if(TARGET ${test_name})

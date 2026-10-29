@@ -1,0 +1,11 @@
+stage: local
+inputs:
+- ego
+- competition
+- objects
+- predictions
+- stamp
+validator: roundabout_merge_inputs.hpp
+policy: roundabout_reference_inputs.hpp
+allowed_issues: {}
+bank: shared_map.hpp
