@@ -10,6 +10,10 @@
 # chain without visualizer: bridge, velodyne, tf_publisher, lidar_leveler, localization, section_annotator,
 # object_detector, traffic_light, path_planner, velocity_planner, control, speed_filter) on wall time (no /use_sim_time,
 # no sim_clock), the bridge config from DRIVE_WS's bridge submodule with same-PC addresses. No GT topic reaches it.
+# SIM_CLOCK=1 (default with DRIVER=stack): MORAI Linux on a pod runs below real time (rho 0.5-0.85 under Xvfb, the
+# competition PC at ~1), so the stack runs on the simulator time instead: /use_sim_time true and WS's
+# e2e_driver sim_clock_node.py (/clock = tau estimated from /vehicle/competition_status speed and /sensors/gps/fix, both
+# stack inputs; ~state = [wall, tau, rho, n]). The bridge stamps receipts with ros::Time::now, so every node follows tau.
 # DRIVER=e2e: the old e2e_driver chain of WS.
 # E2E_FAKE_FOLLOW_ROUTE_M passes through (fake backend).
 # SYNC=1 (MORAI synchronous mode, eval_manager.py --sync): sync_clock_node.py instead of sim_clock (manager port
@@ -48,9 +52,15 @@ up1() {
   if [[ $DRIVER == stack ]]; then
   ROS_MASTER_URI=http://127.0.0.1:$((11310 + n)) ROS_IP=127.0.0.1 ROS_HOME=$d/ros TMPDIR=$d/tmp MORAI_BRIDGE_CONFIG=$d/bridge.yaml \
   ONNXRUNTIME_ROOT=${ONNXRUNTIME_ROOT:-/opt/onnxruntime-gpu/1.19.2} VLP_PORT=$((2368 + off)) MASTER_PORT=$((11310 + n)) PKGS="$DRIVE_PKGS" \
+  SIM_CLOCK=${SIM_CLOCK:-1} HWS=$WS \
   setsid taskset -c "${STACK_CPUS:-0-$(($(nproc) - 1))}" bash -c '
     cd "'"$DRIVE_WS"'" && source /opt/ros/noetic/setup.bash && source devel/setup.bash
     roscore -p $MASTER_PORT & for i in $(seq 100); do rosnode list > /dev/null 2>&1 && break; sleep 0.1; done
+    if [[ $SIM_CLOCK == 1 ]]; then
+      rosparam set /use_sim_time true
+      (source "$HWS/devel/setup.bash" && exec rosrun e2e_driver sim_clock_node.py) &
+      for i in $(seq 100); do rostopic list 2> /dev/null | grep -q "^/clock$" && break; sleep 0.1; done
+    fi
     bash src/MORAI-UDP-Bridge-Node/launch.sh &
     roslaunch velodyne_pointcloud VLP16_points.launch port:=$VLP_PORT &
     for p in $PKGS; do bash src/$p/launch.sh & done

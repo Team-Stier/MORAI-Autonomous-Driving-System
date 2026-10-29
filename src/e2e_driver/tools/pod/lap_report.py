@@ -21,7 +21,7 @@ def report(d, k):
     d = Path(d)
     lap = next(x for x in map(json.loads, open(d / "eval_map/laps.jsonl")) if x["lap"] == k)
     c = np.array(json.load(open(d / f"eval_map/lap{k:03d}.clock.json")))
-    dbg, ms, cmd_hz = [], [], None
+    dbg, ms, cmd_hz, clock_rho = [], [], None, None
     if (d / f"dbg_{d.name}.csv").exists():
         rows = list(csv.reader(open(d / f"clk_{d.name}.csv")))
         i0, i1 = rows[0].index("field.data0"), rows[0].index("field.data1")    # [wall, tau, rho, n]
@@ -30,10 +30,19 @@ def report(d, k):
         dbg = [json.loads(l.split(",", 1)[1]) for l in open(d / f"dbg_{d.name}.csv").read().splitlines()[1:] if "," in l]
         dbg = [x for x in dbg if t0 <= x["t0"] <= t1]
         ms = [x["server"]["model_ms"] for x in dbg if "model_ms" in x.get("server", {})]
-    elif (d / f"cmd_{d.name}.csv").exists():                # %time (wall ns) of each command over the lap's wall span
+    elif (d / f"cmd_{d.name}.csv").exists():   # %time of each command (tau ns with SIM_CLOCK, else wall) over the lap
         ts = [int(l.split(",", 1)[0]) / 1e9 for l in open(d / f"cmd_{d.name}.csv").read().splitlines()[1:] if l[:1].isdigit()]
-        n = sum(c[0, 0] <= t <= c[-1, 0] for t in ts)
-        cmd_hz = round(n / max(c[-1, 0] - c[0, 0], 1e-6), 1)
+        t0, t1 = c[0, 0], c[-1, 0]
+        f_clk = d / f"clk_{d.name}.csv"
+        if f_clk.exists() and f_clk.stat().st_size > 200:
+            rows = list(csv.reader(open(f_clk)))
+            i0, i1, i2 = (rows[0].index(f"field.data{j}") for j in range(3))
+            clk = np.array([(float(r[i0]), float(r[i1]), float(r[i2])) for r in rows[1:] if len(r) > i2])
+            t0, t1 = np.interp([c[0, 0], c[-1, 0]], clk[:, 0], clk[:, 1])
+            m = (clk[:, 0] >= c[0, 0]) & (clk[:, 0] <= c[-1, 0])
+            clock_rho = round(float(clk[m, 2].mean()), 3) if m.any() else None
+        n = sum(t0 <= t <= t1 for t in ts)
+        cmd_hz = round(n / max(t1 - t0, 1e-6), 1)
     sc, v, meta = lap.get("scorer", {}), lap.get("validation"), lap.get("scene_meta", {})
     dyn = Counter(a.get("cls") for a in meta.get("actors", []) if a.get("zone", "").endswith("_dynamic"))
     r = dict(lap=k + 1, seed=lap["seed"], scene=lap["scene"], end=lap["end"], lap_s=lap["lap_s"], penalty_s=sc.get("penalty_s"),
@@ -41,7 +50,8 @@ def report(d, k):
              finished=bool(sc.get("finished")) and not sc.get("competition_failed") and lap["end"] == "finish",
              signal_by_line=dict(Counter(f"{e.get('stop_line')}:{e['type']}" for e in sc.get("events", [])
                                          if e.get("type") in ("signal_violation", "signal_unverified"))),
-             duration_s=sc.get("duration_s"), rho_end=lap.get("rho_end"), wall_s=lap.get("wall_s"),
+             duration_s=sc.get("duration_s"), rho_end=lap.get("rho_end"), wall_s=lap.get("wall_s"), clock_rho=clock_rho,
+             lat=lap.get("lat"), lane_events=(sc.get("counts") or {}).get("lane", 0),
              late=round(float(np.mean([bool(x.get("late")) for x in dbg])), 3) if dbg else None,
              model_ms=[round(float(np.percentile(ms, q)), 1) for q in (50, 95)] if ms else None,
              weather=sorted({f"{w[1]}{w[2]}" for w in lap.get("weather", [])}), tunnel=meta.get("tunnel"), dynamic=dict(dyn),
@@ -52,7 +62,8 @@ def report(d, k):
     line = (f"{d.parent.name} 바퀴 {r['lap']} (seed {r['seed']}): {r['end']} {f(r['lap_s'])} s + 감점 {f(r['penalty_s'])} s + 복귀 "
             f"{r['returns']}×15 s = {f(r['total_s'])} s | 위반 {r['counts'] or {}} | "
             + (f"신호 {r['signal_by_line']} | " if r['signal_by_line'] else "")
-            + (f"cmd {f(cmd_hz, 1)} Hz | rho {r['rho_end']} | " if cmd_hz is not None else "")
+            + (f"횡오차 RMS {r['lat']['rms_m']} m p95 {r['lat']['p95_m']} m | " if r['lat'] else "")
+            + (f"cmd {f(cmd_hz, 1)} Hz | rho {r['rho_end']} (clock {clock_rho}) | " if cmd_hz is not None else "")
             + f"late {f(100 * r['late'] if r['late'] is not None else None, 1)} % | "
             f"model {'/'.join(map(str, r['model_ms'])) if r['model_ms'] else '-'} ms (p50/p95) | 날씨 {','.join(r['weather'])} | "
             f"터널 {r['tunnel']} | 동적 {dict(dyn)} | NPC {r['npcs']} | 재생 "

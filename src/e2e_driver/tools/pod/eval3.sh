@@ -85,7 +85,7 @@ if [[ $DRIVER == stack ]]; then
   for n in $(seq "$N"); do   # every node of the chain registered (2 min at most: a node that died is in stack.log)
     for i in $(seq 60); do
       l=$(inrosn "$n" "rosnode list 2> /dev/null"); miss=
-      for x in morai_udp_bridge velodyne tf_publisher_node lidar_leveler_node localization_node section_annotator_node object_detector_node \
+      for x in $([[ ${SIM_CLOCK:-1} == 1 ]] && echo sim_clock) morai_udp_bridge velodyne tf_publisher_node lidar_leveler_node localization_node section_annotator_node object_detector_node \
                traffic_light_node path_planner_node velocity_planner_node control_node speed_filter_node; do echo "$l" | grep -q "$x" || miss+=" $x"; done
       [[ -z $miss ]] && break; sleep 2
     done
@@ -113,6 +113,8 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/rec.pids
   if [[ $DRIVER == stack ]]; then
   WS=${DRIVE_WS:-$V/drive} inrosn "$n" "PYTHONUNBUFFERED=1 exec rostopic echo -p /morai_udp_bridge/control_cmd" > "$O/cmd_w$n.csv" 2> /dev/null < /dev/null &
+  echo $! >> /root/actor/rec.pids
+  inrosn "$n" "exec rostopic echo -p /sim_clock/state" > "$O/clk_w$n.csv" 2> /dev/null < /dev/null &   # SIM_CLOCK: [wall, tau, rho, n]
   echo $! >> /root/actor/rec.pids
   else
   inrosn "$n" "PYTHONUNBUFFERED=1 exec rostopic echo -p /e2e_driver/debug/data" > "$O/dbg_w$n.csv" 2> /dev/null < /dev/null &

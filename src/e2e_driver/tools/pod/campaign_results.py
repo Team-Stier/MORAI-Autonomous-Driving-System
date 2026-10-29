@@ -25,6 +25,8 @@ def aggregate(root, version):
             continue
         r["file"] = f.name
         laps.append(r)
+    invalid = [r for r in laps if r.get("env") == "invalid"]      # env-invalid laps: listed, never aggregated
+    laps = [r for r in laps if r.get("env") != "invalid"]
     fin = [r for r in laps if r.get("finished")]
     counts = Counter()
     for r in laps:
@@ -38,8 +40,10 @@ def aggregate(root, version):
              duration_mean_s=(stats([r["lap_s"] for r in fin if r.get("lap_s") is not None]) or {}).get("mean"),
              penalty_mean_s=(stats([r["penalty_s"] or 0 for r in fin]) or {}).get("mean"),
              violations=dict(sorted(counts.items())),
+             lat_rms_mean_m=(stats([r["lat"]["rms_m"] for r in laps if r.get("lat")]) or {}).get("mean"),
+             env_invalid=[r["file"] for r in invalid],
              signal_by_line=dict(sorted(lines.items())),   # "<osm stop line>:<signal_violation|signal_unverified>"
-             rows=[{k: r.get(k) for k in ("file", "seed", "scene", "end", "lap_s", "penalty_s", "returns", "score_s", "counts", "rho_end", "cmd_hz", "signal_by_line")}
+             rows=[{k: r.get(k) for k in ("file", "seed", "scene", "end", "lap_s", "penalty_s", "returns", "score_s", "counts", "rho_end", "cmd_hz", "signal_by_line", "lat", "env")}
                    for r in laps])
     (root / f"{version}.json").write_text(json.dumps(s, ensure_ascii=False, indent=1))
     return s

@@ -478,6 +478,7 @@ class Manager:
         egot, objt = [], []                               # replay check: (tau, x, y, s) and the objects near the Ego
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
+        lats = []                                         # |lateral offset| from the route while moving (path following)
         self.weather(lap, seed, 0, 0.0)
         if self.a.sync:
             lap["sync"] = dict(mode=self.set_sync(True), tick_ms=self.a.tick_ms, serial=self.a.serial, k0=self.k)
@@ -500,6 +501,8 @@ class Manager:
                 tau = clock.tau if self.a.sync else clock.step(t, e["x"], e["y"], e["v"])
                 clk.append((round(t, 3), round(tau, 3)))
                 s, lat = tr.update(e["x"], e["y"])
+                if lat < 15.0 and e["v"] > 1.0:
+                    lats.append(lat)
                 shade = shaded(e["x"], e["y"])
                 ns = int(tau * 1e9)
                 rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
@@ -564,6 +567,10 @@ class Manager:
         msc("pause")
         lap.update(end=end, lap_s=round(lap_s, 2), wall_s=round(time.time() - w_play, 1), rho_end=round(clock.rho, 3))
         lap["scorer"] = self.judge(rows)
+        if lats:
+            la = np.abs(np.array(lats))
+            lap["lat"] = dict(rms_m=round(float(np.sqrt(np.mean(la ** 2))), 3), p95_m=round(float(np.percentile(la, 95)), 3),
+                              max_m=round(float(la.max()), 3), n=len(la))
         if self.objects:
             lap["validation"] = validate(meta, egot, objt, self.ring, self.highway)
             with gzip.open(self.out / f"lap{k:03d}.objects.json.gz", "wt") as f:
