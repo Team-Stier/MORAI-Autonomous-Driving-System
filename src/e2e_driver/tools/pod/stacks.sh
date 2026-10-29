@@ -72,7 +72,8 @@ EOF
     wait' > "$d/stack.log" 2>&1 < /dev/null &
   echo $! > "$d/stack.pid"
   (cd "$DRIVE_WS" && source /opt/ros/noetic/setup.bash && env $env bash -c '
-    for i in $(seq 200); do rosnode list > /dev/null 2>&1 && break; sleep 0.1; done
+    # /run_id too: roslaunch processes started before roscore set it each declare their own (RLException run_id mismatch)
+    for i in $(seq 200); do rosnode list > /dev/null 2>&1 && rosparam get /run_id > /dev/null 2>&1 && break; sleep 0.1; done
     [[ ${SIM_CLOCK:-1} == 1 ]] && for i in $(seq 200); do rostopic list 2> /dev/null | grep -q "^/clock$" && break; sleep 0.1; done')
   nodes1 "$n"
   echo "stack $n ($DRIVER $(cat "$DRIVE_WS/REF" 2> /dev/null)): master $((11310 + n)), udp +$off, log $d/stack.log, nodes $d/nodes.log"
