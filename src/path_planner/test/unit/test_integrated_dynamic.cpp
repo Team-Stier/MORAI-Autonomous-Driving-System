@@ -254,3 +254,15 @@ TEST(IntegratedDynamic, MeasuredStandingBodyMayBeSteeredAround) {
   ASSERT_GE(path.points.size(), 2u);
   EXPECT_GT(laneOffset(path), 1.0);
 }
+
+// Section 2 first left curve (route station 70-100 m, radius about 13 m): the preferred
+// lateral acceleration sets the planned apex speed from 8 m/s at station 55 m.
+TEST(IntegratedDynamic, SectionTwoCurveApexSpeed) {
+  Scene scene;
+  scene.place(-104.72, -379.82, 1.067, 8.0, 2);
+  const auto path = scene.plan({});
+  ASSERT_GE(path.points.size(), 2u);
+  double minimum = std::numeric_limits<double>::infinity();
+  for (const auto& point : path.points) minimum = std::min(minimum, point.velocity);
+  EXPECT_GT(minimum, 7.0);
+}

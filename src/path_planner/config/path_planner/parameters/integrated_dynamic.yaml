@@ -50,7 +50,8 @@ integrated_horizon_sec: 5.0
 # 59 km/h: stay below the 60 km/h penalty; control keeps its 60 km/h guard as a safety net.
 integrated_maximum_speed_mps: 16.38888888888889
 integrated_maximum_lateral_acceleration_mps2: 5.5
-integrated_preferred_lateral_acceleration_mps2: 2.8
+# Section 2 radius-13 m curves: 4.2 m/s^2 plans about 7.5 m/s at the apex; the 5.5 m/s^2 hard limit stays.
+integrated_preferred_lateral_acceleration_mps2: 4.2
 integrated_following_gap_m: 1.5
 integrated_following_headway_sec: 0.8
 # 40 km/h: the prediction-based hold keeps zone crossings collision-free at this speed.
@@ -80,7 +81,7 @@ integrated_publish_lateral_reference: true
 # Source curvature preview sets a preferred speed; native v/a/time stays continuous.
 integrated_curve_preview_m: 45.0
 integrated_curve_spacing_m: 2.0
-integrated_curve_deceleration_mps2: 1.7
+integrated_curve_deceleration_mps2: 2.5
 integrated_minimum_curve_speed_mps: 4.166666666666667
 
 # Keep the optimized curve close to the Lanelet reference.
