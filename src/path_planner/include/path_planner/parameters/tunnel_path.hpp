@@ -59,16 +59,20 @@ inline TunnelPathTrajectoryParameters loadTunnelPathTrajectoryParameters(const n
   p.vulnerable_uncertainty_max_m=r.number("integrated_vulnerable_uncertainty_max_m");
   for(double value:{p.dynamic_zone_moving_speed_mps,p.vulnerable_extent_m,p.vulnerable_uncertainty_mps,p.vulnerable_uncertainty_max_m})
     if(!std::isfinite(value) || value<0)throw std::invalid_argument("invalid integrated dynamic interaction parameter");
+  p.vulnerable_width_m=r.number("tunnel_vulnerable_width_m");
+  p.vulnerable_length_m=r.number("tunnel_vulnerable_length_m");
   p.vulnerable_min_height_m=r.number("tunnel_vulnerable_min_height_m");
   p.vulnerable_reach_m=r.number("tunnel_vulnerable_reach_m");
   p.vulnerable_pass_speed_mps=r.number("tunnel_vulnerable_pass_speed_mps");
   p.vulnerable_deceleration_mps2=r.number("tunnel_vulnerable_deceleration_mps2");
   p.small_body_min_extent_m=r.number("tunnel_small_body_min_extent_m");
-  for(double value:{p.vulnerable_min_height_m,p.vulnerable_reach_m,p.small_body_min_extent_m})
+  p.still_speed_mps=r.number("tunnel_still_speed_mps");
+  for(double value:{p.vulnerable_width_m,p.vulnerable_length_m,p.vulnerable_min_height_m,p.vulnerable_reach_m,p.small_body_min_extent_m,
+      p.still_speed_mps})
     if(!std::isfinite(value) || value<0)throw std::invalid_argument("invalid tunnel vulnerable geometry");
   if(!std::isfinite(p.vulnerable_pass_speed_mps) || p.vulnerable_pass_speed_mps<=0 ||
       !std::isfinite(p.vulnerable_deceleration_mps2) || p.vulnerable_deceleration_mps2<=0 ||
-      p.small_body_min_extent_m>p.vulnerable_extent_m)
+      p.small_body_min_extent_m>p.vulnerable_extent_m || p.vulnerable_width_m>p.vulnerable_length_m)
     throw std::invalid_argument("invalid tunnel vulnerable approach");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
