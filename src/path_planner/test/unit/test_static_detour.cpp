@@ -194,7 +194,7 @@ TEST(StaticDetour, HoldsOffsetAlongUnseenVehicleBody) {
 // the Core plans exactly like integrated_path.
 TEST(StaticDetour, MatchesIntegratedPathWithoutObstacles) {
   Scene scene(false);
-  scene.place(-62.229, -181.0, 1.3973, 8.0);
+  scene.place(-67.58, -198.0, 1.218, 8.0);
   path_planner::IntegratedPath base{path_planner::loadIntegratedPathParameters(node_pipeline::ParamReader::fromFile(
       kPackage + "/config/path_planner/parameters/integrated_path.yaml", kPackage)), scene.map};
   for (int scan = 0; scan < 2; ++scan) {
@@ -242,9 +242,10 @@ TEST(StaticDetour, WaitsForOncomingTrafficBeforeBypassing) {
   EXPECT_LT(path.points.back().velocity, 0.5);
 }
 
-// A checkpoint return 6 m back forgets the remembered box: with nothing seen
-// yet from there, the plan keeps the lane past the box position.
-TEST(StaticDetour, CheckpointReturnClearsBypass) {
+// A checkpoint return keeps the obstacles seen on the previous approach: back
+// at checkpoint 3 and then on the approach again, the bypass is planned before
+// the box is seen again.
+TEST(StaticDetour, CheckpointReturnRemembersObstacle) {
   Scene scene;
   scene.place(kApproachX, kApproachY, kApproachYaw, 8.0);
   scene.add(-59.05, -143.32, kApproachYaw, 0.56, 0.56);
@@ -252,13 +253,14 @@ TEST(StaticDetour, CheckpointReturnClearsBypass) {
   for (int scan = 0; scan < 3; ++scan) path = scene.plan();
   ASSERT_LT(crossingX(path, -143.32), kLaneCentreX - 1.0);
   scene.objects.objects.clear();
-  scene.place(-62.229, -181.0, 1.3973, 0.0);
+  scene.place(-79.97, -230.39, 1.0664, 0.0);
+  scene.plan();
+  scene.place(-62.229, -181.0, 1.3973, 5.0);
   path = scene.plan();
   ASSERT_GT(path.points.size(), 1u);
   const double beside = crossingX(path, -143.32);
   ASSERT_TRUE(std::isfinite(beside));
-  EXPECT_NEAR(beside, kLaneCentreX, 0.5);
-  EXPECT_GT(maximumSpeed(path), 1.0);
+  EXPECT_LT(beside, kLaneCentreX - 1.0);
 }
 
 // Near stop line 4188 in section 5 the route corridor patch keeps the road
@@ -321,4 +323,39 @@ TEST(StaticDetour, StopsCommittedBypassForMovingBody) {
   EXPECT_LT(path.points.back().velocity, 0.1);
   // The front bumper (3.85 m ahead of the rear axle) stays behind the body's 5 s position.
   EXPECT_LT(path.points.back().pose.pose.position.y + 3.85, -155.0);
+}
+
+// Waiting at stop line 6254 for a box past it, the bypass keeps the single
+// lane between solid lines (offset at most 0.35 m) and turns out beyond the line.
+TEST(StaticDetour, StartsBypassBeyondStopLine) {
+  Scene scene;
+  scene.place(-60.404, -165.1, 1.5024, 0.0);
+  scene.add(-58.82, -147.0, 1.5708, 1.2, 1.2);
+  interfaces::Path path;
+  for (int scan = 0; scan < 3; ++scan) path = scene.plan();
+  ASSERT_FALSE(path.lateral_reference.empty());
+  for (const auto& pose : path.lateral_reference)
+    if (pose.position.y < -161.6) EXPECT_GT(pose.position.x, -60.85) << "y=" << pose.position.y;
+  const double beside = crossingX(path, -147.0);
+  ASSERT_TRUE(std::isfinite(beside));
+  EXPECT_LT(beside, -59.42 - 0.5 - 1.08 + 0.05);
+  EXPECT_LT(firstMoveTime(path), 1.0);
+}
+
+// Off the lane beside the zone with the bypassed box gone (unseen within 8 m),
+// the vehicle steers back into its lane instead of holding.
+TEST(StaticDetour, ReturnsToLaneWhenObstacleIsGone) {
+  Scene scene;
+  scene.place(-62.4, -152.0, 1.5708, 2.0);
+  scene.add(-59.05, -143.32, kApproachYaw, 0.56, 0.56);
+  interfaces::Path path;
+  for (int scan = 0; scan < 3; ++scan) path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  scene.objects.objects.clear();
+  for (int scan = 0; scan < 10; ++scan) path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_GT(maximumSpeed(path), 1.0);
+  const double back = crossingX(path, -128.0);
+  ASSERT_TRUE(std::isfinite(back));
+  EXPECT_NEAR(back, kLaneCentreX, 0.5);
 }

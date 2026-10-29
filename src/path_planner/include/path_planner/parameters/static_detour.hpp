@@ -191,12 +191,17 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   };
   box("detour_object_box_m",d.object_min_x_m,d.object_max_x_m,d.object_min_y_m,d.object_max_y_m);
   box("detour_active_box_m",d.active_min_x_m,d.active_max_x_m,d.active_min_y_m,d.active_max_y_m);
+  box("detour_clear_box_m",d.clear_min_x_m,d.clear_max_x_m,d.clear_min_y_m,d.clear_max_y_m);
   box("detour_approach_box_m",d.approach_min_x_m,d.approach_max_x_m,d.approach_min_y_m,d.approach_max_y_m);
   for(const double id:r.numbers("detour_drivable_lanelet_ids")) {
     if(!std::isfinite(id) || id!=std::floor(id))throw std::invalid_argument("invalid detour lanelet ID");
     d.drivable_lanelet_ids.push_back(static_cast<lanelet::Id>(id));
   }
   if(d.drivable_lanelet_ids.empty())throw std::invalid_argument("empty detour drivable lanelets");
+  if(r.has("detour_keep_lane_lanelet_ids"))for(const double id:r.numbers("detour_keep_lane_lanelet_ids")) {
+    if(!std::isfinite(id) || id!=std::floor(id))throw std::invalid_argument("invalid detour keep-lane lanelet ID");
+    d.keep_lane_lanelet_ids.push_back(static_cast<lanelet::Id>(id));
+  }
   const auto asset=r.asset("detour_paint_file");
   std::istringstream input(std::string(asset.begin(),asset.end()));std::string line,previous;
   while(std::getline(input,line)) {
@@ -215,6 +220,7 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   }
   number("detour_unseen_sec",d.unseen_sec);
   number("detour_match_jump_m",d.match_jump_m);
+  number("detour_forget_range_m",d.forget_range_m);
   number("detour_clearance_m",d.clearance_m);
   number("detour_check_clearance_m",d.check_clearance_m);
   number("detour_in_lane_clearance_m",d.in_lane_clearance_m);
@@ -236,6 +242,7 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   number("detour_sample_step_m",d.sample_step_m);
   number("detour_area_margin_m",d.area_margin_m);
   number("detour_area_offset_m",d.area_offset_m);
+  number("detour_keep_lane_offset_m",d.keep_lane_offset_m);
   number("detour_wheel_half_track_m",d.wheel_half_track_m);
   number("detour_paint_contact_m",d.paint_contact_m);
   number("detour_maximum_paint_contact_m",d.maximum_paint_contact_m);
@@ -250,10 +257,10 @@ inline StaticDetourGeometryParameters loadStaticDetourGeometryParameters(const n
   number("detour_deceleration_mps2",d.deceleration_mps2);
   number("detour_timing_margin_m",d.timing_margin_m);
   number("detour_stop_buffer_m",d.stop_buffer_m);
-  for(const double value:{d.lookahead_m,d.stationary_speed_mps,d.unseen_sec,d.match_jump_m,d.clearance_m,d.check_clearance_m,
+  for(const double value:{d.lookahead_m,d.stationary_speed_mps,d.unseen_sec,d.match_jump_m,d.forget_range_m,d.clearance_m,d.check_clearance_m,
       d.face_depth_m,d.face_width_m,d.face_length_m,d.maximum_offset_m,d.maximum_curvature_inv_m,
       d.lateral_acceleration_mps2,d.maximum_speed_mps,d.minimum_speed_mps,d.blend_time_sec,d.minimum_blend_m,
-      d.maximum_blend_m,d.sample_step_m,d.area_offset_m,d.wheel_half_track_m,d.paint_contact_m,d.maximum_paint_contact_m,
+      d.maximum_blend_m,d.sample_step_m,d.area_offset_m,d.keep_lane_offset_m,d.wheel_half_track_m,d.paint_contact_m,d.maximum_paint_contact_m,
       d.moving_offset_m,d.completion_offset_m,d.approach_speed_mps,d.standoff_m,d.minimum_standoff_m,
       d.standoff_deceleration_mps2,d.acceleration_mps2,d.deceleration_mps2,d.timing_margin_m,d.stop_buffer_m})
     if(!std::isfinite(value) || value<=0)throw std::invalid_argument("invalid static detour parameter");

@@ -2,4 +2,4 @@ stage: inject
 inputs: [path, light, competition, tf]
 validator: curvature_inputs.hpp
 policy: missing_light_unknown.hpp
-allowed_issues: {path: [Stale, ReceiveTimeout, Skew], light: [Skew], tf: [Stale, ReceiveTimeout, Skew]}
+allowed_issues: {path: [Stale, ReceiveTimeout, Skew], light: [Stale, ReceiveTimeout, Skew], tf: [Stale, ReceiveTimeout, Skew]}

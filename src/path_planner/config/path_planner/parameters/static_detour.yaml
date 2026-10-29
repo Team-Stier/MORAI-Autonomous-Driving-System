@@ -81,17 +81,24 @@ detour_enabled: true
 # [min_x, max_x, min_y, max_y] in map.
 detour_object_box_m: [-66.0, -54.0, -160.0, -126.0]
 detour_active_box_m: [-85.0, -50.0, -200.0, -118.0]
-# Small boxes are first seen about 14 m ahead: cross the obstacle zone at 20 km/h.
-detour_approach_box_m: [-75.0, -50.0, -175.0, -136.0]
+# Obstacles seen there are kept across checkpoint returns until the rear axle reaches this box.
+detour_clear_box_m: [-75.0, -40.0, -118.0, -60.0]
+# Small boxes are first seen about 14 m ahead: be down to 20 km/h before the stop line.
+detour_approach_box_m: [-75.0, -50.0, -195.0, -136.0]
 detour_approach_speed_mps: 5.555555555555555
 # Route lane, the adjacent southbound lane from stop line 6254 on, and the right lane -50.
 detour_drivable_lanelet_ids: [130766, 130767, 130785, 130786, 130868, 130869, 130870, 130871, 130872, 130873, 100564, 100557,
                               109761, 109754, 109749, 109743, 130859, 130858, 130857, 130856, -50]
 detour_paint_file: models/static_corridor.csv
+# Single lane between solid lines up to stop line 6254: the bypass starts beyond it (offset at most 0.35 m here).
+detour_keep_lane_lanelet_ids: [130766, 130767, 130785]
+detour_keep_lane_offset_m: 0.35
 detour_lookahead_m: 45.0
 detour_stationary_speed_mps: 1.0
 detour_minimum_observations: 2
 detour_unseen_sec: 2.0
+# Only obstacles within 8 m of the bumper are dropped when unseen (detection is unreliable farther out).
+detour_forget_range_m: 8.0
 detour_match_jump_m: 0.8
 detour_clearance_m: 0.5
 detour_check_clearance_m: 0.3
