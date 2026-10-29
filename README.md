@@ -396,6 +396,7 @@ flowchart TD
 | `/velodyne_points` | 원본 점군 | `sensor_msgs/PointCloud2` | `velodyne` | 드라이버 scan stamp 유지; 현재 설정은 마지막 패킷 시각 | 10 Hz (100 ms); scan 수신마다 |
 | `/velodyne_points/leveled` | 수평화 차량 기준 점군 | `sensor_msgs/PointCloud2` | `base_link_level` | 입력 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points` 콜백마다 |
 | `/localization/ego` | 차량 위치·자세·3축 선속도·각속도 | `nav_msgs/Odometry` | pose: `map`, twist: `base_link`; 차량 뒷차축 중심 | 추정 상태가 나타내는 시각; 발행 시각으로 대체하지 않음 | 50 Hz |
+| `/localization/status` | 실제 위치 추정 모드 | `interfaces/LocalizationStatus` | `map` | 같은 계산 회차의 ego stamp | ego와 함께 50 Hz |
 | `/objects` | 장애물 검출·추적 객체 목록 | `interfaces/Objects` | `map`; 속도·가속도는 지면 기준 절대값 | 입력 수평화 점군 stamp 유지 | 목표 10 Hz; `/velodyne_points/leveled` 콜백마다 |
 | `/traffic_light` | 신호등 인식 결과 | `interfaces/TrafficLight` | `camera_7_optical_frame` | 판정에 사용한 영상 stamp 유지 | 목표 5 Hz (200 ms); 최신 미처리 영상 사용 |
 | `/section_annotation` | 현재 구간 정보 | `interfaces/SectionAnnotation` | `map` | 판정에 사용한 ego stamp 유지 | `/localization/ego` 콜백마다 |

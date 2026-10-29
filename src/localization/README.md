@@ -1,6 +1,6 @@
 # Localization
 
-50 Hz로 `/localization/ego`를 발행한다. 주기 조립과 출력 stamp의 기준은 최신 IMU다.
+50 Hz로 `/localization/ego`와 `/localization/status`를 발행한다. 주기 조립과 출력 stamp의 기준은 최신 IMU다.
 노드 구성은 `config/localization/`, 확장점은 `include/localization/`에 둔다.
 
 ## 선택과 입출력
@@ -20,9 +20,10 @@ GPS의 Missing·Stale·ReceiveTimeout 동안에는 기존 `tunnel_wall.hpp`로 G
 | 구독 | `/velodyne_points/leveled` | sensor_msgs/PointCloud2 | `base_link_level` 점군, 터널 벽 관측 |
 | 구독 | `/section_annotation` | interfaces/SectionAnnotation | Core 선택 |
 | 발행 | `/localization/ego` | nav_msgs/Odometry | map pose, base_link twist, IMU 기준 stamp |
+| 발행 | `/localization/status` | interfaces/LocalizationStatus | 같은 계산 회차의 추정 모드, ego와 같은 stamp |
 
 첫 Stage의 실제 메시지를 `process()`의 개별 인자로 받고 Odometry payload와
-`child_frame_id=base_link`를 반환한다. Pipeline이 출력 header와 발행을 담당한다.
+`child_frame_id=base_link`와 추정 모드의 tuple을 반환한다. Pipeline이 출력 header와 발행을 담당한다.
 입력 검사·누락 제거는 공통 검사층과 연결한 Validator·Policy가 담당한다.
 일반 구간은 GPS·IMU·Status를, 15번은 IMU·Status·LiDAR를 필수 입력으로 사용한다.
 입력 시간·frame·skew 한도는 기존 `node.yaml`을 유지한다.
@@ -77,3 +78,10 @@ GPS 위치와 GT 전방 속도로 보정한다. GPS 장착 높이는 GT 자세�
 
 `launch.sh`는 이 패키지의 노드만 시작한다. 전체 bringup은 상위 README를 따른다.
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
+
+## 추정 모드
+
+`full_ekf.hpp`는 `GPS_FUSED`, `tunnel_wall.hpp`는 `IMU_LIDAR`를 반환한다.
+공통 실행기는 두 출력에 같은 추정 기준 stamp와 `map` frame을 주입한다.
+Core 계산이 거부되거나 실패한 회차에는 새 위치·모드를 발행하지 않는다.
+`IMU_LIDAR`는 추정 방식이며 물리적인 터널 위치를 뜻하지 않는다.

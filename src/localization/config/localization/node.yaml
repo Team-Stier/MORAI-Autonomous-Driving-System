@@ -34,4 +34,7 @@ stages:
   - name: estimate
     outputs:
       - {name: ego, type: nav_msgs/Odometry}
-output: {topic: /localization/ego, frame_id: map}
+      - {name: status, type: interfaces/LocalizationStatus}
+output:
+  - {name: ego, topic: /localization/ego, frame_id: map}
+  - {name: status, topic: /localization/status, frame_id: map}

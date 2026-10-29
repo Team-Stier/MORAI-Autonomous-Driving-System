@@ -2,6 +2,8 @@
 #include <localization/libraries/projection.hpp>
 #include <localization/banks/ekf_state.hpp>
 #include <nav_msgs/Odometry.h>
+#include <interfaces/LocalizationStatus.h>
+#include <tuple>
 #include <sensor_msgs/NavSatFix.h>
 #include <sensor_msgs/Imu.h>
 #include <interfaces/CompetitionVehicleStatus.h>
@@ -23,7 +25,7 @@ class FullEkf {
       : parameters_(parameters), state_(shared.state), covariance_(shared.covariance),
         initialized_(shared.initialized), previous_imu_stamp_(shared.previous_imu_stamp),
         previous_gps_stamp_(shared.previous_gps_stamp), previous_status_stamp_(shared.previous_status_stamp) {}
-  nav_msgs::Odometry process(const sensor_msgs::NavSatFix& gps,
+  std::tuple<nav_msgs::Odometry, interfaces::LocalizationStatus> process(const sensor_msgs::NavSatFix& gps,
                             const sensor_msgs::Imu& imu,
                             const interfaces::CompetitionVehicleStatus& status) {
     const Eigen::Quaterniond orientation =
@@ -89,7 +91,9 @@ class FullEkf {
     message.twist.twist.angular.x = status.angular_velocity_x_radps;
     message.twist.twist.angular.y = status.angular_velocity_y_radps;
     message.twist.twist.angular.z = status.angular_velocity_z_radps;
-    return message;
+    interfaces::LocalizationStatus estimation;
+    estimation.mode = interfaces::LocalizationStatus::GPS_FUSED;
+    return std::make_tuple(std::move(message), estimation);
   }
  private:
   using Vector6 = Eigen::Matrix<double, 6, 1>;
