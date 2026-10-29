@@ -64,7 +64,7 @@ def report(d, k):
     d = Path(d)
     lap = next(x for x in map(json.loads, open(d / "eval_map/laps.jsonl")) if x["lap"] == k)
     c = np.array(json.load(open(d / f"eval_map/lap{k:03d}.clock.json")))
-    dbg, ms, cmd_hz, clock_rho, stack_rate = [], [], None, None, None
+    dbg, ms, cmd_hz, clock_rho, stack_rate, cmd_gaps, cmd_gap_s = [], [], None, None, None, None, None
     world_rate = round(float((c[-1, 1] - c[0, 1]) / max(c[-1, 0] - c[0, 0], 1e-6)), 3)
     if (d / f"dbg_{d.name}.csv").exists():
         rows = list(csv.reader(open(d / f"clk_{d.name}.csv")))
@@ -89,10 +89,14 @@ def report(d, k):
             stack_rate = round(float((t1 - t0) / max(c[-1, 0] - c[0, 0], 1e-6)), 3)
         n = sum(t0 <= t <= t1 for t in ts)
         cmd_hz = round(n / max(t1 - t0, 1e-6), 1)
+        # control_cmd silences over 1 s inside the lap: a host whose whole flow stalls (camp-v3 10/29: 215 gaps, 22 %)
+        w = [t0] + sorted(t for t in ts if t0 <= t <= t1) + [t1]
+        g = [b - a for a, b in zip(w, w[1:]) if b - a > 1.0]
+        cmd_gaps, cmd_gap_s = len(g), round(sum(g), 1)
     sc, v, meta = lap.get("scorer", {}), lap.get("validation"), lap.get("scene_meta", {})
     dyn = Counter(a.get("cls") for a in meta.get("actors", []) if a.get("zone", "").endswith("_dynamic"))
     r = dict(lap=k + 1, seed=lap["seed"], scene=lap["scene"], end=lap["end"], lap_s=lap["lap_s"], penalty_s=sc.get("penalty_s"),
-             returns=len(lap["returns"]), total_s=lap["total_s"], score_s=lap["total_s"], steps=len(dbg), cmd_hz=cmd_hz,
+             returns=len(lap["returns"]), total_s=lap["total_s"], score_s=lap["total_s"], steps=len(dbg), cmd_hz=cmd_hz, cmd_gaps=cmd_gaps, cmd_gap_s=cmd_gap_s,
              start_cp=lap.get("start_cp", 0), end_cp=lap.get("end_cp", 0), cps=len(lap.get("checkpoints", [])),
              # a section lap (--start-cp / --end-cp) finishes at its end CP; the scorer's CP judgment covers the whole route
              finished=(lap["end"] == (f"cp{lap['end_cp']}" if lap.get("end_cp") else "finish")) and

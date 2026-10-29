@@ -48,19 +48,21 @@ def aggregate(root, version):
              duration_mean_s=(stats([r["lap_s"] for r in fin if r.get("lap_s") is not None]) or {}).get("mean"),
              penalty_mean_s=(stats([r["penalty_s"] or 0 for r in fin]) or {}).get("mean"),
              violations=dict(sorted(counts.items())),
+             cmd_hz_mean=(stats([r["cmd_hz"] for r in laps if r.get("cmd_hz") is not None]) or {}).get("mean"),
+             cmd_gap_s=round(sum(r.get("cmd_gap_s") or 0 for r in laps), 1), cmd_gaps=sum(r.get("cmd_gaps") or 0 for r in laps),
              s4_laps=len(s4), s4_passed=sum(bool(r.get("finished")) or (r.get("cps") or 0) >= 4 for r in s4), s4_unknown=len(s4_unknown),
              lat_rms_mean_m=(stats([r["lat"]["rms_m"] for r in laps if r.get("lat")]) or {}).get("mean"),
              env_invalid=[r["file"] for r in invalid],
              signal_by_line=dict(sorted(lines.items())),   # "<osm stop line>:<signal_violation|signal_unverified>"
-             rows=[{k: r.get(k) for k in ("file", "seed", "scene", "end", "cps", "lap_s", "penalty_s", "returns", "score_s", "counts", "rho_end", "cmd_hz", "signal_by_line", "lat", "env", "stack_rate", "world_rate", "clock_flag")}
+             rows=[{k: r.get(k) for k in ("file", "seed", "scene", "end", "cps", "cmd_gaps", "cmd_gap_s", "lap_s", "penalty_s", "returns", "score_s", "counts", "rho_end", "cmd_hz", "signal_by_line", "lat", "env", "stack_rate", "world_rate", "clock_flag")}
                    for r in laps])
     (root / f"{version}.json").write_text(json.dumps(s, ensure_ascii=False, indent=1))
     return s
 
 
 def table(root):
-    head = ("| 버전 | 랩 | 완주 | 실패 | S4 통과 | score_s 평균 (완주) | min | max | 주행시간 평균 | 감점 평균 | 위반 종류별 | 정지선별 신호 |\n"
-            "|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+    head = ("| 버전 | 랩 | 완주 | 실패 | S4 통과 | cmd Hz (공백>1s 합) | score_s 평균 (완주) | min | max | 주행시간 평균 | 감점 평균 | 위반 종류별 | 정지선별 신호 |\n"
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
     rows = []
     alias = {d.resolve().name: d.name for d in root.glob("v*") if d.is_dir() and d.is_symlink()}   # results/v2 -> v2c: one row "v2"
     for f in sorted(root.glob("v*.json"), key=lambda p: int(re.sub(r"\D", "", p.stem) or 0)):
@@ -71,7 +73,7 @@ def table(root):
             s["version"] = f"{alias[f.stem]} ({f.stem})"
         g = lambda x: "-" if x is None else f"{x}"
         s4 = f"{s['s4_passed']}/{s['s4_laps']}" + (f" (+{s['s4_unknown']} ?)" if s.get("s4_unknown") else "") if "s4_laps" in s else "-"
-        rows.append(f"| {s['version']} | {s['laps']} | {s['finished']} | {s['failed']} | {s4} | {g(sc.get('mean'))} | {g(sc.get('min'))} | "
+        rows.append(f"| {s['version']} | {s['laps']} | {s['finished']} | {s['failed']} | {s4} | {g(s.get('cmd_hz_mean'))} ({g(s.get('cmd_gap_s'))} s) | {g(sc.get('mean'))} | {g(sc.get('min'))} | "
                     f"{g(sc.get('max'))} | {g(s.get('duration_mean_s'))} | {g(s.get('penalty_mean_s'))} | "
                     f"{', '.join(f'{k} {v}' for k, v in s['violations'].items()) or '-'} | "
                     f"{', '.join(f'{k} {v}' for k, v in (s.get('signal_by_line') or {}).items()) or '-'} |")
