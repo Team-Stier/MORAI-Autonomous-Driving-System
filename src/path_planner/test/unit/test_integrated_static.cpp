@@ -189,6 +189,18 @@ TEST(IntegratedStatic, PassesBoxRightOfCentreAtZoneStart) {
   expectPass(-59.1, -152.0, true, -60.93, -171.5, 84.8 * M_PI / 180);
 }
 
+TEST(IntegratedStatic, BrakesTowardsInLaneBoxWithoutSpeedStep) {
+  Scene scene;
+  // Arriving at 12 m/s in the 3.0 m lane when box 40100004 is first seen 41 m ahead.
+  scene.addBox(-59.05, -143.32, 0.56);
+  scene.place(-63.2, -186.1, 1.36, 12.0);
+  const auto path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_GT(speedAhead(path, scene.ego, 1.0), 8.0);  // no step down to the 5.56 m/s passing speed
+  for (const auto& point : path.points)
+    if (point.pose.pose.position.y > -143.32 - 5.0) EXPECT_LT(point.velocity, 5.56 + 0.05);
+}
+
 TEST(IntegratedStatic, StartsWhileBodyTouchesLanePaint) {
   Scene scene;
   // Lap pose at rest in the 3.0 m lane: 0.24 m right of its centre, yawed 4 degrees towards the right line.

@@ -6889,7 +6889,7 @@ struct IntegratedStaticTrajectoryParameters {
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
   double paint_release_m=0.,paint_release_lateral_m=2.,paint_release_speed_mps=1.;
   double borrow_width_m=0.,borrow_before_m=20.,borrow_after_m=12.;
-  double start_snap_m=0.;
+  double start_snap_m=0.,approach_deceleration_mps2=0.;
 };
 
 
@@ -7056,8 +7056,37 @@ class IntegratedTrajectory {
         passing=passing || std::hypot(object.position.x-state.pose.position.x,
             object.position.y-state.pose.position.y)<10.;
       if(!dynamic_zone && (passing || dynamicBlocked(reference,state,objects,predictions,p_.curve_preview_m))) {
-        limits.maximum_speed_mps=std::min(limits.maximum_speed_mps,avoidance_speed);
-        limits.preferred_speed_mps=std::min(limits.preferred_speed_mps,avoidance_speed);
+        // When every object in view is stationary, the passing speed applies
+        // from borrow_before_m ahead of the nearest in-lane one. Before that
+        // the cap falls with the remaining distance at approach_deceleration,
+        // so a fast arrival meets a braking profile it can follow instead of
+        // a step to the passing speed.
+        double cap=avoidance_speed;
+        bool stationary=!anchors.empty();
+        for(const auto& object:scene.objects)
+          stationary=stationary && !(object.velocity_available &&
+              std::hypot(object.velocity.x,object.velocity.y)>=p_.paint_release_speed_mps);
+        if(!passing && stationary && p_.approach_deceleration_mps2>0) {
+          double ego_station=0,best=std::numeric_limits<double>::infinity(),station=0;
+          for(std::size_t i=1;i<reference.size();++i) {
+            const auto a=reference[i-1].position,b=reference[i].position;
+            const double length=std::hypot(b.x-a.x,b.y-a.y);
+            if(length<1e-9)continue;
+            const double d=segmentDistance(state.pose.position,a,b);
+            if(d<best) {
+              best=d;
+              ego_station=station+std::max(0.,std::min(length,((state.pose.position.x-a.x)*(b.x-a.x)+
+                  (state.pose.position.y-a.y)*(b.y-a.y))/length));
+            }
+            station+=length;
+          }
+          double gap=std::numeric_limits<double>::infinity();
+          for(const auto& anchor:anchors)
+            if(anchor.station_m>ego_station)gap=std::min(gap,anchor.station_m-ego_station-p_.borrow_before_m);
+          if(std::isfinite(gap))cap=std::sqrt(cap*cap+2*p_.approach_deceleration_mps2*std::max(0.,gap));
+        }
+        limits.maximum_speed_mps=std::min(limits.maximum_speed_mps,cap);
+        limits.preferred_speed_mps=std::min(limits.preferred_speed_mps,cap);
       }
       auto planned=solver_.planInMap(state,reference,native,limits,planning_route,previous_,{},coverage,nullptr,&physical_reference);
       const bool stopped_free=!planned.empty() && planned.back().speed_mps==0 && objects.objects.empty();

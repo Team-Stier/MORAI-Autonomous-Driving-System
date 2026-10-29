@@ -90,3 +90,5 @@ integrated_borrow_before_m: 20.0
 integrated_borrow_after_m: 12.0
 # A start pose inside the road or paint margin is moved this far towards the reference (0 disables).
 integrated_start_snap_m: 0.3
+# Ahead of a stationary in-lane obstacle the passing-speed cap is reached at this deceleration (0 = a step).
+integrated_approach_deceleration_mps2: 2.0
