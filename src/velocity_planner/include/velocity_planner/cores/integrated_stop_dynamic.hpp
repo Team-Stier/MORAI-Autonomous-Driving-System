@@ -39,6 +39,7 @@ class IntegratedStopDynamic {
       const interfaces::Path& path, const interfaces::TrafficLight& light,
       const interfaces::CompetitionVehicleStatus& competition, const tf2_msgs::TFMessage& tf) {
     interfaces::Path output = path;
+    if (releaseAfterJump(path)) go_line_id_ = 0;
     releasePassedLine(path);
     const auto& parameters = state_.parameters;
     if (state_.stopping &&
@@ -233,6 +234,34 @@ class IntegratedStopDynamic {
     }
   }
 
+  // A teleport or checkpoint return moves the path origin farther than driving allows since the
+  // previous cutoff call; a stop latched at the previous place does not apply to the new one.
+  bool releaseAfterJump(const interfaces::Path& path) {
+    if (path.points.empty()) return false;
+    constexpr double kMaximumElapsedSec = 2.0;
+    const auto& p = state_.parameters;
+    const auto& origin = path.points.front().pose.pose.position;
+    const double stamp_sec = path.header.stamp.toSec();
+    bool jumped = false;
+    if (state_.previous_path_stamp_sec >= 0) {
+      const double elapsed_sec = std::max(0.0, std::min(kMaximumElapsedSec, stamp_sec - state_.previous_path_stamp_sec));
+      const double moved_m = std::hypot(origin.x - state_.previous_path_x_m, origin.y - state_.previous_path_y_m);
+      jumped = stamp_sec < state_.previous_path_stamp_sec || moved_m > p.jump_distance_m + p.jump_speed_mps * elapsed_sec;
+      if (jumped) {
+        state_.stopping = false;
+        state_.stop_line_id = 0;
+        state_.released_stop_line_id = 0;
+        state_.green_frames = 0;
+        // A rewound clock gives older image stamps; GO confirmation must count them again.
+        state_.last_light_stamp_ns = 0;
+        state_.intersection_remaining_m = -1.0;
+      }
+    }
+    state_.previous_path_x_m = origin.x;
+    state_.previous_path_y_m = origin.y;
+    state_.previous_path_stamp_sec = stamp_sec;
+    return jumped;
+  }
   // Keep this calculation in each selected Core; the Bank carries only state.
   void limitIntersectionSpeed(interfaces::Path& path, const Contact& contact) {
     const auto& p = state_.parameters;

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdint>
+#include <initializer_list>
 #include <utility>
 #include <vector>
 
@@ -34,6 +35,9 @@ struct TunnelWallParameters {
   double wall_max_station_m = 60.0;
   double wall_min_height_m = 0.3;
   double wall_max_height_m = 3.5;
+  double wall_gate_m = 0.6;
+  double wall_gate_sigma = 4.0;
+  double wall_side_agreement_m = 0.3;
   Eigen::Matrix<double, 6, 1> initial_state = Eigen::Matrix<double, 6, 1>::Zero();
   Eigen::Matrix<double, 6, 6> initial_covariance = Eigen::Matrix<double, 6, 6>::Identity();
   std::uint64_t initial_previous_imu_stamp = 0;
@@ -161,7 +165,8 @@ class TunnelWall {
   using Vector6 = Eigen::Matrix<double, 6, 1>;
   using Matrix6 = Eigen::Matrix<double, 6, 6>;
   struct WallInformation { double precision = 0, weighted_position = 0; };
-  void addConsensus(std::vector<double> values, WallInformation& information) const {
+  struct WallConsensus { bool found = false; double value = 0; };
+  WallConsensus consensus(std::vector<double> values) const {
     std::sort(values.begin(), values.end());
     std::size_t first = 0, best_first = 0, best_count = 0;
     for (std::size_t last = 0; last < values.size(); ++last) {
@@ -172,13 +177,13 @@ class TunnelWall {
       }
     }
     // Geometric consensus, not a test/replacement of the native input message.
+    WallConsensus result;
     if (best_count >= static_cast<std::size_t>(parameters_.wall_min_points)) {
       const std::size_t last = best_first + best_count - 1;
-      const double value = 0.5 * (values[(best_first + last) / 2] + values[(best_first + last + 1) / 2]);
-      const double precision = 1 / std::pow(parameters_.wall_noise_m, 2);
-      information.precision += precision;
-      information.weighted_position += precision * value;
+      result.found = true;
+      result.value = 0.5 * (values[(best_first + last) / 2] + values[(best_first + last + 1) / 2]);
     }
+    return result;
   }
   WallInformation wallInformation(const sensor_msgs::PointCloud2& cloud,
                          const Eigen::Quaterniond& orientation,
@@ -230,9 +235,41 @@ class TunnelWall {
         }
       }
     }
+    const auto agree = [&](const WallConsensus& a, const WallConsensus& b) {
+      return a.found && b.found && std::abs(a.value - b.value) <= parameters_.wall_side_agreement_m;
+    };
+    // Both walls at the surveyed width locate the vehicle without the prediction.
+    WallConsensus left_wall = consensus(left);
+    WallConsensus right_wall = consensus(right);
+    if (!agree(left_wall, right_wall)) {
+      // Obstacle faces parallel to the walls form dense bands too; keep only wall
+      // candidates consistent with the predicted lateral position.
+      const double lateral_sigma = std::sqrt(std::max(0.0,
+        normal_.dot(covariance_.topLeftCorner<3, 3>() * normal_)));
+      const double gate = std::max(parameters_.wall_gate_m, parameters_.wall_gate_sigma * lateral_sigma);
+      const auto gated = [&](std::vector<double> values) {
+        values.erase(std::remove_if(values.begin(), values.end(), [&](double value) {
+          return std::abs(value - lateral_position) > gate;
+        }), values.end());
+        return values;
+      };
+      left_wall = consensus(gated(std::move(left)));
+      right_wall = consensus(gated(std::move(right)));
+      // Disagreeing walls mean one side is an obstacle; keep the side nearer the prediction.
+      if (left_wall.found && right_wall.found && !agree(left_wall, right_wall)) {
+        if (std::abs(left_wall.value - lateral_position) <= std::abs(right_wall.value - lateral_position))
+          right_wall.found = false;
+        else
+          left_wall.found = false;
+      }
+    }
     WallInformation information;
-    addConsensus(std::move(left), information);
-    addConsensus(std::move(right), information);
+    const double precision = 1 / std::pow(parameters_.wall_noise_m, 2);
+    for (const auto& wall : {left_wall, right_wall}) {
+      if (!wall.found) continue;
+      information.precision += precision;
+      information.weighted_position += precision * wall.value;
+    }
     information.weighted_position += information.precision *
       normal_.dot(Eigen::Vector3d(parameters_.origin_x_m, parameters_.origin_y_m, 0));
     return information;

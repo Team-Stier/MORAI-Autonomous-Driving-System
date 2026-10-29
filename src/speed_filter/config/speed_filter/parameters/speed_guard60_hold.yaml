@@ -1,0 +1,8 @@
+speed_limit_kph: 60.0
+prediction_horizon_sec: 0.3
+acceleration_filter_time_constant_sec: 0.2
+accel_taper_start_kph: 58.0
+accel_cutoff_kph: 59.2
+brake_start_kph: 59.5
+brake_full_kph: 59.9
+maximum_guard_brake: 0.15

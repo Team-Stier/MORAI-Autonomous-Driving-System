@@ -88,3 +88,45 @@ TEST(IntegratedStopDynamic, DisabledKeepsApproachSpeed) {
   const auto output = core.process(approach(), light(interfaces::TrafficLight::UNKNOWN, 0.0), {}, {}).first;
   EXPECT_DOUBLE_EQ(output.points[45].velocity, 11.1);
 }
+
+TEST(IntegratedStopDynamic, JumpReleasesLatchedStop) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopDynamic core(blind(), state);
+  core.process(approach(), light(interfaces::TrafficLight::RED, 99.9), {}, {});
+  ASSERT_TRUE(state.stopping);
+  // Checkpoint return 150 m behind: the latched line is no longer on the path.
+  auto back = approach();
+  back.header.stamp = ros::Time(100.033);
+  for (auto& point : back.points) point.pose.pose.position.x -= 150.0;
+  const auto output = core.process(back, light(interfaces::TrafficLight::UNKNOWN, 0.0), {}, {}).first;
+  EXPECT_FALSE(state.stopping);
+  EXPECT_DOUBLE_EQ(output.points[0].velocity, 11.1);
+}
+
+TEST(IntegratedStopDynamic, JumpClearsObservedGo) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopDynamic core(blind(), state);
+  core.process(approach(), light(interfaces::TrafficLight::GREEN, 99.9), {}, {});
+  // Checkpoint return 20 m behind on the same approach: the GO seen before it no longer lifts the limit.
+  auto back = approach();
+  back.header.stamp = ros::Time(100.033);
+  for (auto& point : back.points) point.pose.pose.position.x -= 20.0;
+  const auto output = core.process(back, light(interfaces::TrafficLight::UNKNOWN, 0.0), {}, {}).first;
+  EXPECT_NEAR(output.points[65].velocity, creep(9.0, 5.0), 1e-9);
+}
+
+TEST(IntegratedStopDynamic, BackwardStampRecountsGoFrames) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopDynamic core(blind(), state);
+  core.process(approach(), light(interfaces::TrafficLight::RED, 99.9), {}, {});
+  // The clock rewinds: the stop latches again and GO images on the new clock confirm the release.
+  auto rewound = approach();
+  rewound.header.stamp = ros::Time(50.0);
+  core.process(rewound, light(interfaces::TrafficLight::RED, 49.9), {}, {});
+  ASSERT_TRUE(state.stopping);
+  for (int frame = 1; frame <= 3; ++frame) {
+    rewound.header.stamp = ros::Time(50.0 + frame / 30.0);
+    core.process(rewound, light(interfaces::TrafficLight::GREEN, 49.9 + frame / 10.0), {}, {});
+  }
+  EXPECT_FALSE(state.stopping);
+}

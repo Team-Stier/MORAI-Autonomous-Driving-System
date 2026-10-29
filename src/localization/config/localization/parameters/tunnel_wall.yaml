@@ -17,6 +17,9 @@ wall_min_station_m: -58.61842773450474
 wall_max_station_m: 58.61843533549703
 wall_min_height_m: 0.3
 wall_max_height_m: 3.5
+wall_gate_m: 0.6             # 예측 횡위치 기준 벽 후보 허용 폭
+wall_gate_sigma: 4.0         # 횡위치 표준편차 배수 허용 폭
+wall_side_agreement_m: 0.3   # 좌·우 벽 횡위치 일치 한도
 # TunnelWallParameters의 현재 초기 상태 기본값.
 initial_state: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 initial_covariance: [1.0, 0.0, 0.0, 0.0, 0.0, 0.0,

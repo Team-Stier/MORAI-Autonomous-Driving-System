@@ -169,6 +169,28 @@ TEST(IntegratedDynamic, FirstCallWhileDrivingSection14) {
   EXPECT_GT(maximumSpeed(path), 10.0);
 }
 
+TEST(IntegratedDynamic, FirstCallWhileDrivingSection4) {
+  Scene scene;
+  // Section 3 -> 4 takeover at 31 km/h, 9 m before the 13 m mouth narrows to the 3 m painted lane.
+  scene.place(-84.2, -238.2, 1.0647, 8.7, 4);
+  ASSERT_TRUE(scene.route);
+  const auto path = scene.plan({});
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_LT(startOffset(path, scene.ego), 1.0);
+  // Still moving 15 m ahead, inside the 3 m lane.
+  const double c = std::cos(scene.yaw_rad), s = std::sin(scene.yaw_rad);
+  bool passed = false;
+  for (const auto& point : path.points) {
+    const double ahead = (point.pose.pose.position.x - scene.ego.pose.pose.position.x) * c +
+                         (point.pose.pose.position.y - scene.ego.pose.pose.position.y) * s;
+    if (ahead < 15.0) continue;
+    passed = true;
+    EXPECT_GT(point.velocity, 1.0);
+    break;
+  }
+  EXPECT_TRUE(passed);
+}
+
 TEST(IntegratedDynamic, ReplansAfterCheckpointReturn) {
   Scene scene;
   ASSERT_GT(scene.plan({}).points.size(), 2u);
