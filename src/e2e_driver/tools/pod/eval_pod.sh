@@ -247,7 +247,9 @@ if [[ $DRIVER == stack && -n $BRANCH ]]; then   # the drive checkout: prepared h
   rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/ || { log "harness sync failed"; exit 1; }
   read -r SHA _ SNAPDIR < <(bash "$HERE/drive_prep.sh" "$BRANCH") && [[ -s $SNAPDIR/SHA ]] || { log "drive_prep $BRANCH failed"; exit 1; }
   P "bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/stacks.sh down > /dev/null 2>&1; mkdir -p /workspace/drive"
-  rsync -rlt --delete -e "ssh -F $SSHC" --exclude .git --exclude /build --exclude /devel --exclude /REF --exclude /BUILT \
+  # by content, written files get the time of arrival (-t kept the snapshot's time: a snapshot older than the pod's last
+  # build left new registrations older than the generated registry, so new Cores were not registered, control 10/29)
+  rsync -rl --checksum --delete -e "ssh -F $SSHC" --exclude .git --exclude /build --exclude /devel --exclude /REF --exclude /BUILT \
     "$SNAPDIR/" pod:/workspace/drive/ && P "echo '$BRANCH' > /workspace/drive/REF" || { log "drive sync failed"; exit 1; }
   log "drive $BRANCH (${SHA:0:10}) synced, building"
   P "touch /workspace/keepalive; (while sleep 120; do touch /workspace/keepalive; done) > /dev/null 2>&1 < /dev/null & k=\$!; RVIZ=${RVIZ:-0} bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/drive_setup.sh > /workspace/drive_setup.log 2>&1; r=\$?; kill \$k; exit \$r" ||
