@@ -31,7 +31,9 @@ fi
 log "catkin_make ($REF)"
 rm -f BUILT
 find build -type f -name '*.o' -size 0c -delete 2> /dev/null
-build() { ONNXRUNTIME_ROOT=$ORT catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT=$ORT -DCATKIN_BLACKLIST_PACKAGES=visualizer \
+# --force-cmake: an incremental build over another ref does not regenerate np_generated/<pkg>/cores/<core>.cpp when a
+# parameters/<core>.hpp loader is added, so the Core builds silently without parameters (worker-control-transition 10/29)
+build() { ONNXRUNTIME_ROOT=$ORT catkin_make --force-cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT=$ORT -DCATKIN_BLACKLIST_PACKAGES=visualizer \
   -j"$(nproc --all | awk '{print ($1 > 16) ? 16 : $1}')" >> $V/drive_build.log 2>&1; }
 : > $V/drive_build.log
 # one retry: parallel CMake generation of node_pipeline's generated files can race (BROADCAST-16)
