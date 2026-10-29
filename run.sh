@@ -47,6 +47,20 @@ else
 fi
 export PATH="/usr/bin:${PATH:-}"
 
+ROS_MASTER_PORT="${ROS_MASTER_PORT:-11311}"
+if [[ ! "$ROS_MASTER_PORT" =~ ^[0-9]+$ ]]; then
+    fail "ROS_MASTER_PORT is not a number: ${ROS_MASTER_PORT}; using 11311"
+    ROS_MASTER_PORT=11311
+fi
+export ROS_MASTER_URI="http://127.0.0.1:${ROS_MASTER_PORT}"
+export ROS_IP="${ROS_IP:-127.0.0.1}"
+
+MORAI_LIDAR_PORT="${MORAI_LIDAR_PORT:-2368}"
+if [[ ! "$MORAI_LIDAR_PORT" =~ ^[0-9]+$ ]]; then
+    fail "MORAI_LIDAR_PORT is not a number: ${MORAI_LIDAR_PORT}; using 2368"
+    MORAI_LIDAR_PORT=2368
+fi
+
 stop_existing_ros() {
     log "Stopping existing ROS processes"
     if command -v rosnode >/dev/null 2>&1; then
@@ -91,6 +105,16 @@ stop_existing_ros() {
 
 stop_existing_ros
 
+pull_lfs_assets() {
+    if ! command -v git-lfs >/dev/null 2>&1; then
+        run_privileged apt-get install -y git-lfs || return $?
+    fi
+    git -C "$WORKSPACE" lfs install --local --skip-repo >/dev/null && git -C "$WORKSPACE" lfs pull
+}
+
+if [[ "${MORAI_SKIP_BUILD:-}" == 1 ]]; then
+    log "Skipping dependency install and catkin_make"
+else
 needs_install=false
 if ! command -v rosdep >/dev/null 2>&1 ||
    ! rosdep check --from-paths src --ignore-src --rosdistro noetic >/dev/null 2>&1 ||
@@ -111,13 +135,6 @@ if [[ "$needs_install" == true ]]; then
         ros-noetic-rviz ros-noetic-compressed-image-transport
 fi
 
-pull_lfs_assets() {
-    if ! command -v git-lfs >/dev/null 2>&1; then
-        run_privileged apt-get install -y git-lfs || return $?
-    fi
-    git -C "$WORKSPACE" lfs install --local --skip-repo >/dev/null && git -C "$WORKSPACE" lfs pull
-}
-
 run_step "Fetch Git LFS assets" pull_lfs_assets
 if [[ -z "${ONNXRUNTIME_ROOT:-}" && ! -d /opt/onnxruntime-gpu/1.19.2 &&
       -d /opt/onnxruntime-cpu/1.19.2 ]]; then
@@ -127,6 +144,7 @@ if [[ -d build ]]; then
     run_step "Remove empty build objects" find build -type f -name '*.o' -size 0c -delete
 fi
 run_step "Build catkin workspace" catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -j2
+fi
 if [[ -r devel/setup.bash ]]; then
     source devel/setup.bash || fail "source workspace overlay"
 else
@@ -158,7 +176,7 @@ start_package() {
     start_process "$package" bash "$launch_script"
 }
 
-start_process roscore roscore
+start_process roscore roscore -p "$ROS_MASTER_PORT"
 for attempt in {1..100}; do
     rosnode list >/dev/null 2>&1 && break
     sleep 0.1
@@ -166,12 +184,12 @@ done
 rosnode list >/dev/null 2>&1 || fail "ROS master did not start; package launch attempts will continue"
 
 start_package MORAI-UDP-Bridge-Node
-start_process velodyne roslaunch velodyne_pointcloud VLP16_points.launch
+start_process velodyne roslaunch velodyne_pointcloud VLP16_points.launch port:="$MORAI_LIDAR_PORT"
 start_package tf_publisher
 start_package lidar_leveler
 start_package localization
 start_package section_annotator
-start_package morai_test
+start_package object_detector
 start_package traffic_light
 start_package path_planner
 start_package velocity_planner
