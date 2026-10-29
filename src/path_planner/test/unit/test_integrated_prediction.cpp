@@ -3,6 +3,7 @@
 #include <path_planner/parameters/integrated_prediction.hpp>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -83,5 +84,33 @@ TEST(IntegratedPrediction, TenHertzMatchesFixedLimits) {
         EXPECT_DOUBLE_EQ(a[i].objects[j].position.y, b[i].objects[j].position.y) << "frame " << k;
       }
     }
+  }
+}
+
+namespace {
+// Velocity of a body after five 10 Hz frames moving at (vx, 0) with the given square size.
+interfaces::Object fitted(const path_planner::IntegratedPredictionParameters& parameters, double vx, double size_m) {
+  path_planner::IntegratedPrediction core(parameters);
+  path_planner::PredictedObjects future;
+  for (int k = 0; k < 5; ++k) future = predict(core, {body(4, -40 + vx * 0.1 * k, 20, size_m)}, 200 + 0.1 * k);
+  return future[0].objects.front();
+}
+}  // namespace
+
+// A standing box whose fragments drift its centre at 0.5 m/s keeps its velocity unknown.
+TEST(IntegratedPrediction, LargeSlowBodyKeepsVelocityUnknown) {
+  EXPECT_FALSE(fitted(configured(), 0.5, 2.0).velocity_available);
+  EXPECT_TRUE(fitted(path_planner::IntegratedPredictionParameters{}, 0.5, 2.0).velocity_available);
+}
+
+// A car moving at 1.2 m/s and a walker at 0.5 m/s keep the fitted velocity.
+TEST(IntegratedPrediction, MovingCarAndSlowWalkerKeepTheirVelocity) {
+  const path_planner::IntegratedPredictionParameters fixed{};
+  for (const auto& sample : std::vector<std::pair<double, double>>{{1.2, 4.5}, {0.5, 0.5}}) {
+    const double vx = sample.first, size = sample.second;
+    const auto a = fitted(configured(), vx, size), b = fitted(fixed, vx, size);
+    ASSERT_TRUE(a.velocity_available) << size;
+    EXPECT_DOUBLE_EQ(a.velocity.x, b.velocity.x) << size;
+    EXPECT_NEAR(a.velocity.x, vx, 0.01) << size;
   }
 }

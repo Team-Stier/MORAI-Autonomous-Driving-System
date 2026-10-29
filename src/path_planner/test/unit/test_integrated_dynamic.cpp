@@ -223,3 +223,43 @@ TEST(IntegratedDynamic, JumpReplansLikeAFreshCore) {
     EXPECT_NEAR(after_jump.points[i].velocity, reference.points[i].velocity, 1e-6);
   }
 }
+
+namespace {
+// Largest lateral distance of the timed path from the straight section 6 lane (x = -60.4 m).
+double laneOffset(const interfaces::Path& path) {
+  double offset = 0;
+  for (const auto& point : path.points) offset = std::max(offset, std::abs(point.pose.pose.position.x + 60.4));
+  return offset;
+}
+}  // namespace
+
+// A walker first seen standing on the lane 18 m ahead at 29 km/h, before its motion is
+// measured: the plan slows in the lane instead of steering around it.
+TEST(IntegratedDynamic, UnmeasuredWalkerInZoneIsNotSteeredAround) {
+  Scene scene;
+  scene.place(-60.39, -3.07, 1.573, 7.94, 6);
+  auto walker = scene.object(18.1, 0.0, 0.0, 0.0, 0.4);
+  walker.velocity_available = false;
+  const auto path = scene.plan({walker});
+  ASSERT_GE(path.points.size(), 2u);
+  EXPECT_LT(laneOffset(path), 0.5);
+  EXPECT_LT(path.points.back().velocity, 7.94);
+}
+
+// The same body measured standing still is still avoided by the solver's geometry.
+TEST(IntegratedDynamic, MeasuredStandingBodyMayBeSteeredAround) {
+  Scene scene;
+  scene.place(-60.39, -3.07, 1.573, 7.94, 6);
+  const auto path = scene.plan({scene.object(18.1, 0.0, 0.0, 0.0, 0.4)});
+  ASSERT_GE(path.points.size(), 2u);
+  EXPECT_GT(laneOffset(path), 1.0);
+}
+
+// Stopped at the section 2 checkpoint (start of the radius-13 m left curve) with the body
+// turned 0.25 rad toward the outer edge, as after a curb strike or a return: the plan drives on.
+TEST(IntegratedDynamic, StoppedOffHeadingInCurveDrivesOn) {
+  Scene scene;
+  scene.place(-96.34, -364.89, 1.118 - 0.25, 0.0, 2);
+  const auto path = scene.plan({});
+  EXPECT_GT(maximumSpeed(path), 1.0);
+}

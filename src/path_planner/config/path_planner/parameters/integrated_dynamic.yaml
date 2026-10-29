@@ -62,6 +62,9 @@ integrated_dynamic_zone_moving_speed_mps: 0.8
 integrated_vulnerable_extent_m: 1.5
 integrated_vulnerable_uncertainty_mps: 0.3
 integrated_vulnerable_uncertainty_max_m: 1.0
+# In the dynamic zone, a body up to 1.5 m with no measured or inferred motion grows 1.5 m per forecast second, at most 2.5 m.
+integrated_unknown_walker_speed_mps: 1.5
+integrated_unknown_walker_max_m: 2.5
 integrated_interaction_speed_searches: 12
 
 # Replan only after nominal 5 m/s^2, 4 m/s^3 dynamics have no solution.
@@ -70,6 +73,8 @@ integrated_recovery_jerk_mps3: 8.0
 
 # Steering delay plus settling allowance; measured departures after nominal failure only.
 integrated_recovery_reentry_response_sec: 0.3
+# A vehicle stopped partly off the road (curb strike, checkpoint return) re-enters as if leaving at 2 m/s.
+integrated_recovery_reentry_minimum_speed_mps: 2.0
 integrated_recovery_lateral_acceleration_mps2: 6.0
 
 # Publish the full optimized geometry separately from the timed trajectory.

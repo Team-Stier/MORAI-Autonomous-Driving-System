@@ -1153,6 +1153,9 @@ struct PathParameters {
   double road_margin_m = 0.05;
   std::vector<std::vector<Vec2>> physical_boundaries;
   double reentry_response_sec = 0;
+  // A body stopped partly off the road keeps the response sweep of leaving
+  // at this speed; a measured faster departure uses its own speed.
+  double reentry_minimum_speed_mps = 0;
   double pedestrian_caution_speed_mps = 0.0;  // 0 disables the optional VRU approach ceiling.
   double pedestrian_caution_distance_m = 0.0;
   double pedestrian_caution_lateral_margin_m = 0.0;  // 0 keeps the legacy body/bbox preview.
@@ -3800,7 +3803,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       Pose2 inherited=ego.pose;
       if(step>0) {
         const double t=p_.reentry_response_sec*step/response_steps;
-        const double distance=std::max(0.,ego.speed_mps*t+ego.acceleration_mps2*t*t/2);
+        const double distance=std::max(0.,std::max(ego.speed_mps,p_.reentry_minimum_speed_mps)*t+ego.acceleration_mps2*t*t/2);
         const double turn=ego.curvature_inv_m*distance;
         const double scale=std::abs(turn)>1e-8?2*std::sin(turn/2)/turn:1.;
         inherited.position=Geometry::add(ego.pose.position,
@@ -5747,7 +5750,8 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     if(!std::isfinite(p_.preferred_reference_piece_m) || p_.preferred_reference_piece_m<0 ||
        (p_.preferred_reference_piece_m>0 && p_.preferred_reference_piece_m<2) || p_.preferred_reference_piece_m>25)
       throw std::invalid_argument("invalid preferred reference piece length");
-    if(!std::isfinite(p_.reentry_response_sec) || p_.reentry_response_sec<0 || p_.reentry_response_sec>.3)
+    if(!std::isfinite(p_.reentry_response_sec) || p_.reentry_response_sec<0 || p_.reentry_response_sec>.3 ||
+       !std::isfinite(p_.reentry_minimum_speed_mps) || p_.reentry_minimum_speed_mps<0 || p_.reentry_minimum_speed_mps>3)
       throw std::invalid_argument("invalid measured reentry response interval");
     if (p_.following_low_speed_headway_sec>p_.following_time_headway_sec ||
         p_.preferred_lateral_accel_mps2>p_.max_lateral_accel_mps2 ||
@@ -6965,7 +6969,7 @@ struct IntegratedDynamicTrajectoryParameters {
   double minimum_curve_speed_mps=15./3.6;
   double corridor_half_width_m=1.8;
   double horizon_sec=5.0;
-  double recovery_deceleration_mps2=8.,recovery_jerk_mps3=8.,recovery_response_sec=.3;
+  double recovery_deceleration_mps2=8.,recovery_jerk_mps3=8.,recovery_response_sec=.3,recovery_minimum_speed_mps=0;
   double recovery_lateral_acceleration_mps2=6.;
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
   // Dynamic-zone emergency hold applies only to a body measured moving at
@@ -6974,6 +6978,9 @@ struct IntegratedDynamicTrajectoryParameters {
   // Footprints up to this extent are treated as vulnerable road users whose
   // forecast body grows with prediction time, capped at the maximum.
   double vulnerable_extent_m=1.5,vulnerable_uncertainty_mps=.3,vulnerable_uncertainty_max_m=1.;
+  // Inside the dynamic zone a small body whose motion is not yet measured or
+  // inferred may be walking: its forecast body grows at this speed, capped.
+  double unknown_walker_speed_mps=0,unknown_walker_max_m=0;
 };
 
 
@@ -7068,7 +7075,7 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
-      auto native=convert(objects,predictions,p_);
+      auto native=convert(objects,predictions,p_,dynamic_zone);
 
       std::vector<bool> coverage;
 
@@ -7177,6 +7184,7 @@ class IntegratedTrajectory {
     result.max_deceleration_mps2=p.recovery_deceleration_mps2;
     result.max_longitudinal_jerk_mps3=p.recovery_jerk_mps3;
     result.reentry_response_sec=p.recovery_response_sec;
+    result.reentry_minimum_speed_mps=p.recovery_minimum_speed_mps;
     result.max_lateral_accel_mps2=p.recovery_lateral_acceleration_mps2;
     result.corridor_half_width_m=std::max(result.corridor_half_width_m,p.corridor_half_width_m);
     return result;
@@ -7227,15 +7235,17 @@ class IntegratedTrajectory {
     return o;
   }
   static integrated_native::Predictions convert(const interfaces::Objects& current,const PredictedObjects& future,
-      const IntegratedDynamicTrajectoryParameters& parameters) {
+      const IntegratedDynamicTrajectoryParameters& parameters,bool dynamic_zone) {
     integrated_native::Predictions result;result.reference_stamp_sec=current.header.stamp.toSec();
     for(const auto& input:current.objects) {
       auto o=object(input);o.source_stamp_sec=result.reference_stamp_sec;
+      bool measured=input.velocity_available;
       if(!input.velocity_available) {
         const auto inferred=std::find_if(future[0].objects.begin(),future[0].objects.end(),
             [&](const interfaces::Object& q){return q.id==input.id && q.velocity_available;});
-        if(inferred!=future[0].objects.end())o.velocity_mps={inferred->velocity.x,inferred->velocity.y};
+        if(inferred!=future[0].objects.end()){o.velocity_mps={inferred->velocity.x,inferred->velocity.y};measured=true;}
       }
+      const bool unknown_walker=dynamic_zone && !measured && std::max(o.length_m,o.width_m)<=parameters.vulnerable_extent_m;
       result.current.push_back(o);
       for(std::size_t i=0;i<10;++i) {
         const auto found=std::find_if(future[i].objects.begin(),future[i].objects.end(),
@@ -7250,6 +7260,9 @@ class IntegratedTrajectory {
         // small body with prediction time so a pass is planned with clearance.
         if(std::max(o.length_m,o.width_m)<=parameters.vulnerable_extent_m && std::hypot(o.velocity_mps.x,o.velocity_mps.y)>=.3)
           p.radius_error_m+=std::min(parameters.vulnerable_uncertainty_max_m,parameters.vulnerable_uncertainty_mps*.5*(i+1));
+        // A walker seen standing before its motion is measured is not a static
+        // obstacle to steer around: it may step into either side of the lane.
+        if(unknown_walker)p.radius_error_m+=std::min(parameters.unknown_walker_max_m,parameters.unknown_walker_speed_mps*.5*(i+1));
         result.future[i].push_back(p);
       }
     }
