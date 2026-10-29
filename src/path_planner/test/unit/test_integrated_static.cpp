@@ -189,6 +189,19 @@ TEST(IntegratedStatic, PassesBoxRightOfCentreAtZoneStart) {
   expectPass(-59.1, -152.0, true, -60.93, -171.5, 84.8 * M_PI / 180);
 }
 
+TEST(IntegratedStatic, StartsWhileBodyTouchesLanePaint) {
+  Scene scene;
+  // Lap pose at rest in the 3.0 m lane: 0.24 m right of its centre, yawed 4 degrees towards the right line.
+  scene.place(-61.73, -179.76, 1.366, 0.0);
+  const auto path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  const auto& first = path.points.front().pose.pose.position;
+  EXPECT_LT(std::hypot(first.x + 61.73, first.y + 179.76), 0.35);  // planned from next to the vehicle
+  double fastest = 0;
+  for (const auto& point : path.points) fastest = std::max(fastest, static_cast<double>(point.velocity));
+  EXPECT_GT(fastest, 1.0);
+}
+
 TEST(IntegratedStatic, KeepsBorrowedLaneAfterPassedBoxLeavesView) {
   Scene scene;
   // Approach box 40100004 and swing left of it, 1 s and 5 m per call.
@@ -200,14 +213,20 @@ TEST(IntegratedStatic, KeepsBorrowedLaneAfterPassedBoxLeavesView) {
     scene.place(xs[k], ys[k], M_PI / 2, 5.0);
     ASSERT_GT(scene.plan().points.size(), 2u);
   }
-  // Beside the box, out of the route lanelet's left edge, the box is no longer detected.
+  // Coming alongside, out of the route lanelet's left edge, the box is no longer detected.
   scene.objects.objects.clear();
   for (auto& future : scene.predictions) future.objects.clear();
   scene.stamp = ros::Time(103.0);
-  scene.place(-61.2, -143.0, M_PI / 2, 5.0);
+  scene.place(-61.2, -146.0, M_PI / 2, 5.0);
   const auto path = scene.plan();
   ASSERT_GT(path.points.size(), 2u);
   EXPECT_GT(speedAhead(path, scene.ego, 5.0), 1.0);
+  // While the body (rear 0.79 m, front 3.85 m) overlaps the 0.56 m box along
+  // the road, its right side (half width 1.08 m) stays left of the box.
+  for (const auto& point : path.points) {
+    const auto& p = point.pose.pose.position;
+    if (p.y > -143.6 - 3.85 && p.y < -143.04 + 0.79) EXPECT_LT(p.x, -59.05 - 0.28 - 1.08);
+  }
 }
 
 TEST(IntegratedStatic, MovingBodyInLaneReleasesNoPaint) {
