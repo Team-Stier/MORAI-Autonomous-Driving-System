@@ -38,7 +38,7 @@ if [[ -z ${EVAL_POD_HERE:-} ]]; then
   self=$(mktemp /tmp/eval_pod.XXXXXX); cp "$0" "$self"
   EVAL_POD_HERE=$(cd "$(dirname "$0")" && pwd) exec bash "$self" "$@"
 fi
-DRIVER=${DRIVER:-stack}; BRANCH=${BRANCH:-}; [[ $DRIVER == stack && -z ${ATTACH:-} && -z $BRANCH ]] && BRANCH=main
+BUNDLE=${BUNDLE:-}; DRIVER=${DRIVER:-stack}; BRANCH=${BRANCH:-}; [[ $DRIVER == stack && -z ${ATTACH:-} && -z $BRANCH ]] && BRANCH=main
 PODS_LOG=${PODS_LOG:-/home/opc/morai-campaign/shared/pods.log}; RESULTS_DIR=${RESULTS_DIR:-/home/opc/morai-campaign/shared/results}
 [[ -n ${VERSION:-} ]] && MSG_PREFIX="[${VERSION}] ${MSG_PREFIX:-}"
 podlog() { echo "$(date '+%F %T %Z') $*" >> "$PODS_LOG"; }
