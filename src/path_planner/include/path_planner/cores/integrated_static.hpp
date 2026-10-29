@@ -6956,7 +6956,7 @@ class IntegratedTrajectory {
       if(has_last_position_ && (stamp.toSec()<last_position_stamp_ ||
           moved>p_.solver.max_initial_distance_m+state.speed_mps*elapsed)) {
         solver_=initial_solver_;recovery_solver_=initial_recovery_solver_;previous_.clear();
-        avoidance_route_=Route{};released_.clear();
+        avoidance_route_=Route{};released_.clear();remembered_.clear();
         last_blocked_sec_=-std::numeric_limits<double>::infinity();
         ROS_INFO("[native planner] planning state restarted after a %.1f m jump",moved);
       }
@@ -7017,7 +7017,14 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
-      releasePaint(stationaryInLane(reference,objects));
+      const auto anchors=stationaryInLane(reference,objects);
+      // Keep each anchor until the vehicle is borrow_after_m past it.
+      const integrated_native::Vec2 axis{std::cos(state.pose.yaw_rad),std::sin(state.pose.yaw_rad)};
+      remembered_.clear();
+      for(const auto& anchor:anchors)
+        if((anchor.center.x-state.pose.position.x)*axis.x+(anchor.center.y-state.pose.position.y)*axis.y>=-p_.borrow_after_m)
+          remembered_.push_back(anchor.center);
+      releasePaint(anchors);
       auto native=convert(objects,predictions,reference);
 
       // Search/track the smooth target, but construct road permission from
@@ -7077,14 +7084,24 @@ class IntegratedTrajectory {
  private:
   // A stationary obstacle lying inside the route lane: its centre, station
   // along the reference and signed lateral offset (left positive). A moving
-  // body, such as a slower leading vehicle, is not one.
+  // body, such as a slower leading vehicle, is not one. Obstacles found on
+  // earlier calls count too: a passed box leaves the LiDAR view while the
+  // body is still beside it.
   struct Anchor {integrated_native::Vec2 center;double station_m,lateral_m;};
   std::vector<Anchor> stationaryInLane(const std::vector<integrated_native::ReferencePoint>& reference,
       const interfaces::Objects& objects) const {
+    std::vector<integrated_native::Vec2> centers;
+    for(const auto& object:objects.objects)
+      if(!object.velocity_available || std::hypot(object.velocity.x,object.velocity.y)<p_.paint_release_speed_mps)
+        centers.push_back({object.position.x,object.position.y});
+    const std::size_t observed=centers.size();
+    for(const auto& c:remembered_) {
+      bool seen=false;
+      for(std::size_t k=0;k<observed;++k)seen=seen || std::hypot(c.x-centers[k].x,c.y-centers[k].y)<2.;
+      if(!seen)centers.push_back(c);
+    }
     std::vector<Anchor> anchors;
-    for(const auto& object:objects.objects) {
-      if(object.velocity_available && std::hypot(object.velocity.x,object.velocity.y)>=p_.paint_release_speed_mps)continue;
-      const integrated_native::Vec2 c{object.position.x,object.position.y};
+    for(const auto& c:centers) {
       Anchor best{c,0,std::numeric_limits<double>::infinity()};double station=0;
       for(std::size_t i=1;i<reference.size();++i) {
         const auto a=reference[i-1].position,b=reference[i].position;
@@ -7405,6 +7422,7 @@ class IntegratedTrajectory {
   };
   std::vector<BorrowRing> borrow_area_;
   std::vector<long> borrow_key_;
+  std::vector<integrated_native::Vec2> remembered_;
   bool has_last_position_=false;
   integrated_native::Vec2 last_position_;
   double last_position_stamp_=0;

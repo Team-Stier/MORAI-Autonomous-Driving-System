@@ -189,6 +189,27 @@ TEST(IntegratedStatic, PassesBoxRightOfCentreAtZoneStart) {
   expectPass(-59.1, -152.0, true, -60.93, -171.5, 84.8 * M_PI / 180);
 }
 
+TEST(IntegratedStatic, KeepsBorrowedLaneAfterPassedBoxLeavesView) {
+  Scene scene;
+  // Approach box 40100004 and swing left of it, 1 s and 5 m per call.
+  const double ys[] = {-158.0, -153.0, -148.0};
+  const double xs[] = {-59.9, -60.6, -61.2};
+  scene.addBox(-59.05, -143.32, 0.56);
+  for (int k = 0; k < 3; ++k) {
+    scene.stamp = ros::Time(100.0 + k);
+    scene.place(xs[k], ys[k], M_PI / 2, 5.0);
+    ASSERT_GT(scene.plan().points.size(), 2u);
+  }
+  // Beside the box, out of the route lanelet's left edge, the box is no longer detected.
+  scene.objects.objects.clear();
+  for (auto& future : scene.predictions) future.objects.clear();
+  scene.stamp = ros::Time(103.0);
+  scene.place(-61.2, -143.0, M_PI / 2, 5.0);
+  const auto path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_GT(speedAhead(path, scene.ego, 5.0), 1.0);
+}
+
 TEST(IntegratedStatic, MovingBodyInLaneReleasesNoPaint) {
   Scene scene;
   // A slower leading body in the 3.0 m lane: no line crossing to overtake it.
