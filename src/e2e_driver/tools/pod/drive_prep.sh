@@ -25,4 +25,9 @@ if [[ ! -s $SNAP/$sha/SHA ]]; then
   mkdir -p "$SNAP" && rm -rf "$SNAP/$sha.part" && rsync -a --exclude .git --exclude /build --exclude /devel ./ "$SNAP/$sha.part/" &&
     echo "$head" > "$SNAP/$sha.part/SHA" && mv "$SNAP/$sha.part" "$SNAP/$sha"
 fi
+# disk (the host is shared and nearly full): snapshots unused for an hour go, the newest SNAP_KEEP (8) always stay
+touch "$SNAP/$sha"
+ls -1dt "$SNAP"/*/ 2> /dev/null | tail -n +$(( ${SNAP_KEEP:-8} + 1 )) | while read -r old; do
+  [[ -n $(find "$old" -maxdepth 0 -mmin +60) && $old != "$SNAP/$sha/" ]] && rm -rf "$old"
+done
 echo "$sha $REF $SNAP/$sha"
