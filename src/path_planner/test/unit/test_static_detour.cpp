@@ -341,3 +341,21 @@ TEST(StaticDetour, StartsBypassBeyondStopLine) {
   EXPECT_LT(beside, -59.42 - 0.5 - 1.08 + 0.05);
   EXPECT_LT(firstMoveTime(path), 1.0);
 }
+
+// Off the lane beside the zone with the bypassed box gone (unseen within 8 m),
+// the vehicle steers back into its lane instead of holding.
+TEST(StaticDetour, ReturnsToLaneWhenObstacleIsGone) {
+  Scene scene;
+  scene.place(-62.4, -152.0, 1.5708, 2.0);
+  scene.add(-59.05, -143.32, kApproachYaw, 0.56, 0.56);
+  interfaces::Path path;
+  for (int scan = 0; scan < 3; ++scan) path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  scene.objects.objects.clear();
+  for (int scan = 0; scan < 10; ++scan) path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_GT(maximumSpeed(path), 1.0);
+  const double back = crossingX(path, -128.0);
+  ASSERT_TRUE(std::isfinite(back));
+  EXPECT_NEAR(back, kLaneCentreX, 0.5);
+}

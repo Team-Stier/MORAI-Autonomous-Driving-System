@@ -97,8 +97,8 @@ detour_lookahead_m: 45.0
 detour_stationary_speed_mps: 1.0
 detour_minimum_observations: 2
 detour_unseen_sec: 2.0
-# Only obstacles within 12 m of the bumper are dropped when unseen (small boxes are seen at about 14 m).
-detour_forget_range_m: 12.0
+# Only obstacles within 8 m of the bumper are dropped when unseen (detection is unreliable farther out).
+detour_forget_range_m: 8.0
 detour_match_jump_m: 0.8
 detour_clearance_m: 0.5
 detour_check_clearance_m: 0.3
