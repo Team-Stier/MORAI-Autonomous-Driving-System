@@ -24,6 +24,9 @@ def aggregate(root, version):
         except ValueError:
             continue
         r["file"] = f.name
+        cr, wr = r.get("clock_rho"), r.get("rho_end")       # lap_report.py's clock check, for laps made by older copies
+        if r.get("env") is None and cr is not None and wr and abs(cr - wr) > 0.15:
+            r["env"], r["env_reason"] = "invalid", f"clock rho {cr} vs world rho {wr}"
         laps.append(r)
     invalid = [r for r in laps if r.get("env") == "invalid"]      # env-invalid laps: listed, never aggregated
     laps = [r for r in laps if r.get("env") != "invalid"]
