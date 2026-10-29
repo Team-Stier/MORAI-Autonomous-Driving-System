@@ -1,5 +1,7 @@
 #include <rviz/display.h>
 #include <rviz/display_context.h>
+#include <rviz/properties/int_property.h>
+#include <rviz/properties/ros_topic_property.h>
 #include <rviz/properties/status_property.h>
 #include <pluginlib/class_list_macros.h>
 #include <visualization_msgs/Marker.h>
@@ -12,10 +14,17 @@
 #include <cmath>
 #include <exception>
 #include <sstream>
+#include <string>
 
 namespace visualizer {
 class TrafficSignalDisplay : public rviz::Display {
  public:
+  // Topic and Top let a second overlay (the e-stop state) sit under the traffic-light text.
+  TrafficSignalDisplay()
+      : topic_property_(new rviz::RosTopicProperty("Topic", "/visualizer/traffic_light", "visualization_msgs/Marker",
+                                                   "Text marker shown in the overlay.", this)),
+        top_property_(new rviz::IntProperty("Top", 16, "Distance of the text from the top edge in pixels.", this)) {}
+
   ~TrafficSignalDisplay() override { cleanup(); }
 
   void reset() override {
@@ -27,6 +36,7 @@ class TrafficSignalDisplay : public rviz::Display {
   }
 
   void update(float, float) override {
+    guarded([this] { applyProperties(); });
     if (has_message_ && std::chrono::steady_clock::now() >= expires_at_) reset();
   }
 
@@ -47,7 +57,8 @@ class TrafficSignalDisplay : public rviz::Display {
       text_->setMetricsMode(Ogre::GMM_PIXELS);
       text_->setHorizontalAlignment(Ogre::GHA_RIGHT);
       text_->setVerticalAlignment(Ogre::GVA_TOP);
-      text_->setPosition(-16, 16);
+      applied_top_ = top_property_->getInt();
+      text_->setPosition(-16, applied_top_);
       text_->setDimensions(600, 32);
       text_->setAlignment(Ogre::TextAreaOverlayElement::Right);
       text_->setFontName("Liberation Sans");
@@ -62,17 +73,36 @@ class TrafficSignalDisplay : public rviz::Display {
   void onEnable() override {
     if (!ready_) return;
     guarded([this] {
-      subscriber_ = update_nh_.subscribe("/visualizer/traffic_light", 1,
-                                       &TrafficSignalDisplay::receiveMarker, this);
+      subscribed_topic_ = topic_property_->getTopicStd();
+      subscriber_ = update_nh_.subscribe(subscribed_topic_, 1, &TrafficSignalDisplay::receiveMarker, this);
     });
   }
 
   void onDisable() override {
     guarded([this] { subscriber_.shutdown(); });
+    subscribed_topic_.clear();
     reset();
   }
 
  private:
+  // Properties are read on every update; a changed topic resubscribes and a changed Top moves the text.
+  void applyProperties() {
+    if (!ready_) return;
+    const int top = top_property_->getInt();
+    if (text_ && top != applied_top_) {
+      applied_top_ = top;
+      text_->setPosition(-16, applied_top_);
+      context_->queueRender();
+    }
+    const std::string topic = topic_property_->getTopicStd();
+    if (isEnabled() && topic != subscribed_topic_) {
+      subscriber_.shutdown();
+      subscribed_topic_ = topic;
+      subscriber_ = update_nh_.subscribe(subscribed_topic_, 1, &TrafficSignalDisplay::receiveMarker, this);
+      reset();
+    }
+  }
+
   template <class Function>
   bool guarded(Function function) noexcept {
     try {
@@ -154,6 +184,10 @@ class TrafficSignalDisplay : public rviz::Display {
     });
   }
 
+  rviz::RosTopicProperty* topic_property_;
+  rviz::IntProperty* top_property_;
+  std::string subscribed_topic_;
+  int applied_top_ = 16;
   ros::Subscriber subscriber_;
   Ogre::Overlay* overlay_ = nullptr;
   Ogre::PanelOverlayElement* panel_ = nullptr;

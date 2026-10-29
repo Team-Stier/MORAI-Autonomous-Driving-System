@@ -43,6 +43,11 @@ Visualization Manager:
   - Class: visualizer/TrafficSignalOverlay
     Name: Traffic light state (top right)
     Enabled: true
+  - Class: visualizer/TrafficSignalOverlay
+    Name: E-stop state (under the traffic light)
+    Enabled: true
+    Topic: /visualizer/estop
+    Top: 48
   - Class: rviz/RobotModel
     Name: IONIQ 5 body and wheels
     Enabled: true

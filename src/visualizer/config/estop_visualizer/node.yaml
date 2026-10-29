@@ -1,0 +1,19 @@
+execution:
+  mode: on_input
+  trigger_input: source
+  queue_capacity: 1
+inputs:
+  source:
+    type: std_msgs/Bool
+    topic: /estop
+    check_stamp: false
+    check_skew: false
+    receive_timeout_sec: 0.6
+stages:
+- name: render
+  outputs:
+  - name: marker
+    type: visualization_msgs/Marker
+output:
+  topic: /visualizer/estop
+  frame_id: base_link

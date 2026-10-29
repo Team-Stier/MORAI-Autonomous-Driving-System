@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.0.2)
 project(visualizer)
 find_package(Qt5 REQUIRED COMPONENTS Widgets)
 find_package(catkin REQUIRED COMPONENTS node_pipeline roscpp rospy geometry_msgs nav_msgs
-  visualization_msgs interfaces morai_msgs lanelet2_core lanelet2_io tf2 tf2_geometry_msgs rviz pluginlib)
+  visualization_msgs std_msgs interfaces morai_msgs lanelet2_core lanelet2_io tf2 tf2_geometry_msgs rviz pluginlib)
 np_add_nodes(LIBRARIES pugixml Qt5::Widgets)
 catkin_install_python(PROGRAMS scripts/object_info_gt.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
