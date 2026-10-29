@@ -227,11 +227,12 @@ class HighwayMission {
       const double other=object.velocity_available?object.velocity.x*std::cos(q.yaw)+object.velocity.y*std::sin(q.yaw):
           (q.station<origin.station?parameters_.cruise_speed_mps:0.0);
       const double initial=q.station-origin.station;
-      // Present clearance and future closing clearance are separate checks.
-      // Closing is evaluated against ego's speed at the same future instant.
+      // A receding rear car may clear the merge before our footprint arrives.
+      // Keep the present-gap guard unless measured separation is clearly growing.
       const double present_rear=parameters_.vehicle_rear_m+half+
           std::max(parameters_.rear_gap_m,std::max(0.,other)*parameters_.rear_headway_sec);
-      if(initial+other*age<0 && -(initial+other*age)<present_rear) {
+      if(initial+other*age<0 && -(initial+other*age)<present_rear &&
+          (!object.velocity_available || other>=speed-1.0)) {
         gap_entry_time_sec_=occupancy.front().time;blocking_id_=object.id;
         gap_reason_="current target rear gap";return false;
       }
@@ -315,6 +316,9 @@ class HighwayMission {
       const double response_speed=parameters_.acc_deceleration_mps2*parameters_.following_time_sec;
       if(gap_error>0) correction=std::min(correction,
           std::sqrt(response_speed*response_speed+2*parameters_.acc_deceleration_mps2*gap_error)-response_speed);
+      // Match the leader's speed before reaching the requested gap; also avoid
+      // continuing to fall behind while recovering from a short gap.
+      correction-=speed-lead;
       const double desired=std::max(0.0,lead+correction);
       target=std::min(target,desired);
       const double closing=std::max(0.0,speed-lead);
