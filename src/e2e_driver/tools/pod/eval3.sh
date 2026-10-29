@@ -192,15 +192,17 @@ for n in $(seq "$N"); do
 done
 stamp "drives started ($N managers)"
 # LAP_DELIVER=1: each lap as it ends -> video, report, B2 and OUT/lap_KK.ready (lap_deliver.sh), for eval_pod.sh to send
-[[ ${LAP_DELIVER:-0} == 1 ]] && (declare -A done_; while :; do
-  live=0; pgrep -f "[e]val_manager.py eval_map" > /dev/null && live=1
+# The loop ends once the managers are gone; it waits up to 10 min for them to appear first (19:42 camp-p62: it checked
+# before eval_manager was up, ended at once and no lap was delivered).
+[[ ${LAP_DELIVER:-0} == 1 ]] && (declare -A done_; seen=0; t0=$SECONDS; while :; do
+  live=0; pgrep -f "[e]val_manager.py eval_map" > /dev/null && { live=1; seen=1; }
   for n in $(seq "$N"); do
-    for ((k = ${done_[$n]:-0}; k < $(wc -l < "$OUT/w$n/eval_map/laps.jsonl" 2> /dev/null || echo 0); k++)); do
+    for ((k = ${done_[$n]:-0}; k < $( (wc -l < "$OUT/w$n/eval_map/laps.jsonl") 2> /dev/null || echo 0); k++)); do
       bash "$HERE/lap_deliver.sh" "$OUT" "$n" "$k" "$NAME" && stamp "lap $((k + 1)) of w$n delivered: $(cut -f1 "$OUT/lap_$(printf %02d $((k + 1))).ready" | cut -c1-160)"
       done_[$n]=$((k + 1))
     done
   done
-  (( live )) || break; sleep 10
+  (( live || (! seen && SECONDS - t0 < 600) )) || break; sleep 10
 done; touch "$OUT/LAPS_DELIVERED") &
 (for i in $(seq 900); do   # every world's first model step (sync: steps.jsonl; real time: a /e2e_driver/debug row)
   ok=1; for n in $(seq "$N"); do
