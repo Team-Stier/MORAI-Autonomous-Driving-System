@@ -235,26 +235,33 @@ class TunnelWall {
         }
       }
     }
-    // Obstacle faces parallel to the walls form dense bands too; keep only wall
-    // candidates consistent with the predicted lateral position.
-    const double lateral_sigma = std::sqrt(std::max(0.0,
-      normal_.dot(covariance_.topLeftCorner<3, 3>() * normal_)));
-    const double gate = std::max(parameters_.wall_gate_m, parameters_.wall_gate_sigma * lateral_sigma);
-    const auto gated = [&](std::vector<double> values) {
-      values.erase(std::remove_if(values.begin(), values.end(), [&](double value) {
-        return std::abs(value - lateral_position) > gate;
-      }), values.end());
-      return values;
+    const auto agree = [&](const WallConsensus& a, const WallConsensus& b) {
+      return a.found && b.found && std::abs(a.value - b.value) <= parameters_.wall_side_agreement_m;
     };
-    WallConsensus left_wall = consensus(gated(std::move(left)));
-    WallConsensus right_wall = consensus(gated(std::move(right)));
-    // Disagreeing walls mean one side is an obstacle; keep the side nearer the prediction.
-    if (left_wall.found && right_wall.found &&
-        std::abs(left_wall.value - right_wall.value) > parameters_.wall_side_agreement_m) {
-      if (std::abs(left_wall.value - lateral_position) <= std::abs(right_wall.value - lateral_position))
-        right_wall.found = false;
-      else
-        left_wall.found = false;
+    // Both walls at the surveyed width locate the vehicle without the prediction.
+    WallConsensus left_wall = consensus(left);
+    WallConsensus right_wall = consensus(right);
+    if (!agree(left_wall, right_wall)) {
+      // Obstacle faces parallel to the walls form dense bands too; keep only wall
+      // candidates consistent with the predicted lateral position.
+      const double lateral_sigma = std::sqrt(std::max(0.0,
+        normal_.dot(covariance_.topLeftCorner<3, 3>() * normal_)));
+      const double gate = std::max(parameters_.wall_gate_m, parameters_.wall_gate_sigma * lateral_sigma);
+      const auto gated = [&](std::vector<double> values) {
+        values.erase(std::remove_if(values.begin(), values.end(), [&](double value) {
+          return std::abs(value - lateral_position) > gate;
+        }), values.end());
+        return values;
+      };
+      left_wall = consensus(gated(std::move(left)));
+      right_wall = consensus(gated(std::move(right)));
+      // Disagreeing walls mean one side is an obstacle; keep the side nearer the prediction.
+      if (left_wall.found && right_wall.found && !agree(left_wall, right_wall)) {
+        if (std::abs(left_wall.value - lateral_position) <= std::abs(right_wall.value - lateral_position))
+          right_wall.found = false;
+        else
+          left_wall.found = false;
+      }
     }
     WallInformation information;
     const double precision = 1 / std::pow(parameters_.wall_noise_m, 2);
