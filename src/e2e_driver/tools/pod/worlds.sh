@@ -62,6 +62,21 @@ if sys.argv[3] == "camp_cam7hd":
         c["cc"]["cameraResWidth"], c["cc"]["cameraResHeight"], c["cc"]["cameraFOV"], c["rot"]["pitch"] = 1280, 720, 80.0, 350.0
 json.dump(d, open(sys.argv[2], "w"))
 PY2
+  # sub: the team's submitted sensor file (sensor_submitted.json = shared/sensor/STIER_1team_submitted.json, user 10/29:
+  # every campaign sim drives with it) as it is, its UDP addresses on this host (127.0.0.1, ports unchanged)
+  [[ $p == sub ]] && python3 - "$HERE/sensor_submitted.json" "$S/sub.json" <<'PY3'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8-sig"))
+def walk(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k in ("hostIP", "destinationIP") and isinstance(v, str): o[k] = "127.0.0.1"
+            else: walk(v)
+    elif isinstance(o, list):
+        for v in o: walk(v)
+walk(d)
+json.dump(d, open(sys.argv[2], "w"))
+PY3
   echo "$p"
 }
 

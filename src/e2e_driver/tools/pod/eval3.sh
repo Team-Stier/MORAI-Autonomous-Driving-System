@@ -23,7 +23,7 @@
 # /morai_udp_bridge/control_cmd is recorded (cmd_wN.csv, the first-steps signal) and the CPUs are split between the
 # worlds (12 each, half of a small host) and the stacks (the rest).
 set -uo pipefail
-DRIVER=${DRIVER:-stack}; export DRIVER; [[ $DRIVER == stack ]] && { SYNC=0; export SENSOR_PRESET=${SENSOR_PRESET:-camp_cam7}; }
+DRIVER=${DRIVER:-stack}; export DRIVER; [[ $DRIVER == stack ]] && { SYNC=0; export SENSOR_PRESET=${SENSOR_PRESET:-sub}; }   # sub: the submitted sensors (user 10/29), camp_cam7 before
 [[ ${SYNC:-0} == 1 ]] && CPU_LAYOUT=${CPU_LAYOUT:-shared}            # sync_bench 10/28: shared + pinned spinners
 HERE=$(cd "$(dirname "$0")" && pwd); V=${V:-/workspace}; WS=$V/MORAI-Autonomous-Driving-System; E2E=$WS/src/e2e_driver
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@"); (( ${#SEEDS[@]} )) || SEEDS=(7 8 9)
