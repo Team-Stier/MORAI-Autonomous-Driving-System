@@ -25,9 +25,10 @@ if [[ ! -s $SNAP/$sha/SHA ]]; then
   mkdir -p "$SNAP" && rm -rf "$SNAP/$sha.part" && rsync -a --exclude .git --exclude /build --exclude /devel ./ "$SNAP/$sha.part/" &&
     echo "$head" > "$SNAP/$sha.part/SHA" && mv "$SNAP/$sha.part" "$SNAP/$sha"
 fi
-# disk (the host is shared and nearly full): snapshots unused for an hour go, the newest SNAP_KEEP (8) always stay
+# disk (the host is shared and nearly full): snapshots unused for SNAP_IDLE_MIN (20) go, the newest SNAP_KEEP (4) always
+# stay (an `if`, not `&&`: under set -e a false test as the loop's last status failed the whole prep, 10/29)
 touch "$SNAP/$sha"
-ls -1dt "$SNAP"/*/ 2> /dev/null | tail -n +$(( ${SNAP_KEEP:-8} + 1 )) | while read -r old; do
-  [[ -n $(find "$old" -maxdepth 0 -mmin +60) && $old != "$SNAP/$sha/" ]] && rm -rf "$old"
-done
+ls -1dt "$SNAP"/*/ 2> /dev/null | tail -n +$(( ${SNAP_KEEP:-4} + 1 )) | while read -r old; do
+  if [[ -n $(find "$old" -maxdepth 0 -mmin +"${SNAP_IDLE_MIN:-20}") && $old != "$SNAP/$sha/" ]]; then rm -rf "$old"; fi
+done || true
 echo "$sha $REF $SNAP/$sha"
