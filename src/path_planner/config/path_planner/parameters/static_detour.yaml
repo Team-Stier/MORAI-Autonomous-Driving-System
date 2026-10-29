@@ -1,0 +1,139 @@
+dynamic_zone_enabled: true
+dynamic_zone_min_x_m: -75.0
+dynamic_zone_max_x_m: -40.0
+dynamic_zone_min_y_m: -100.0
+dynamic_zone_max_y_m: 85.0
+dynamic_zone_minimum_detection_m: 20.0
+dynamic_zone_reaction_sec: 0.3
+dynamic_zone_braking_mps2: 6.0
+dynamic_zone_clear_sec: 0.5
+use_boundary_midpoint_centerline: false
+centerline_step_m: 0.25
+local_path_length_m: 180
+sample_step_m: 0.5
+wheelbase_m: 3.0
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+collision_margin_m: 0.25
+static_speed_mps: 0.3
+dynamic_speed_mps: 0.8
+dynamic_confirmation_sec: 0.3
+static_confirmation_sec: 0.5
+track_expiry_sec: 1.0
+dynamic_prediction_sec: 3.0
+avoidance_speed_mps: 6.0
+maximum_lateral_acceleration_mps2: 1.5
+avoidance_lead_m: 2.0
+transition_length_m: 10.0
+return_transition_length_m: 14.0
+maximum_curvature_per_m: 0.25
+maximum_lane_offset_m: 6.0
+maximum_join_gap_m: 1.5
+completion_lateral_m: 0.35
+completion_heading_rad: 0.2
+stop_buffer_m: 2.0
+stopping_deceleration_mps2: 2.0
+refined_curve_lanelet_ids:
+- 98417
+- 101861
+refined_curve_right_bias_m: 0.0
+reference_smoothing_enabled: true
+integrated_speed_beam_width: 64
+integrated_recovery_speed_beam_width: 128
+integrated_qp_iterations: 300
+integrated_reference_weight: 12.0
+integrated_previous_weight: 0.5
+integrated_corridor_half_width_m: 1.8
+integrated_horizon_sec: 5.0
+integrated_maximum_speed_mps: 16.38888888888889
+integrated_maximum_lateral_acceleration_mps2: 5.5
+integrated_preferred_lateral_acceleration_mps2: 2.8
+integrated_following_gap_m: 1.5
+integrated_following_headway_sec: 0.8
+# Match the existing control-side dynamic-zone cap in the planned trajectory.
+integrated_dynamic_zone_speed_mps: 6.944444444444445
+integrated_dynamic_zone_approach_m: 30.0
+integrated_interaction_speed_searches: 12
+
+# Replan only after nominal 5 m/s^2, 4 m/s^3 dynamics have no solution.
+integrated_recovery_deceleration_mps2: 8.0
+integrated_recovery_jerk_mps3: 8.0
+
+# Steering delay plus settling allowance; measured departures after nominal failure only.
+integrated_recovery_reentry_response_sec: 0.3
+integrated_recovery_lateral_acceleration_mps2: 6.0
+
+# Publish the full optimized geometry separately from the timed trajectory.
+integrated_publish_lateral_reference: true
+# Source curvature preview sets a preferred speed; native v/a/time stays continuous.
+integrated_curve_preview_m: 45.0
+integrated_curve_spacing_m: 2.0
+integrated_curve_deceleration_mps2: 1.7
+integrated_minimum_curve_speed_mps: 4.166666666666667
+
+# Keep the optimized curve close to the Lanelet reference.
+integrated_reference_piece_m: 7.5
+integrated_road_margin_m: 0.05
+
+# Bypass stationary in-lane obstacles past stop line 6254 over the map lanelets below.
+detour_enabled: true
+# [min_x, max_x, min_y, max_y] in map.
+detour_object_box_m: [-66.0, -54.0, -160.0, -126.0]
+detour_active_box_m: [-85.0, -50.0, -200.0, -118.0]
+# Small boxes are first seen about 14 m ahead: cross the obstacle zone at 20 km/h.
+detour_approach_box_m: [-75.0, -50.0, -175.0, -136.0]
+detour_approach_speed_mps: 5.555555555555555
+# Route lane, the adjacent southbound lane from stop line 6254 on, and the right lane -50.
+detour_drivable_lanelet_ids: [130766, 130767, 130785, 130786, 130868, 130869, 130870, 130871, 130872, 130873, 100564, 100557,
+                              109761, 109754, 109749, 109743, 130859, 130858, 130857, 130856, -50]
+detour_paint_file: models/static_corridor.csv
+detour_lookahead_m: 45.0
+detour_stationary_speed_mps: 1.0
+detour_minimum_observations: 2
+detour_unseen_sec: 2.0
+detour_match_jump_m: 0.8
+detour_clearance_m: 0.5
+detour_check_clearance_m: 0.3
+detour_in_lane_clearance_m: 0.3
+# A box wider than 1.4 m and shallower than 1.5 m is a vehicle face; assume 5 m of body behind it.
+detour_face_depth_m: 1.5
+detour_face_width_m: 1.4
+detour_face_length_m: 5.0
+detour_front_gap_m: 0.5
+detour_rear_gap_m: 1.0
+detour_ramp_lengths_m: [25.0, 20.0, 16.0, 12.0, 9.0, 7.0]
+detour_return_lengths_m: [20.0, 15.0, 11.0, 8.0]
+detour_maximum_offset_m: 4.5
+detour_maximum_curvature_inv_m: 0.25
+detour_lateral_acceleration_mps2: 2.5
+detour_maximum_speed_mps: 8.333333333333334
+detour_minimum_speed_mps: 2.0
+detour_blend_time_sec: 1.0
+detour_minimum_blend_m: 5.0
+detour_maximum_blend_m: 8.0
+detour_sample_step_m: 0.5
+detour_area_margin_m: 0.05
+# Body corners must lie in the lanelets above once the offset exceeds 0.5 m.
+detour_area_offset_m: 0.5
+# Wheels may cross solid paint but not touch it over more than 3 m of travel.
+detour_wheel_half_track_m: 0.83
+detour_paint_contact_m: 0.2
+detour_maximum_paint_contact_m: 3.0
+# Before committing, forecast moving bodies outside our lane must stay 1 m clear of the body.
+detour_moving_margin_m: 1.0
+detour_moving_offset_m: 0.8
+detour_completion_offset_m: 0.3
+# Without a bypass, stop 9 m before a blocking obstacle (room to bypass from rest), never closer than 3 m.
+detour_standoff_m: 9.0
+detour_minimum_standoff_m: 3.0
+detour_standoff_deceleration_mps2: 3.0
+# The bypass is timed here: 1.5 m/s^2 up, 2.5 m/s^2 down, 0.5 m from forecast bodies, stop 1 m short of a conflict.
+detour_acceleration_mps2: 1.5
+detour_deceleration_mps2: 2.5
+detour_timing_margin_m: 0.5
+detour_stop_buffer_m: 1.0
+# Union the route reference corridor into the road region (Lanelet gap near stop line 4188).
+route_corridor_patch: true
+# Boxes fitted to one flat face can have a zero side; plan with at least 0.3 m.
+minimum_object_extent_m: 0.3

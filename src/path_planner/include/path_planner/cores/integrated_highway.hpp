@@ -583,6 +583,49 @@ class HighwayMission {
     }
     return remaining;
   }
+  // Distance along the connected target lanes from origin to where they first become narrower
+  // than the car; a change must hand over before that point.
+  double narrowAhead(const lanelet::routing::LaneletPath& route,std::size_t index,const lanelet::BasicPoint2d& origin) {
+    const auto& first=referenceCenterline(route[index]);
+    const auto start=project(first,origin);
+    const double from=stationOn(first,start);
+    double narrow=narrowAfter(route[index],from);
+    if(narrow>=0)return narrow;
+    double distance=-from;
+    for(std::size_t j=1;j<first.size();++j)distance+=(first[j]-first[j-1]).head<2>().norm();
+    for(std::size_t i=index+1;i<route.size() && connected(route[i-1],route[i]);++i) {
+      narrow=narrowAfter(route[i],0);
+      if(narrow>=0)return distance+narrow;
+      const auto& line=referenceCenterline(route[i]);
+      for(std::size_t j=1;j<line.size();++j)distance+=(line[j]-line[j-1]).head<2>().norm();
+    }
+    return std::numeric_limits<double>::infinity();
+  }
+  static double stationOn(const lanelet::BasicLineString3d& line,const Projection& projection) {
+    double station=0;
+    for(std::size_t j=1;j<=projection.segment && j<line.size();++j)station+=(line[j]-line[j-1]).head<2>().norm();
+    return station+(projection.point-line[projection.segment]).head<2>().norm();
+  }
+  // Reference arclength from `from` to where the lane width first falls below the car width;
+  // negative when it does not.
+  double narrowAfter(const lanelet::ConstLanelet& lane,double from) {
+    auto key=std::make_pair(lane.id(),lane.inverted());auto found=width_profiles_.find(key);
+    if(found==width_profiles_.end()) {
+      std::vector<std::pair<double,double>> profile;
+      const auto& line=referenceCenterline(lane);
+      const auto left=lane.leftBound3d().basicLineString(),right=lane.rightBound3d().basicLineString();
+      double station=0;
+      for(std::size_t i=0;i<line.size();++i) {
+        if(i>0)station+=(line[i]-line[i-1]).head<2>().norm();
+        const lanelet::BasicPoint2d point=line[i].head<2>();
+        profile.emplace_back(station,std::sqrt(project(left,point).squared_distance)+std::sqrt(project(right,point).squared_distance));
+      }
+      found=width_profiles_.emplace(key,std::move(profile)).first;
+    }
+    for(const auto& sample:found->second)
+      if(sample.first>=from && sample.second<2*parameters_.vehicle_half_width_m)return sample.first-from;
+    return -1;
+  }
   Message reference(const nav_msgs::Odometry& ego,const Route& global_path) {
     const auto& route=*global_path;
     reference_spans_.clear();
@@ -614,7 +657,8 @@ class HighwayMission {
         Message target;appendPoint(target,target_projection.point);double target_length=0;
         appendLine(target,target_line,target_projection.segment+1,target_length);
         const double offset=std::sqrt(target_projection.squared_distance);
-        const double available=std::min({source_length,target_length,changeWindow(route,i,begin.point.head<2>())});
+        const double available=std::min({source_length,target_length,changeWindow(route,i,begin.point.head<2>()),
+            narrowAhead(route,i+1,target_projection.point.head<2>())});
         const double minimum_transition=std::sqrt(6*offset/parameters_.maximum_curvature_per_m);
         const double duration=std::sqrt(6*offset/parameters_.maximum_lateral_acceleration_mps2);
         const double usable=std::max(0.0,available-parameters_.stop_buffer_m);
@@ -804,6 +848,7 @@ class HighwayMission {
   HighwayMissionParameters parameters_;double planning_length_m_,planning_speed_mps_=0,maneuver_speed_mps_=0,active_limit_mps_=0;
   lanelet::traffic_rules::TrafficRulesPtr rules_;lanelet::routing::RoutingGraphUPtr graph_;
   std::map<std::pair<lanelet::Id,bool>,lanelet::BasicLineString3d> centerlines_;
+  std::map<std::pair<lanelet::Id,bool>,std::vector<std::pair<double,double>>> width_profiles_;
   std::vector<LaneSpan> reference_spans_;Message maneuver_,waiting_path_,target_path_;
   bool change_window_exhausted_=false,reference_lane_change_=false;double reference_handover_m_=0,handover_m_=0,transition_m_=0,change_begin_m_=0,gap_since_=-1;
   double reference_change_speed_mps_=0,waiting_stop_station_m_=0,latest_wait_station_m_=0;

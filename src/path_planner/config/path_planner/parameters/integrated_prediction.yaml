@@ -4,3 +4,6 @@ continuity_gap_sec: 0.3
 continuity_gap_frames: 1.5
 fit_window_sec: 0.5
 fit_window_frames: 2.5
+# A body longer than 1.5 m fitted below 1.0 m/s keeps its velocity unknown (standing box fragments).
+large_extent_m: 1.5
+large_minimum_speed_mps: 1.0

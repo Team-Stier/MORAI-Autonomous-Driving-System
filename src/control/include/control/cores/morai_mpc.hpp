@@ -217,6 +217,9 @@ class SteeringPrediction {
   SteeringPrediction(double delay_sec, double time_constant_sec);
   double advance(double time_sec);
   void sent(double time_sec, double effective_steering_rad);
+  void synchronize(double time_sec,double physical_steering_rad) {
+    time_sec_=time_sec;angle_rad_=command_rad_=physical_steering_rad;events_.clear();
+  }
 
  private:
   double delay_sec_;
@@ -241,6 +244,10 @@ class AutowareLateral {
  public:
   AutowareLateral(const LateralParameters& parameters,
                  const SteeringPredictionParameters& steering);
+  void synchronize(double steering_rad) {
+    std::fill(input_buffer_.begin(),input_buffer_.end(),steering_rad);queued_command_=false;
+    for(int i=0;i<100;++i)lpf_steering_cmd_.filter(steering_rad);
+  }
   void sent(double steering_rad) {
     if(input_buffer_.empty())return;
     if(queued_command_)input_buffer_.back()=steering_rad;
@@ -1138,6 +1145,7 @@ namespace control {
 // Geometry retained from the same previously supplied reference, never ego breadcrumbs.
 class MpcPathHistory {
  public:
+  void clear(){points_.clear();}
   interfaces::Path update(const interfaces::Path& path, const nav_msgs::Odometry& ego, double length_m) {
     tf2::Transform world;
     tf2::fromMsg(ego.pose.pose, world);
@@ -1211,6 +1219,19 @@ class MoraiMpc {
                              const interfaces::CompetitionVehicleStatus& status) {
     ROS_INFO_ONCE("[control] executing morai_mpc.hpp");
     const auto stamp = path.header.stamp.toNSec();
+    if(!has_previous_stamp_ || stamp<previous_stamp_ ||
+        (static_cast<double>(stamp)-static_cast<double>(previous_stamp_))*1e-9>1.0) {
+      // First use, or a different selected Core has controlled the vehicle in the meantime.
+      // MORAI reports physical wheel steering with the opposite ROS yaw sign.
+      const double physical=-status.steering_angle_rad;
+      const double limit=parameters_.lateral.steer_lim_deg*autoware_ai_mpc::kPi/180.;
+      previous_steering_rad_=std::max(-limit,std::min(limit,physical/parameters_.steering_prediction.gain));
+      lateral_=autoware_ai_mpc::AutowareLateral(parameters_.lateral,parameters_.steering_prediction);
+      lateral_.synchronize(previous_steering_rad_);
+      steering_.synchronize(path.header.stamp.toSec(),physical);
+      path_history_.clear();longitudinal_.reset();
+      has_previous_stamp_=false;
+    }
     const double dt = has_previous_stamp_ ?
         std::max(parameters_.minimum_control_dt_sec,
           std::min(parameters_.maximum_control_dt_sec,

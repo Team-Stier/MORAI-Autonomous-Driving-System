@@ -168,3 +168,32 @@ TEST(MoraiMpc, FloorLeavesFasterDrivingUnchanged) {
     yaw += speed / 3.0 * std::tan(a * kMaximumSteeringRad * 0.77) * kDt;
   }
 }
+
+TEST(MoraiMpc, FirstUseStartsFromMeasuredSteering) {
+  // Switching in from integrated_mpc mid-curve: the wheels already turn left by the curve's angle.
+  control::MoraiMpc core(parameters(3.0));
+  const double wheel_rad = std::atan(3.0 / 12.0);
+  nav_msgs::Odometry ego;
+  ego.pose.pose.orientation.w = 1.0;
+  ego.twist.twist.linear.x = 6.0;
+  interfaces::CompetitionVehicleStatus status;
+  status.velocity_x_mps = 6.0;
+  status.steering_angle_rad = -wheel_rad;  // MORAI reports wheel steering with the opposite ROS yaw sign.
+  const double steering = core.process(circle(0.0, 0.0, 0.0, 6.0, 100.0), ego, status).steering;
+  // Without the resync the rate limit holds the first command within 2 deg of zero.
+  EXPECT_GT(steering * kMaximumSteeringRad, 0.2);
+}
+
+TEST(MoraiMpc, ReselectionStartsFromMeasuredSteering) {
+  control::MoraiMpc core(parameters(3.0));
+  nav_msgs::Odometry ego;
+  ego.pose.pose.orientation.w = 1.0;
+  ego.twist.twist.linear.x = 6.0;
+  interfaces::CompetitionVehicleStatus status;
+  status.velocity_x_mps = 6.0;
+  EXPECT_NEAR(core.process(centreLine(0.0, 0.0, 0.0, 6.0, 100.0), ego, status).steering, 0.0, 0.02);
+  // Another Core steered for 5 s; the vehicle is now in a left curve.
+  status.steering_angle_rad = -std::atan(3.0 / 12.0);
+  const double steering = core.process(circle(0.0, 0.0, 0.0, 6.0, 105.0), ego, status).steering;
+  EXPECT_GT(steering * kMaximumSteeringRad, 0.2);
+}

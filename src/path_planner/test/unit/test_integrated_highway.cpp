@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <path_planner/cores/integrated_highway.hpp>
+#include <lanelet2_core/geometry/LineString.h>
 #include <lanelet2_core/utility/Utilities.h>
 #include <cmath>
 #include <map>
@@ -36,6 +37,29 @@ Road southboundRoad(double lane_width_m = 3.5) {
     outer_left.push_back(lanelet::Point3d(lanelet::utils::getId(), 1.5 * lane_width_m, y, 0));
     shared.push_back(lanelet::Point3d(lanelet::utils::getId(), 0.5 * lane_width_m, y, 0));
     outer_right.push_back(lanelet::Point3d(lanelet::utils::getId(), -0.5 * lane_width_m, y, 0));
+  }
+  for (auto* line : {&outer_left, &shared, &outer_right})
+    line->attributes()[lanelet::AttributeName::Type] = lanelet::AttributeValueString::LineThin;
+  outer_left.attributes()[lanelet::AttributeName::Subtype] = lanelet::AttributeValueString::Solid;
+  shared.attributes()[lanelet::AttributeName::Subtype] = lanelet::AttributeValueString::Dashed;
+  outer_right.attributes()[lanelet::AttributeName::Subtype] = lanelet::AttributeValueString::Solid;
+  lanelet::Lanelet right(lanelet::utils::getId(), shared, outer_right), left(lanelet::utils::getId(), outer_left, shared);
+  right.attributes()[lanelet::AttributeName::Subtype] = lanelet::AttributeValueString::Road;
+  left.attributes()[lanelet::AttributeName::Subtype] = lanelet::AttributeValueString::Road;
+  return {lanelet::utils::createMap({right, left}), right, left};
+}
+
+// Two southbound lanes from y=+50 to y=-150 sharing a dashed boundary at x=1.75 (right lane on x=0,
+// left lane on x=3.5). One lane tapers from 3.5 m at y=-40 to 0.5 m at y=-100, like the lanes merging
+// into the toll-plaza lane; it is narrower than the car (2.16 m) from y=-66.8.
+Road taperRoad(bool left_tapers) {
+  lanelet::LineString3d outer_left(lanelet::utils::getId()), shared(lanelet::utils::getId()),
+      outer_right(lanelet::utils::getId());
+  for (int y = 50; y >= -150; --y) {
+    const double narrowed = 3.0 * std::min(1.0, std::max(0.0, (-40.0 - y) / 60.0));
+    outer_left.push_back(lanelet::Point3d(lanelet::utils::getId(), 5.25 - (left_tapers ? narrowed : 0.0), y, 0));
+    shared.push_back(lanelet::Point3d(lanelet::utils::getId(), 1.75, y, 0));
+    outer_right.push_back(lanelet::Point3d(lanelet::utils::getId(), -1.75 + (left_tapers ? 0.0 : narrowed), y, 0));
   }
   for (auto* line : {&outer_left, &shared, &outer_right})
     line->attributes()[lanelet::AttributeName::Type] = lanelet::AttributeValueString::LineThin;
@@ -310,6 +334,34 @@ TEST(IntegratedHighway, SlowApproachToShortWindowKeepsWaitingStop) {
       saw_stop = true;
     }
   EXPECT_TRUE(saw_stop);
+}
+
+// Commits the left change on the taper road from 10 m/s, and returns the y where the committed path
+// first lies on the left lane centreline.
+double taperHandoverY(const Road& road) {
+  auto parameters = mergeParameters();
+  parameters.entry_speed_mps = parameters.cruise_speed_mps;  // cruise-length changes before the taper rule
+  path_planner::HighwayMission mission(parameters, *road.map);
+  const path_planner::Route route = lanelet::routing::LaneletPath(lanelet::ConstLanelets{road.right});
+  step(mission, route, 0, 0, 10, 10);
+  const auto committed = step(mission, route, 0, -6, 10, 10.6);
+  EXPECT_GT(committed.path.points.back().pose.pose.position.x, 1.75);  // the change was committed
+  for (const auto& point : committed.path.points) {
+    const auto& p = point.pose.pose.position;
+    if (lanelet::geometry::distance2d(road.left.centerline2d(), lanelet::BasicPoint2d(p.x, p.y)) < 0.05) return p.y;
+  }
+  return -1e9;
+}
+
+TEST(IntegratedHighway, TaperingSourceLaneKeepsChangeLength) {
+  // Out of a lane that tapers into a full-width target, the blended path converges on the target:
+  // keep the design change (90 m, ending near y=-96) rather than slowing to merge before the taper.
+  EXPECT_LT(taperHandoverY(taperRoad(false)), -66.8);
+}
+
+TEST(IntegratedHighway, TaperingTargetLaneHandsOverBeforeItNarrows) {
+  // Into a lane that tapers, hand over where it is still wider than the car.
+  EXPECT_GT(taperHandoverY(taperRoad(true)), -66.8);
 }
 
 TEST(IntegratedHighway, TargetLaneCarBehindHoldsMerge) {
