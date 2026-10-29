@@ -45,7 +45,7 @@ NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
 draw() { python3 -c 'import random,sys; print(random.choice([s for s in range(100) if s not in {7, 28, 29, *map(int, sys.argv[1:])}]))' "$@"; }
 (( ${#SEEDS[@]} )) || SEEDS=($(draw))
 RUN=${NAME}_s$(IFS=-; echo "${SEEDS[*]}")   # results and B2 runs/eval_vps/RUN; LOCAL (ssh_config) keeps NAME
-KEY=${RUNPOD_API_KEY:-$(sed -n 's/^api_key = "\(.*\)"/\1/p' ~/.runpod/config.toml)}
+KEY=${RUNPOD_API_KEY:-$(sed -n -E "s/^api_?key *= *[\"']?([^\"']*)[\"']?.*/\1/p" ~/.runpod/config.toml)}
 read -r -a VOLUMES <<< "${VOLUMES:-1tra2qsxbl:EU-CZ-1}"     # VOLUME_ID:DATA_CENTER ..., tried in order
 IFS=$'\n' read -r -d '' -a GPUS <<< "${GPUS:-NVIDIA GeForce RTX 5080
 NVIDIA GeForce RTX 3080

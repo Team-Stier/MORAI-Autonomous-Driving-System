@@ -39,6 +39,8 @@ def report(d, k):
     r = dict(lap=k + 1, seed=lap["seed"], scene=lap["scene"], end=lap["end"], lap_s=lap["lap_s"], penalty_s=sc.get("penalty_s"),
              returns=len(lap["returns"]), total_s=lap["total_s"], score_s=lap["total_s"], steps=len(dbg), cmd_hz=cmd_hz,
              finished=bool(sc.get("finished")) and not sc.get("competition_failed") and lap["end"] == "finish",
+             signal_by_line=dict(Counter(f"{e.get('stop_line')}:{e['type']}" for e in sc.get("events", [])
+                                         if e.get("type") in ("signal_violation", "signal_unverified"))),
              duration_s=sc.get("duration_s"), rho_end=lap.get("rho_end"), wall_s=lap.get("wall_s"),
              late=round(float(np.mean([bool(x.get("late")) for x in dbg])), 3) if dbg else None,
              model_ms=[round(float(np.percentile(ms, q)), 1) for q in (50, 95)] if ms else None,
@@ -49,6 +51,7 @@ def report(d, k):
     f = lambda x, n=0: "-" if x is None else f"{x:.{n}f}"
     line = (f"{d.parent.name} 바퀴 {r['lap']} (seed {r['seed']}): {r['end']} {f(r['lap_s'])} s + 감점 {f(r['penalty_s'])} s + 복귀 "
             f"{r['returns']}×15 s = {f(r['total_s'])} s | 위반 {r['counts'] or {}} | "
+            + (f"신호 {r['signal_by_line']} | " if r['signal_by_line'] else "")
             + (f"cmd {f(cmd_hz, 1)} Hz | rho {r['rho_end']} | " if cmd_hz is not None else "")
             + f"late {f(100 * r['late'] if r['late'] is not None else None, 1)} % | "
             f"model {'/'.join(map(str, r['model_ms'])) if r['model_ms'] else '-'} ms (p50/p95) | 날씨 {','.join(r['weather'])} | "
