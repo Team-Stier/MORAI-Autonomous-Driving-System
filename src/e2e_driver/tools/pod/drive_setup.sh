@@ -41,7 +41,9 @@ build() { ONNXRUNTIME_ROOT=$ORT catkin_make --force-cmake -DCMAKE_BUILD_TYPE=Rel
   -j"$(nproc --all | awk '{print ($1 > 16) ? 16 : $1}')" >> $V/drive_build.log 2>&1; }
 : > $V/drive_build.log
 # one retry: parallel CMake generation of node_pipeline's generated files can race (BROADCAST-16)
-if build || { log "catkin_make failed once, retrying ($(command grep -m1 -E 'error|Error' $V/drive_build.log | cut -c1-160))"; build; }; then
+# RVIZ=1 and still failing: without visualizer (the drive must not wait on the videos' RViz)
+if build || { log "catkin_make failed once, retrying ($(command grep -m1 -E 'error|Error' $V/drive_build.log | cut -c1-160))"; build; } ||
+   { [[ ${RVIZ:-0} == 1 ]] && log "build with visualizer failed: without it (no RViz)" && RVIZ=0 build; }; then
   echo "$(cat SHA 2> /dev/null || echo nosha) $REF" > BUILT; log "built $(cat BUILT)"
 else
   log "build FAILED ($REF): $(command grep -m3 -E 'error|Error' $V/drive_build.log | cut -c1-200)"; exit 1

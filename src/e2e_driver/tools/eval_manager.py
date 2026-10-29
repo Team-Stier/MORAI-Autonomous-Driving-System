@@ -366,6 +366,14 @@ def msc(action, option="", timeout=30):
     return out[-1] if out else ""
 
 
+def file_scene(path):
+    """--scene-file: a scenario as given (e.g. the organizers' sample), copied into the scenario folder under its stem,
+    no variants: -> (scene name, shadow test, manifest entry {"file": path})."""
+    src = Path(path).expanduser()
+    shutil.copy(src, Path(SCEN.replace("~", str(Path.home()))) / f"{src.stem}.json")
+    return src.stem, shade_test(json.loads(src.read_text())["shadedAreaList"][0]), {"file": str(src), "actors": []}
+
+
 def make_scene(seed):
     """-> (scene name, shadow test, scenario_variants manifest entry): lap variant generated on bc-250."""
     out = ssh(f"cd {SCEN} && python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
@@ -428,6 +436,8 @@ class Manager:
         return not (self.kmap.on_road(w).any() or self.kmap.near_path(w, self.cfg["inoperable"]["route_corridor_m"]).any())
 
     def weather(self, lap, seed, section, t):
+        if self.a.scene_file:                             # the scenario's own weather and time, as given
+            return
         w, h = self.a.weather.split(":") if self.a.weather else combo(seed, section, 0)
         if self.a.weather and lap["weather"]:
             return
@@ -467,7 +477,7 @@ class Manager:
 
     def run_lap(self, k):
         seed = self.a.seed * 1000 + k
-        name, shaded, meta = make_scene(seed)
+        name, shaded, meta = file_scene(self.a.scene_file) if self.a.scene_file else make_scene(seed)
         if self.a.sync:
             self.set_sync(False)                          # the tick period applies when sync mode is entered
         msc("pause")
@@ -592,7 +602,7 @@ class Manager:
             lap["lat"] = dict(rms_m=round(float(np.sqrt(np.mean(la ** 2))), 3), p95_m=round(float(np.percentile(la, 95)), 3),
                               max_m=round(float(la.max()), 3), n=len(la))
         if self.objects:
-            lap["validation"] = validate(meta, egot, objt, self.ring, self.highway)
+            lap["validation"] = None if self.a.scene_file else validate(meta, egot, objt, self.ring, self.highway)
             with gzip.open(self.out / f"lap{k:03d}.objects.json.gz", "wt") as f:
                 json.dump(dict(ego=egot, objects=objt), f)
         lap["return_penalty_s"] = RETURN_S * len(lap["returns"])
@@ -708,6 +718,7 @@ def main():
     ap.add_argument("--max-s", type=float, default=0.0, help="end a lap after this many seconds of driving (0: off)")
     ap.add_argument("--start-cp", type=int, default=0, help="start each lap at checkpoint J (1-13; spawned before play, "
                     "returns, CP order and the start test go on from there; lap_s = from the first move to the end)")
+    ap.add_argument("--scene-file", default="", help="drive this scenario file as given (no variants, its own weather)")
     ap.add_argument("--lap-hook", default="", help="shell command run before every lap after the first (the world paused)")
     ap.add_argument("--end-cp", type=int, default=0, help="end each lap when checkpoint K is passed (0: at the finish)")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
