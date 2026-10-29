@@ -185,6 +185,21 @@ TEST(TunnelPath, PassesPedestrianNoFasterThanPassSpeedUntilBumperIsBy) {
   EXPECT_GT(maximumSpeed(after), 6.5);
 }
 
+TEST(TunnelPath, KeepsLimitingForPedestrianBrieflyLostFromView) {
+  // Seen once 22 m ahead on the right walkway, then missing from the scans: the ceiling holds for 2 s, then lapses.
+  Scene scene(9.0);
+  const double ceiling = std::sqrt(4.5 * 4.5 + 2 * 2.0 * (22.0 - 0.25 - 3.845008));
+  ASSERT_GT(scene.plan({scene.body(22.0, -2.3, 0.5, 0.5, 1.7)}).points.size(), 2u);
+  scene.stamp += ros::Duration(0.5);
+  scene.ego.header.stamp = scene.stamp;
+  const auto lost = scene.plan({});
+  ASSERT_GT(lost.points.size(), 2u);
+  EXPECT_LE(maximumSpeed(lost), ceiling + 1e-6);
+  scene.stamp += ros::Duration(2.0);
+  scene.ego.header.stamp = scene.stamp;
+  EXPECT_GT(maximumSpeed(scene.plan({})), ceiling + 1.0);
+}
+
 TEST(TunnelPath, CountsWalkerSmearedAlongItsPathAsPedestrian) {
   // A walker's scan seen 1.8 m long and 0.35 m wide, 22 m ahead on the right walkway.
   Scene scene(9.0);

@@ -6980,6 +6980,9 @@ struct TunnelPathTrajectoryParameters {
   // faster than a speed from which a stop still fits, and pass it no faster
   // than the pass speed.
   double vulnerable_width_m=1.,vulnerable_length_m=2.5;
+  // A pedestrian lost from view (sparse scans at range) keeps limiting the
+  // speed for this long, its reach widened by the walking speed meanwhile.
+  double vulnerable_memory_sec=2.,vulnerable_walk_speed_mps=2.;
   double vulnerable_min_height_m=.3,vulnerable_reach_m=3.,vulnerable_pass_speed_mps=4.5,
       vulnerable_deceleration_mps2=2.;
   // LiDAR sees one face of a small body; plan around at least this footprint.
@@ -7032,7 +7035,7 @@ class IntegratedTrajectory {
       // MORAI status angular velocity uses the opposite yaw convention to
       // ROS IMU/map heading. Use the IMU for curve and pose propagation.
       state.curvature_inv_m=state.speed_mps>.5?imu.angular_velocity.z/state.speed_mps:0;
-      if(stamp.toSec()<last_stamp_)previous_.clear();
+      if(stamp.toSec()<last_stamp_){previous_.clear();vulnerable_memory_.clear();}
       last_stamp_=stamp.toSec();
       const double ego_dt=std::max(0.,stamp.toSec()-ego.header.stamp.toSec());
       const double rate=imu.angular_velocity.z,angle=rate*ego_dt;
@@ -7052,7 +7055,7 @@ class IntegratedTrajectory {
       const double elapsed=std::max(0.,std::min(2.,stamp.toSec()-last_position_stamp_));
       if(has_last_position_ && (stamp.toSec()<last_position_stamp_ ||
           moved>p_.solver.max_initial_distance_m+state.speed_mps*elapsed)) {
-        solver_=initial_solver_;recovery_solver_=initial_recovery_solver_;previous_.clear();
+        solver_=initial_solver_;recovery_solver_=initial_recovery_solver_;previous_.clear();vulnerable_memory_.clear();
         last_blocked_sec_=-std::numeric_limits<double>::infinity();
         ROS_INFO("[native planner] planning state restarted after a %.1f m jump",moved);
       }
@@ -7085,7 +7088,7 @@ class IntegratedTrajectory {
       std::vector<bool> coverage;
 
       integrated_native::PlanningConstraints limits;
-      limits.maximum_speed_mps=std::min({p_.solver.max_speed_mps,ceiling,vulnerableCeiling(reference,state,objects)});
+      limits.maximum_speed_mps=std::min({p_.solver.max_speed_mps,ceiling,vulnerableCeiling(reference,state,objects,stamp.toSec())});
       limits.preferred_speed_mps=referenceCurveTarget(guide,limits.maximum_speed_mps);
       auto planned=solver_.planInMap(state,reference,native,limits,route,previous_,{},coverage);
       const bool stopped_free=!planned.empty() && planned.back().speed_mps==0 && objects.objects.empty();
@@ -7185,9 +7188,18 @@ class IntegratedTrajectory {
   // Speed ceiling from pedestrian-sized bodies ahead within the reach beyond
   // our side: the speed from which a stop at the vulnerable deceleration ends
   // at the body's near face, never below the pass speed. A body whose near
-  // face our bumper has passed no longer limits the speed.
+  // face our bumper has passed no longer limits the speed. Bodies seen within
+  // the memory time count at their last place.
   double vulnerableCeiling(const std::vector<integrated_native::ReferencePoint>& reference,
-      const integrated_native::EgoState& state,const interfaces::Objects& current)const {
+      const integrated_native::EgoState& state,const interfaces::Objects& current,double now) {
+    for(const auto& object:current.objects) {
+      const double extent=std::max(object.bbox_size.x,object.bbox_size.y);
+      if(std::min(object.bbox_size.x,object.bbox_size.y)>p_.vulnerable_width_m || extent>p_.vulnerable_length_m ||
+          object.bbox_size.z<p_.vulnerable_min_height_m)continue;
+      vulnerable_memory_[object.id]={object.bbox_pose.position.x,object.bbox_pose.position.y,extent,now};
+    }
+    for(auto it=vulnerable_memory_.begin();it!=vulnerable_memory_.end();)
+      if(now-it->second[3]>p_.vulnerable_memory_sec)it=vulnerable_memory_.erase(it);else ++it;
     double ceiling=std::numeric_limits<double>::infinity(),best=std::numeric_limits<double>::infinity(),origin=0;
     std::vector<double> stations(reference.size(),0);
     for(std::size_t i=1;i<reference.size();++i) {
@@ -7196,24 +7208,23 @@ class IntegratedTrajectory {
       const double d=std::hypot(a.x-state.pose.position.x,a.y-state.pose.position.y);
       if(d<best){best=d;origin=stations[i-1];}
     }
-    for(const auto& object:current.objects) {
-      const double extent=std::max(object.bbox_size.x,object.bbox_size.y);
-      if(std::min(object.bbox_size.x,object.bbox_size.y)>p_.vulnerable_width_m || extent>p_.vulnerable_length_m ||
-          object.bbox_size.z<p_.vulnerable_min_height_m)continue;
+    for(const auto& entry:vulnerable_memory_) {
+      const double x=entry.second[0],y=entry.second[1],extent=entry.second[2],age=now-entry.second[3];
       double nearest=std::numeric_limits<double>::infinity(),along=0,lateral=0;
       for(std::size_t i=1;i<reference.size();++i) {
         const auto a=reference[i-1].position,b=reference[i].position;const double dx=b.x-a.x,dy=b.y-a.y,length=std::hypot(dx,dy);
         if(length<1e-9)continue;
-        const double raw=((object.bbox_pose.position.x-a.x)*dx+(object.bbox_pose.position.y-a.y)*dy)/(length*length);
+        const double raw=((x-a.x)*dx+(y-a.y)*dy)/(length*length);
         const double u=std::max(0.,std::min(1.,raw));
-        const double ex=object.bbox_pose.position.x-a.x-u*dx,ey=object.bbox_pose.position.y-a.y-u*dy;
+        const double ex=x-a.x-u*dx,ey=y-a.y-u*dy;
         const double distance=ex*ex+ey*ey;
         if(distance>=nearest)continue;
         const double signed_u=(i==1 && raw<0) || (i+1==reference.size() && raw>1) ? raw : u;
         nearest=distance;along=stations[i-1]+signed_u*length-origin;
         lateral=std::abs(-ex*dy+ey*dx)/length;
       }
-      if(!std::isfinite(nearest) || lateral-extent/2>p_.solver.vehicle.width_m/2+p_.vulnerable_reach_m)continue;
+      if(!std::isfinite(nearest) ||
+          lateral-extent/2>p_.solver.vehicle.width_m/2+p_.vulnerable_reach_m+p_.vulnerable_walk_speed_mps*std::max(0.,age))continue;
       const double gap=along-extent/2-p_.solver.vehicle.front_m;
       if(gap<0)continue;
       const double pass=p_.vulnerable_pass_speed_mps;
@@ -7324,6 +7335,8 @@ class IntegratedTrajectory {
   bool used_recovery_=false;
   std::vector<integrated_native::PathPoint> previous_;
   double last_stamp_=0,last_blocked_sec_=-std::numeric_limits<double>::infinity();
+  // Pedestrian-shaped bodies by track ID: map x, y, longest side and the time last seen.
+  std::map<std::uint32_t,std::array<double,4>> vulnerable_memory_;
   bool has_last_position_=false;
   integrated_native::Vec2 last_position_;
   double last_position_stamp_=0;
