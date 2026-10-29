@@ -484,6 +484,9 @@ class Manager:
         r = msc("load-scene", name + "/62", 90)
         if not r.startswith("ok"):
             raise RuntimeError(f"scene load {name}: {r}")
+        if self.a.scene_file:   # a scenario saved elsewhere replaces the Ego's network: Ego status stopped (official
+            lap_net = msc("load-network", self.a.network_preset, 60)   # sample, 10/29); the world's preset again
+            print(f"network preset {self.a.network_preset} after the scene: {lap_net[:40]}", flush=True)
         lap = dict(lap=k, scene=name, seed=seed, weather=[], checkpoints=[], returns=[], scene_meta=meta)
         egot, objt = [], []                               # replay check: (tau, x, y, s) and the objects near the Ego
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
@@ -719,6 +722,7 @@ def main():
     ap.add_argument("--start-cp", type=int, default=0, help="start each lap at checkpoint J (1-13; spawned before play, "
                     "returns, CP order and the start test go on from there; lap_s = from the first move to the end)")
     ap.add_argument("--scene-file", default="", help="drive this scenario file as given (no variants, its own weather)")
+    ap.add_argument("--network-preset", default="w1_collect", help="--scene-file: network preset loaded after the scene")
     ap.add_argument("--lap-hook", default="", help="shell command run before every lap after the first (the world paused)")
     ap.add_argument("--end-cp", type=int, default=0, help="end each lap when checkpoint K is passed (0: at the finish)")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
