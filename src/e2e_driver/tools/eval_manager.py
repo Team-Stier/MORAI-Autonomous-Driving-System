@@ -488,9 +488,12 @@ class Manager:
         if self.a.sync:
             self.set_sync(False)                          # the tick period applies when sync mode is entered
         msc("pause")
-        r = msc("load-scene", name + "/62", 90)
-        if not r.startswith("ok"):
-            raise RuntimeError(f"scene load {name}: {r}")
+        if self.a.manual_scene:   # --manual-scene: the scene was loaded in the simulator GUI (a field PC whose simulator
+            print(f"manual scene: {name} loaded by hand", flush=True)   # ignores MSC load-scene; pause/play still work)
+        else:
+            r = msc("load-scene", name + "/62", 90)
+            if not r.startswith("ok"):
+                raise RuntimeError(f"scene load {name}: {r}")
         if self.a.scene_file:   # a scenario saved elsewhere replaces the Ego's network: Ego status stopped (official
             lap_net = msc("load-network", self.a.network_preset, 60)   # sample, 10/29); the world's preset again
             print(f"network preset {self.a.network_preset} after the scene: {lap_net[:40]}", flush=True)
@@ -742,6 +745,8 @@ def main():
                     "returns, CP order and the start test go on from there; lap_s = from the first move to the end)")
     ap.add_argument("--scene-file", default="", help="drive this scenario file as given (no variants, its own weather)")
     ap.add_argument("--network-preset", default="w1_collect", help="--scene-file: network preset loaded after the scene")
+    ap.add_argument("--manual-scene", action="store_true", help="the lap's scene is loaded by hand in the simulator GUI "
+                    "(field PC whose simulator ignores MSC load-scene); pause and play still go through MSC")
     ap.add_argument("--lap-hook", default="", help="shell command run before every lap after the first (the world paused)")
     ap.add_argument("--end-cp", type=int, default=0, help="end each lap when checkpoint K is passed (0: at the finish)")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
