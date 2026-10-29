@@ -145,6 +145,16 @@ TEST(TunnelPath, StopsForPedestrianWalkingIntoCorridor) {
   EXPECT_EQ(maximumSpeed(path), 0.0);
 }
 
+TEST(TunnelPath, DoesNotHoldForBodyMovingAlongRoad) {
+  // A box fragment in our lane 9 m ahead whose box drifts toward us at 0.9 m/s as more of it comes into view.
+  Scene scene(9.0);
+  auto fragment = scene.body(9.0, -0.3, 0.5, 0.2, 2.4);
+  fragment.velocity.x = -0.9 * std::cos(scene.yaw_rad);
+  fragment.velocity.y = -0.9 * std::sin(scene.yaw_rad);
+  scene.plan({fragment});
+  EXPECT_STRNE(scene.core.planningOutcome(), "dynamic-zone-stop");
+}
+
 TEST(TunnelPath, PassesPedestrianNoFasterThanPassSpeedUntilBumperIsBy) {
   Scene beside(5.0);
   const auto passing = beside.plan({beside.body(4.5, -2.3, 0.5, 0.5, 1.7)});
@@ -159,7 +169,7 @@ TEST(TunnelPath, PassesPedestrianNoFasterThanPassSpeedUntilBumperIsBy) {
 
 TEST(TunnelPath, IgnoresLowBodiesAndBodiesBeyondReach) {
   Scene low(9.0);
-  EXPECT_GT(maximumSpeed(low.plan({low.body(22.0, -2.3, 0.5, 0.5, 0.5)})), 12.0);
+  EXPECT_GT(maximumSpeed(low.plan({low.body(22.0, -2.3, 0.5, 0.5, 0.2)})), 12.0);
   // Across the oncoming lane on the far walkway: 6 m left of our centre, beyond 1.08 + 3 m.
   Scene far(9.0);
   EXPECT_GT(maximumSpeed(far.plan({far.body(22.0, 6.0, 0.5, 0.5, 1.7)})), 12.0);

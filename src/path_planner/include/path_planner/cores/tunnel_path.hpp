@@ -6977,7 +6977,7 @@ struct TunnelPathTrajectoryParameters {
   // A small body at least this tall within the reach beyond our side can step
   // into the corridor at any time: approach it no faster than a speed from
   // which a stop still fits, and pass it no faster than the pass speed.
-  double vulnerable_min_height_m=.7,vulnerable_reach_m=3.,vulnerable_pass_speed_mps=5.5,
+  double vulnerable_min_height_m=.3,vulnerable_reach_m=3.,vulnerable_pass_speed_mps=5.5,
       vulnerable_deceleration_mps2=2.5;
   // LiDAR sees one face of a small body; plan around at least this footprint.
   double small_body_min_extent_m=.6;
@@ -7162,11 +7162,13 @@ class IntegratedTrajectory {
               [&](const interfaces::Object& q){return q.id==object.id && q.velocity_available;});
           if(inferred!=future[0].objects.end()){vx=inferred->velocity.x;vy=inferred->velocity.y;measured=true;}
         }
-        if(!measured || std::hypot(vx,vy)<p_.dynamic_zone_moving_speed_mps)continue;
+        // Only motion across the road holds: a partly seen static body shifts
+        // its box along our line of sight as we approach.
+        const double outward=-std::sin(road_yaw)*vx+std::cos(road_yaw)*vy;
+        if(!measured || std::abs(outward)<p_.dynamic_zone_moving_speed_mps)continue;
         // A body clear of our footprint and moving out of the corridor has passed.
         const double side=-std::sin(road_yaw)*(object.bbox_pose.position.x-nearest_x)+
             std::cos(road_yaw)*(object.bbox_pose.position.y-nearest_y);
-        const double outward=-std::sin(road_yaw)*vx+std::cos(road_yaw)*vy;
         if(lateral>p_.solver.vehicle.width_m/2+half && side*outward>0)continue;
         return true;
       }
