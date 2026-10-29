@@ -154,7 +154,8 @@ done; touch "$OUT/LAPS_DELIVERED") &
   stamp "first steps") &
 (sleep 240; bash "$HERE/measure.sh" 120 > "$OUT/cpu.txt" 2>&1) &
 # env guard (DRIVER=stack, HARNESS v2): 60 s after the first steps and then every 5 min, over 30 s of wall time: the
-# /morai_udp_bridge/control_cmd rate in simulator seconds (wall rate / rho, rho from /sim_clock/state) >= GUARD_CMD_HZ (25)
+# /morai_udp_bridge/control_cmd rate in simulator seconds (wall rate / rho, rho from /sim_clock/state) >= GUARD_CMD_HZ (25),
+# rho >= GUARD_RHO_MIN (0.5)
 # and the stack's "pipeline Rejected" warnings <= GUARD_REJECT_PER_MIN (130: 1 % of the ~13k pipeline outputs a minute)
 # or OUT/ENV_INVALID (the reason) is written, the managers stop and every later lap is marked env-invalid. Each window
 # goes to OUT/env_guard.log.
@@ -168,8 +169,11 @@ done; touch "$OUT/LAPS_DELIVERED") &
       c1=$(wc -l < "$OUT/w$n/cmd_w$n.csv"); r1=$(grep -c "Rejected" "$log" 2> /dev/null); t1=$(date +%s.%N)
       rho=$(tail -1 "$OUT/w$n/clk_w$n.csv" 2> /dev/null | awk -F, '{print $(NF-1)}'); rho=${rho:-1}
       read -r hz rpm bad < <(python3 -c "import sys; c,r,dt,rho=map(float,sys.argv[1:]); hz=c/dt/max(rho,0.05); rpm=r/dt*60
-print(round(hz,1), round(rpm), int(hz < ${GUARD_CMD_HZ:-25} or rpm > ${GUARD_REJECT_PER_MIN:-130}))" $((c1 - c0)) $((r1 - r0)) "$(echo "$t1 - $t0" | bc)" "$rho")
-      echo "$(date +%T) w$n cmd ${hz} Hz(sim) rejected ${rpm}/min rho $rho" >> "$OUT/env_guard.log"
+print(round(hz,1), round(rpm), int(hz < ${GUARD_CMD_HZ:-25} or rpm > ${GUARD_REJECT_PER_MIN:-130} or rho < ${GUARD_RHO_MIN:-0.5}))" $((c1 - c0)) $((r1 - r0)) "$(echo "$t1 - $t0" | bc)" "$rho")
+      # 30 +- 3 Hz in simulator seconds is the competition PC's rate (periodic nodes run on steady timers: rho < 1 calls them
+      # 1/rho times per simulator second); outside it the window is flagged, below 25 Hz or rho < 0.5 it is invalid
+      flag=$(python3 -c "import sys; print('' if 27 <= float(sys.argv[1]) <= 33 else 'OUT_OF_30+-3')" "$hz")
+      echo "$(date +%T) w$n cmd ${hz} Hz(sim) rejected ${rpm}/min rho $rho $flag" >> "$OUT/env_guard.log"
       if [[ $bad == 1 ]]; then
         echo "w$n cmd ${hz} Hz(sim) rejected ${rpm}/min rho $rho at $(date +%T)" > "$OUT/ENV_INVALID"; stamp "ENV_INVALID: $(cat "$OUT/ENV_INVALID")"
         kill $(cat /root/actor/managers.pids) 2> /dev/null; break 2
