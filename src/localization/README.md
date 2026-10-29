@@ -7,8 +7,8 @@
 
 | 구간 | Core | 위치·자세 계산 |
 | --- | --- | --- |
-| 0–14, 16 | `full_ekf.hpp` | GPS·IMU·차량 상태를 융합한 위치 추정 |
-| 15 | `tunnel_wall.hpp` | 기존 공유 상태에서 IMU·GT 속도와 수평화 LiDAR 벽 관측으로 추정 |
+| 0–16 | `full_ekf.hpp` | GPS·IMU·차량 상태를 융합한 위치 추정 |
+| GPS 이상 | `tunnel_wall.hpp` | 기존 공유 상태에서 IMU·GT 속도와 수평화 LiDAR 벽 관측으로 추정 |
 
 GPS의 Missing·Stale·ReceiveTimeout 동안에는 기존 `tunnel_wall.hpp`로 GPS에서 초기화한 공유 위치·속도 추정을 이어가고, GPS가 복구되면 해당 구간의 기본 Core로 복귀한다. 터널 출구의 섹션 전환만으로 GPS 추정을 강제하지 않는다.
 
@@ -24,7 +24,7 @@ GPS의 Missing·Stale·ReceiveTimeout 동안에는 기존 `tunnel_wall.hpp`로 G
 첫 Stage의 실제 메시지를 `process()`의 개별 인자로 받고 Odometry payload와
 `child_frame_id=base_link`를 반환한다. Pipeline이 출력 header와 발행을 담당한다.
 입력 검사·누락 제거는 공통 검사층과 연결한 Validator·Policy가 담당한다.
-일반 구간은 GPS·IMU·Status를, 15번은 IMU·Status·LiDAR를 필수 입력으로 사용한다.
+`full_ekf.hpp`는 GPS·IMU·Status를, `tunnel_wall.hpp`는 IMU·Status·LiDAR를 필수 입력으로 사용한다.
 입력 시간·frame·skew 한도는 기존 `node.yaml`을 유지한다.
 
 ## MoraiReference
@@ -62,7 +62,7 @@ MoraiReference는 기존 `EkfState` Bank의 map 위치·속도·IMU/GPS/Status �
 일반 구간 계산은 EKF가 아니며 이 공분산은 위치 추정 정확도의 측정값이 아니다.
 공개 pose/twist covariance는 기존과 같이 기본 0 배열이며 구독자는 사용하지 않는다.
 
-15번에서는 기존 GT roll·pitch·yaw와 3축 각속도, 추정 3축 선속도를 사용한다.
+`tunnel_wall.hpp`는 기존 GT roll·pitch·yaw와 3축 각속도, 추정 3축 선속도를 사용한다.
 벽 관측에는 수평화 점군을 사용하고 점별 시간 보상을 유지한다.
 터널을 나온 뒤에는 이전 일반 구간의 위치 보정 이력을 재사용하지 않고 현재 GPS로 시작한다.
 일반 구간과 터널 사이에서 자세 표현과 위치 보정 방식이 바뀐다.
