@@ -187,6 +187,7 @@ start_package object_detector
 start_package traffic_light
 start_package path_planner
 start_package velocity_planner
+start_package estop
 start_package control
 start_package speed_filter
 start_package visualizer

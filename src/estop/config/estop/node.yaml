@@ -1,0 +1,27 @@
+execution: {mode: on_input, trigger_input: path, queue_capacity: 4, max_health_checks: 10}
+section_topic: /section_annotation
+max_skew_sec: 0.2
+inputs:
+  path:
+    type: interfaces/Path
+    topic: /local_path/velocity_injected
+    frame: base_link
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
+  objects:
+    type: interfaces/Objects
+    topic: /objects
+    frame: map
+    stale_after_sec: 0.5
+    receive_timeout_sec: 0.5
+    check_skew: false
+  tf:
+    type: tf2_msgs/TFMessage
+    topic: /tf
+    stale_after_sec: 0.1
+    receive_timeout_sec: 0.1
+stages:
+  - name: estop
+    outputs:
+      - {name: estop, type: std_msgs/Bool}
+output: {topic: /estop}

@@ -1,0 +1,3 @@
+stage: estop
+inputs: [path, objects, tf]
+allowed_issues: {}

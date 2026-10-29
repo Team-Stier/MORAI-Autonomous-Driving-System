@@ -20,3 +20,8 @@
 - `launch.sh`가 ROS·워크스페이스 환경을 준비하고 자기 노드만 실행한다.
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
+
+## E-stop
+
+첫 Stage `estop`이 `/estop`(`std_msgs/Bool`, `estop` 패키지)을 받아 true인 동안 명령을 풀브레이크(accel 0, brake 1)로 바꾼 뒤 `limit` Stage로 넘긴다.
+`/estop`을 아직 받지 못했으면 `estop_pass.hpp`가 명령을 그대로 넘긴다. `limit` Core의 정지 후 출발 보조(`stop_tolerance_sec` 90 s)는 e-stop 중에도 동작할 수 있다.

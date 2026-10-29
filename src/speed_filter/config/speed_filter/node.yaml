@@ -13,7 +13,17 @@ inputs:
     frame: base_link
     stale_after_sec: 0.06
     receive_timeout_sec: 0.06
+  estop:
+    type: std_msgs/Bool
+    topic: /estop
+    check_stamp: false
+    check_skew: false
+    receive_timeout_sec: 0.5
 stages:
+  - name: estop
+    outputs:
+      - {name: command, from: command}
+      - {name: competition, from: competition}
   - name: limit
     outputs:
       - {name: command, from: command}

@@ -1,3 +1,26 @@
+estop:
+  section_core_map:
+    "0": estop_brake.hpp
+    "1": estop_brake.hpp
+    "2": estop_brake.hpp
+    "3": estop_brake.hpp
+    "4": estop_brake.hpp
+    "5": estop_brake.hpp
+    "6": estop_brake.hpp
+    "7": estop_brake.hpp
+    "8": estop_brake.hpp
+    "9": estop_brake.hpp
+    "10": estop_brake.hpp
+    "11": estop_brake.hpp
+    "12": estop_brake.hpp
+    "13": estop_brake.hpp
+    "14": estop_brake.hpp
+    "15": estop_brake.hpp
+    "16": estop_brake.hpp
+  health_core_map:
+    - when: [{input: estop, issue: Missing}]
+      priority: 100
+      core: estop_pass.hpp
 limit:
   section_core_map:
     "0": speed_guard60.hpp

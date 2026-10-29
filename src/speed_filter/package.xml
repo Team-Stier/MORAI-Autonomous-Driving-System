@@ -9,5 +9,6 @@
   <depend>morai_msgs</depend>
   <depend>node_pipeline</depend>
   <depend>roscpp</depend>
+  <depend>std_msgs</depend>
   <test_depend>gtest</test_depend>
 </package>

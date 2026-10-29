@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="estop" type="estop_node" name="estop_node" output="screen"/>
+</launch>

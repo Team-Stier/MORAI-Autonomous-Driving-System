@@ -1,0 +1,24 @@
+# Ego footprint around each path pose (rear axle), same as the hybrid_astar planner.
+vehicle_front_m: 3.845008
+vehicle_rear_m: 0.79
+vehicle_half_width_m: 1.080418
+# Spatial tolerance (larger = stricter, stops for objects further away): the ego box grows by the longitudinal
+# and lateral margins, every object box by object_margin_m on each side.
+longitudinal_margin_m: 0.5
+lateral_margin_m: 0.3
+object_margin_m: 0.2
+# Temporal tolerance (larger = stricter): a moving object is tested over t +- time_tolerance_sec around the time t
+# the ego reaches each pose, at time_samples instants. Still objects are tested once.
+time_tolerance_sec: 0.5
+time_samples: 5
+# Tested part of the path (time from now along the speed profile, and distance).
+horizon_sec: 3.0
+horizon_m: 40.0
+# Objects slower than this stay where they were seen; faster ones move with their measured velocity.
+minimum_object_speed_mps: 0.3
+# Speed floor for the time along a path without time_from_start.
+minimum_path_speed_mps: 0.5
+# Objects behind the ego rear are not tested.
+ignore_behind: true
+# The stop clears after the path has been free of objects for this long (n seconds).
+release_after_sec: 1.0
