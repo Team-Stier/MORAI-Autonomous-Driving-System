@@ -173,8 +173,11 @@ done; touch "$OUT/LAPS_DELIVERED") &
       c1=$(wc -l < "$OUT/w$n/cmd_w$n.csv"); r1=$(grep -cE "WARN /(localization|lidar_leveler)_node .*Rejected" "$log" 2> /dev/null); t1=$(date +%s.%N)
       srho=$(tail -1 "$OUT/w$n/clk_w$n.csv" 2> /dev/null | awk -F, '{print $(NF-1)}')
       mrho=$(curl -s -m 3 http://127.0.0.1:$((8094 + n))/status | grep -o 'rho [0-9.]*' | awk '{print $2}')
+      # the first window is the host check: the world's rho must reach GUARD_RHO_FIRST (0.85) or the pod is replaced
+      # (eval_pod.sh on ENV_INVALID; a 3090 / i7-11700F that passed the CPU and Vulkan gates ran at 0.5-0.66, 10/29)
+      rmin=${GUARD_RHO_MIN:-0.5}; [[ ! -e $OUT/env_guard.log ]] && rmin=${GUARD_RHO_FIRST:-0.85}
       read -r cmd rpm flag bad < <(python3 -c "import sys; c,r,dt,srho,mrho,ego=map(float,sys.argv[1:]); cmd=c/dt/max(srho,0.05); rpm=r/dt*60
-print(round(cmd,1), round(rpm), '-' if 27 <= cmd <= 33 else 'CMD_OUT_OF_30+-3', int(ego < ${GUARD_EGO_HZ:-40} or mrho < ${GUARD_RHO_MIN:-0.5} or rpm > ${GUARD_REJECT_PER_MIN:-130}))" \
+print(round(cmd,1), round(rpm), '-' if 27 <= cmd <= 33 else 'CMD_OUT_OF_30+-3', int(ego < ${GUARD_EGO_HZ:-40} or mrho < $rmin or rpm > ${GUARD_REJECT_PER_MIN:-130}))" \
         $((c1 - c0)) $((r1 - r0)) "$(echo "$t1 - $t0" | bc)" "${srho:-1}" "${mrho:-1}" "${ego:-0}")
       line="w$n ego ${ego:-?} Hz(sim) rho ${mrho:-?} (clock ${srho:-?}) upstream rejected ${rpm}/min cmd ${cmd} Hz(sim) $flag"
       echo "$(date +%T) $line" >> "$OUT/env_guard.log"

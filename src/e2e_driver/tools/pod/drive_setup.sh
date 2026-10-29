@@ -31,8 +31,11 @@ fi
 log "catkin_make ($REF)"
 rm -f BUILT
 find build -type f -name '*.o' -size 0c -delete 2> /dev/null
-if ONNXRUNTIME_ROOT=$ORT catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT=$ORT -DCATKIN_BLACKLIST_PACKAGES=visualizer \
-     -j"$(nproc --all | awk '{print ($1 > 16) ? 16 : $1}')" > $V/drive_build.log 2>&1; then
+build() { ONNXRUNTIME_ROOT=$ORT catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT=$ORT -DCATKIN_BLACKLIST_PACKAGES=visualizer \
+  -j"$(nproc --all | awk '{print ($1 > 16) ? 16 : $1}')" >> $V/drive_build.log 2>&1; }
+: > $V/drive_build.log
+# one retry: parallel CMake generation of node_pipeline's generated files can race (BROADCAST-16)
+if build || { log "catkin_make failed once, retrying ($(command grep -m1 -E 'error|Error' $V/drive_build.log | cut -c1-160))"; build; }; then
   echo "$(cat SHA 2> /dev/null || echo nosha) $REF" > BUILT; log "built $(cat BUILT)"
 else
   log "build FAILED ($REF): $(command grep -m3 -E 'error|Error' $V/drive_build.log | cut -c1-200)"; exit 1

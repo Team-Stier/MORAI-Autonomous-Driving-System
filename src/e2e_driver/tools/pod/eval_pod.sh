@@ -252,6 +252,7 @@ deliver() {  # WN: every lap_KK.ready on the pod not sent yet -> its video and r
       scp -q -F "$SSHC" "pod:$R/$K/$K.json" "$RESULTS_DIR/$VERSION/${RUN}_$K.json" 2> /dev/null &&
         python3 "$HERE/campaign_results.py" "$RESULTS_DIR" "$VERSION" >> "$LOCAL/eval_pod.log" 2>&1
     fi
+    rm -f "$LOCAL/laps/$(basename "$vid")"   # host disk: the video lives on in B2 and in the DM
     echo "$code" > "$LOCAL/${1}_$(basename "$f").sent"; log "lap $(basename "$f" .ready) sent to Discord ($code)"
   done
 }
@@ -275,7 +276,7 @@ for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
     late $((${EVAL_MAX_MIN:-110} * 60)) "eval3 (EVAL_MAX_MIN)"; P "touch /workspace/keepalive"; [[ ${LAP_DELIVER:-0} == 1 ]] && deliver "$WN"; sleep 20
   done
   [[ ${LAP_DELIVER:-0} == 1 ]] && deliver "$WN"
-  mkdir -p "$LOCAL/$WN"; rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4.raw' pod:/workspace/results/$WN/ pod:/workspace/results/$WN.log "$LOCAL/$WN/"
+  mkdir -p "$LOCAL/$WN"; rsync -rlt -e "ssh -F $SSHC" --exclude '*.mp4' --exclude '*.mp4.raw' --exclude frames pod:/workspace/results/$WN/ pod:/workspace/results/$WN.log "$LOCAL/$WN/"
   if P "test -e /workspace/results/$WN/ENV_INVALID"; then
     log "ENV_INVALID: $(P "cat /workspace/results/$WN/ENV_INVALID")"; podlog "env-invalid $POD ($NAME): $(P "cat /workspace/results/$WN/ENV_INVALID")"
     [[ -z ${ATTACH:-} && ${KEEP:-0} != 1 ]] && (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) && { bye; CPU_RETRY=$(( ${CPU_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"; }
