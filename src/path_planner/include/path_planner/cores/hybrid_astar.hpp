@@ -30,6 +30,8 @@ struct HybridAstarParameters {
   std::vector<double> lateral_offsets_m{0.0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5, -6.0, 6.0, -7.5};
   std::vector<double> steering_candidates_deg{-40, -35, -30, -25, -20, -15, -10, -5,
                                                0, 5, 10, 15, 20, 25, 30, 35, 40};
+  // Intersections between stop lines and the tunnel: road in every direction, no lane change to leave the lane.
+  std::vector<lanelet::BasicPolygon2d> open_areas;
 };
 class HybridAstar {
  public:
@@ -89,6 +91,12 @@ class HybridAstar {
           road_lanes.push_back(*neighbor);
     std::vector<lanelet::BasicPolygon2d> roads;
     for (const auto& lane : road_lanes) roads.push_back(lane.polygon2d().basicPolygon());
+    bool open_area = false;
+    for (const auto& area : parameters_.open_areas)
+      if (boost::geometry::distance(Vec2(start.position.head<2>()), area) <= parameters_.path_length_m) {
+        roads.push_back(area);
+        open_area = true;
+      }
     const double origin = project(center_reference.line, start.position.head<2>()).station;
     if (previous_offset_m_ != 0.0 && has_bypass_anchor_) {
       const auto projection = project(center_reference.line, bypass_anchor_);
@@ -175,7 +183,7 @@ class HybridAstar {
         if (candidate.points.empty()) continue;
         const double length = pathLength(candidate);
         const double progress = project(center_reference.line, xy(candidate.points.back())).station - origin;
-        const double side_cost = !left_lane_change && ref.offset_m > 0.0 ? 4*ref.offset_m*ref.offset_m : 0.0;
+        const double side_cost = !left_lane_change && !open_area && ref.offset_m > 0.0 ? 4*ref.offset_m*ref.offset_m : 0.0;
         const double cost = routeCost(candidate, center_reference.line) + 64*roadCost(candidate, roads) +
             steeringCost(candidate, start.steer) + side_cost +
             4*std::pow(ref.offset_m - previous_offset_m_, 2);

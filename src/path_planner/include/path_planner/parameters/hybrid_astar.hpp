@@ -29,6 +29,23 @@ inline HybridAstarParameters loadHybridAstarParameters(const node_pipeline::Para
   p.transition_lengths_m = params.numbers("transition_lengths_m");
   if (params.has("lateral_offsets_m")) p.lateral_offsets_m = params.numbers("lateral_offsets_m");
   p.steering_candidates_deg = params.numbers("steering_candidates_deg");
+  if (params.has("open_area_vertex_counts")) {
+    const auto counts = params.numbers("open_area_vertex_counts");
+    const auto xy = params.numbers("open_area_xy");
+    std::size_t used = 0;
+    for (double count : counts) {
+      if (!std::isfinite(count) || count < 3 || count != std::floor(count) || used + 2*count > xy.size())
+        throw std::invalid_argument("open_area_vertex_counts must list at least 3 vertices per polygon within open_area_xy");
+      lanelet::BasicPolygon2d area;
+      for (int i = 0; i < static_cast<int>(count); ++i, used += 2) {
+        if (!std::isfinite(xy[used]) || !std::isfinite(xy[used + 1]))
+          throw std::invalid_argument("open_area_xy must be finite");
+        area.emplace_back(xy[used], xy[used + 1]);
+      }
+      p.open_areas.push_back(std::move(area));
+    }
+    if (used != xy.size()) throw std::invalid_argument("open_area_xy has values beyond open_area_vertex_counts");
+  }
   const auto yaw_bins = params.integer("yaw_bins");
   const auto max_expansions = params.integer("max_expansions");
   if (yaw_bins < 8 || yaw_bins > 720)
