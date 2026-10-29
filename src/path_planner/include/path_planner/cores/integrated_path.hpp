@@ -3850,8 +3850,11 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
           (std::abs(v0)+std::abs(v1)+h*(std::abs(a0)+std::abs(a1)));
       return std::abs(residual)<=roundoff ? 0 : static_cast<double>(residual);
     }
-    double c2() const { return (a1-a0)/(2*h)+3*velocityResidual()/(h*h); }
-    double c3() const { return -2*velocityResidual()/(h*h*h); }
+    double cached_residual=velocityResidual();
+    double cached_c2=(a1-a0)/(2*h)+3*cached_residual/(h*h);
+    double cached_c3=-2*cached_residual/(h*h*h);
+    double c2() const { return cached_c2; }
+    double c3() const { return cached_c3; }
     double speed(double t) const { return v0+t*(a0+t*(c2()+t*c3())); }
     double acceleration(double t) const { return a0+t*(2*c2()+3*t*c3()); }
     double jerk(double t) const { return 2*c2()+6*t*c3(); }
@@ -4727,6 +4730,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     return output;
   }
   double followingSpeedTarget(const Context& c,const Pose2& pose,double time,double cap,double ego_speed,double road_yaw) const {
+    if(c.predictions.current.empty())return cap;
     // #LEAD_VEHICLE_HEADWAY
     // 고정 0.25m 충돌 여유만으로 속도를 최적화하면 느린 앞차의 범퍼까지
     // 접근하는 계획이 선택된다. map 경로상의 각 예정 자세에서 같은 방향의
@@ -5399,6 +5403,14 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
     // 각 작은 구간에서도 속도 다항식의 모든 극값과 arc 곡률 상한을 사용해
     // 연속 구간 전체를 보수적으로 검사한다. 표본점에서만 검사하지 않는다.
     // 측정 초기 상태, 횡가속도 2m/s²와 기존 최종 경로 재검사는 유지한다.
+    const double early_limit=p_.max_lateral_accel_mps2+1e-6;
+    if(!arc.supplied_geometry && ego.speed_mps*ego.speed_mps*std::abs(ego.curvature_inv_m)<=early_limit) {
+      for(double time:{0.,edge.h}) {
+        const double speed=edge.speed(time);
+        const double k=std::abs(arc.at(edge.s0+edge.distance(time)).curvature_inv_m);
+        if(speed*speed*k>early_limit+1e-4)return false;
+      }
+    }
     const auto samples=sampleEdge(arc,edge);
     const auto extrema=edge.extrema();
     // #LATERAL_BOUND_REFINEMENT
@@ -5602,7 +5614,15 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
       const double dt=clock[layer]-clock[layer-1];
       std::map<std::tuple<long long,long long,long long>,std::vector<State>> cells;
       const auto& before=layers.back();
+      struct ExpandedState {std::tuple<long long,long long,long long> key;State state;};
+      std::vector<std::vector<ExpandedState>> expanded(before.size());
+      std::vector<decltype(rejected_)> local_rejections(before.size());
+      std::vector<unsigned char> calculation_failed(before.size(),0);
+      const bool parallel_eligible=c.predictions.current.empty() &&
+          (!c.native_region || !c.native_region->recovery_original);
+      #pragma omp parallel for if(parallel_eligible) num_threads(4) schedule(static)
       for(std::size_t index=0;index<before.size();++index) {
+        try {
         const auto& q=before[index];
         const double jerk=p_.max_longitudinal_jerk_mps3;
         const double a_lo=std::max(minimumPlannedAcceleration(ego,clock[layer]),q.a-jerk*dt);
@@ -5629,7 +5649,7 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
                                                    (2*q.a+4*a)*dt-jerk*dt*dt)/6);
           const double hi=std::min(recovery_peak,q.v+std::min((4*q.a+2*a)*dt+jerk*dt*dt,
                                                                  (2*q.a+4*a)*dt+jerk*dt*dt)/6);
-          if(lo>hi+1e-12){++rejected_[3];continue;}
+          if(lo>hi+1e-12){++local_rejections[index][3];continue;}
           const double upper=std::max(lo,hi);
           std::vector<double> velocities{lo,upper};
           for(double v : {q.v+(q.a+a)*dt/2,0.0,cap,q.v,curve_cap,preferred_curve_cap,missionSpeedTarget(q.s,cap)})
@@ -5642,26 +5662,26 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
             // Interior acceleration/speed and lowered-ceiling recovery still
             // require the full polynomial check. Do cheap dynamics before
             // curvature traversal, temporal footprint sampling or SAT.
-            if(!speedAdmissible(edge,ego,limits,0,recovery)){++rejected_[4];continue;}
+            if(!speedAdmissible(edge,ego,limits,0,recovery)){++local_rejections[index][4];continue;}
             const double s=q.s+edge.distance(dt);
             if(!std::isfinite(s) || s<q.s-1e-9 || s>arc.length()+1e-9 ||
                s+brakingDistance(v,a)>available_space ||
                (clock[layer-1]<limits.release_time_sec &&
-                q.s+edge.distance(std::min(dt,limits.release_time_sec-clock[layer-1]))>stop_arc+1e-9)){++rejected_[2];continue;}
+                q.s+edge.distance(std::min(dt,limits.release_time_sec-clock[layer-1]))>stop_arc+1e-9)){++local_rejections[index][2];continue;}
             const double curvature=arc.curvature(q.s,s);
-            if(curvature>p_.max_curvature_inv_m+1e-6){++rejected_[5];continue;}
+            if(curvature>p_.max_curvature_inv_m+1e-6){++local_rejections[index][5];continue;}
             bool lateral_clear=true,forward_only=true;
             for(double t:edge.extrema()) {
               const double speed=edge.speed(t);
               if(speed<0)forward_only=false;
               if(std::pow(speed,2)*curvature>p_.max_lateral_accel_mps2+1e-6) lateral_clear=false;
             }
-            if(!lateral_clear && !lateralAccelerationClear(arc,edge,ego,recovery)){++rejected_[6];continue;}
+            if(!lateral_clear && !lateralAccelerationClear(arc,edge,ego,recovery)){++local_rejections[index][6];continue;}
             const bool reentry_proven=forward_only && s>=q.s &&
                 (reentry_shape_prechecked ||
                  std::any_of(reentry_clear_intervals.begin(),reentry_clear_intervals.end(),
                     [&](const std::pair<double,double>& interval) {return q.s>=interval.first && s<=interval.second;}));
-            if(!(reentry_proven ? collisionEdgeClear(c,arc,edge) : edgeClear(c,arc,edge,physical_proven))){++rejected_[7];continue;}
+            if(!(reentry_proven ? collisionEdgeClear(c,arc,edge) : edgeClear(c,arc,edge,physical_proven))){++local_rejections[index][7];continue;}
             const double cost=q.cost+edgeCost(c,arc,edge,origin_s,std::min(cap,limits.preferred_speed_mps));
             // Exact rest must not share a quantization cell with creeping or
             // nonzero acceleration. Those states cannot substitute for a wait.
@@ -5669,9 +5689,21 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
             const auto acceleration_cell=a==0 ? 0LL : (a>0 ? 1LL : -1LL)+std::llround(a/.5);
             const auto key=std::make_tuple(std::llround(s/.25),velocity_cell,acceleration_cell);
             const State next{s,v,a,cost,static_cast<int>(index)};
-            retainSpeedState(cells[key],next);
+            expanded[index].push_back({key,next});
           }
         }
+        } catch(...) {
+          calculation_failed[index]=1;
+        }
+      }
+      if(std::any_of(calculation_failed.begin(),calculation_failed.end(),
+          [](unsigned char failed){return failed!=0;})) {
+        failure_reason_="parallel-computation";
+        return {};
+      }
+      for(std::size_t index=0;index<before.size();++index) {
+        for(std::size_t j=0;j<rejected_.size();++j)rejected_[j]+=local_rejections[index][j];
+        for(const auto& entry:expanded[index])retainSpeedState(cells[entry.key],entry.state);
       }
       std::vector<State> next;
       for(const auto& cell:cells) next.insert(next.end(),cell.second.begin(),cell.second.end());
