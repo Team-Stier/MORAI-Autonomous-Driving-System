@@ -322,3 +322,20 @@ TEST(StaticDetour, StopsCommittedBypassForMovingBody) {
   // The front bumper (3.85 m ahead of the rear axle) stays behind the body's 5 s position.
   EXPECT_LT(path.points.back().pose.pose.position.y + 3.85, -155.0);
 }
+
+// Waiting at stop line 6254 for a box past it, the bypass keeps the single
+// lane between solid lines (offset at most 0.35 m) and turns out beyond the line.
+TEST(StaticDetour, StartsBypassBeyondStopLine) {
+  Scene scene;
+  scene.place(-60.404, -165.1, 1.5024, 0.0);
+  scene.add(-58.82, -147.0, 1.5708, 1.2, 1.2);
+  interfaces::Path path;
+  for (int scan = 0; scan < 3; ++scan) path = scene.plan();
+  ASSERT_FALSE(path.lateral_reference.empty());
+  for (const auto& pose : path.lateral_reference)
+    if (pose.position.y < -161.6) EXPECT_GT(pose.position.x, -60.85) << "y=" << pose.position.y;
+  const double beside = crossingX(path, -147.0);
+  ASSERT_TRUE(std::isfinite(beside));
+  EXPECT_LT(beside, -59.42 - 0.5 - 1.08 + 0.05);
+  EXPECT_LT(firstMoveTime(path), 1.0);
+}
