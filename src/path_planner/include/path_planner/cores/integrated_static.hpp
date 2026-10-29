@@ -6889,7 +6889,7 @@ struct IntegratedStaticTrajectoryParameters {
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
   double paint_release_m=0.,paint_release_lateral_m=2.,paint_release_speed_mps=1.;
   double borrow_width_m=0.,borrow_before_m=20.,borrow_after_m=12.;
-  double start_snap_m=0.;
+  double start_snap_m=0.,detour_clearance_m=0.;
 };
 
 
@@ -7059,6 +7059,7 @@ class IntegratedTrajectory {
         limits.maximum_speed_mps=std::min(limits.maximum_speed_mps,avoidance_speed);
         limits.preferred_speed_mps=std::min(limits.preferred_speed_mps,avoidance_speed);
       }
+      if(!dynamic_zone)detourGuide(reference,stationaryInLane(reference,scene),scene);
       auto planned=solver_.planInMap(state,reference,native,limits,planning_route,previous_,{},coverage,nullptr,&physical_reference);
       const bool stopped_free=!planned.empty() && planned.back().speed_mps==0 && objects.objects.empty();
       if((planned.empty() || stopped_free) && std::string(solver_.failureReason())!="initial-collision") {
@@ -7230,6 +7231,53 @@ class IntegratedTrajectory {
         if(reach>sign*bound){bound=sign*reach;widened=true;}
       }
       if(widened && covered)(*covered)[i]=true;
+    }
+  }
+  // Beside a stationary in-lane obstacle the search guide moves to the free
+  // side, detour_clearance_m clear of the body next to the obstacle, so the
+  // first candidate already passes it instead of the search falling through
+  // to many proposals and a second, wider pass. The corridor keeps its
+  // absolute bounds: each moved point shifts its lateral limits by the same
+  // amount. An obstacle whose corridor cannot hold the body on that line
+  // over the whole detour leaves the guide where it is.
+  void detourGuide(std::vector<integrated_native::ReferencePoint>& reference,const std::vector<Anchor>& anchors,
+      const interfaces::Objects& scene) const {
+    if(p_.detour_clearance_m<=0 || anchors.empty() || reference.size()<2)return;
+    const auto& v=p_.solver.vehicle;
+    const double body=v.width_m/2+p_.solver.road_margin_m,slope=.25;
+    std::vector<double> station(reference.size(),0.),offsets(reference.size(),0.);
+    for(std::size_t i=1;i<reference.size();++i)
+      station[i]=station[i-1]+std::hypot(reference[i].position.x-reference[i-1].position.x,
+                                         reference[i].position.y-reference[i-1].position.y);
+    for(const auto& anchor:anchors) {
+      const auto& size=scene.objects[anchor.index].bbox_size;
+      const double half=std::max(std::max(size.x,size.y),p_.minimum_obstacle_extent_m)/2;
+      const double target=anchor.lateral_m+(anchor.lateral_m<0?1.:-1.)*(half+v.width_m/2+p_.detour_clearance_m);
+      const double begin=anchor.station_m-half-v.front_m-1.,end=anchor.station_m+half+v.rear_m+1.;
+      const double ramp=std::abs(target)/slope;
+      std::vector<double> own(reference.size(),0.);
+      bool holds=true;
+      for(std::size_t i=0;i<reference.size() && holds;++i) {
+        const double s=station[i];
+        double share=0;
+        if(s>=begin && s<=end)share=1;
+        else if(s<begin && s>begin-ramp)share=(s-(begin-ramp))/ramp;
+        else if(s>end && s<end+ramp)share=(end+ramp-s)/ramp;
+        own[i]=share*share*(3-2*share)*target;
+        holds=own[i]==0 || (own[i]>=reference[i].min_l_m+body && own[i]<=reference[i].max_l_m-body);
+      }
+      if(holds)for(std::size_t i=0;i<reference.size();++i)
+        if(std::abs(own[i])>std::abs(offsets[i]))offsets[i]=own[i];
+    }
+    for(std::size_t i=0;i<reference.size();++i) {
+      if(offsets[i]==0)continue;
+      const auto& a=reference[i==0?0:i-1].position;
+      const auto& b=reference[i+1<reference.size()?i+1:i].position;
+      const double length=std::hypot(b.x-a.x,b.y-a.y);
+      if(length<1e-9)continue;
+      reference[i].position.x+=-(b.y-a.y)/length*offsets[i];
+      reference[i].position.y+=(b.x-a.x)/length*offsets[i];
+      reference[i].min_l_m-=offsets[i];reference[i].max_l_m-=offsets[i];
     }
   }
   // Lanelet outlines around the current anchors; reloaded when they move.

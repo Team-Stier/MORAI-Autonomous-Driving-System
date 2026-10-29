@@ -189,6 +189,36 @@ TEST(IntegratedStatic, PassesBoxRightOfCentreAtZoneStart) {
   expectPass(-59.1, -152.0, true, -60.93, -171.5, 84.8 * M_PI / 180);
 }
 
+TEST(IntegratedStatic, ApproachesAndPassesInLaneBoxInClosedLoop) {
+  Scene scene;
+  const double bx = -59.05, by = -143.32;  // box 40100004, right of the lane centre
+  // From the 3.0 m lane 55 m before the box at 12 m/s, follow each plan for 0.2 s.
+  double x = -66.1, y = -197.7, yaw = 1.30, v = 12.0, acceleration = 0, t = 100;
+  for (int k = 0; k < 150 && y < by + 10; ++k) {
+    scene.objects.objects.clear();
+    for (auto& future : scene.predictions) future.objects.clear();
+    if (std::hypot(x - bx, y - by) <= 55 && y < by + 2) scene.addBox(bx, by, 0.56);  // LiDAR ROI and view
+    scene.stamp = ros::Time(t);
+    scene.place(x, y, yaw, v);
+    scene.imu.linear_acceleration.x = acceleration;
+    const auto path = scene.plan();
+    ASSERT_GT(path.points.size(), 2u) << "held at (" << x << ", " << y << ")";
+    const interfaces::PathPoint* next = &path.points.back();
+    for (const auto& point : path.points)
+      if (point.time_from_start.toSec() >= 0.2) { next = &point; break; }
+    x = next->pose.pose.position.x;
+    y = next->pose.pose.position.y;
+    yaw = 2 * std::atan2(next->pose.pose.orientation.z, next->pose.pose.orientation.w);
+    v = std::max(0.0, static_cast<double>(next->velocity));
+    acceleration = next->acceleration;
+    t += 0.2;
+    // While the body (rear 0.79 m, front 3.85 m) overlaps the 0.56 m box along
+    // the road, its right side (half width 1.08 m) stays left of the box.
+    if (y > by - 0.28 - 3.85 && y < by + 0.28 + 0.79) EXPECT_LT(x, bx - 0.28 - 1.08);
+  }
+  EXPECT_GT(y, by + 10);  // passed the box
+}
+
 TEST(IntegratedStatic, StartsWhileBodyTouchesLanePaint) {
   Scene scene;
   // Lap pose at rest in the 3.0 m lane: 0.24 m right of its centre, yawed 4 degrees towards the right line.
