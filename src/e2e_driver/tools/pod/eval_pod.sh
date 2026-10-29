@@ -96,7 +96,7 @@ open('/bundle.py','wb').write(zlib.decompress(base64.b64decode('$(python3 -c 'im
 # sshd before the bundle (ssh and the fetch log are watchable while ~27 GB come in; setup.sh starts it again)
 early="${BUNDLE:+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server rsync > /dev/null; \
 mkdir -p ~/.ssh /run/sshd && chmod 700 ~/.ssh && echo \"\$PUBLIC_KEY\" >> ~/.ssh/authorized_keys && service ssh start) > /workspace/early.log 2>&1; }"
-start="${BUNDLE:+mkdir -p /workspace && $early python3 -c \"\$(echo $boot | base64 -d)\" && STREAMS=\${STREAMS:-16} python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
+start="${BUNDLE:+mkdir -p /workspace && $early python3 -c \"\$(echo $boot | base64 -d)\" && STREAMS=${FETCH_STREAMS:-16} python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
 ACCOUNT_WAIT_S=$([[ -s ~/.morai-secrets/config.tar ]] && echo 600 || echo 4) bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
 ${wdprep}DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 &$hold"
 if [[ -n ${ATTACH:-} ]]; then   # a box this script started before (its eval3 died early): POD, ssh config and setup are there
