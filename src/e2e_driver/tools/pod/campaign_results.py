@@ -25,7 +25,7 @@ def aggregate(root, version):
             continue
         r["file"] = f.name
         sr, wr = r.get("stack_rate"), r.get("world_rate")   # lap_report.py's clock check (mean rates over the lap)
-        if r.get("env") is None and sr is not None and wr and abs(sr / wr - 1) > 0.15:
+        if r.get("env") is None and sr is not None and wr and abs(sr / wr - 1) > 0.30:
             r["env"], r["env_reason"] = "invalid", f"stack clock {sr} vs world {wr} sim s per wall s"
         laps.append(r)
     invalid = [r for r in laps if r.get("env") == "invalid"]      # env-invalid laps: listed, never aggregated
@@ -46,7 +46,7 @@ def aggregate(root, version):
              lat_rms_mean_m=(stats([r["lat"]["rms_m"] for r in laps if r.get("lat")]) or {}).get("mean"),
              env_invalid=[r["file"] for r in invalid],
              signal_by_line=dict(sorted(lines.items())),   # "<osm stop line>:<signal_violation|signal_unverified>"
-             rows=[{k: r.get(k) for k in ("file", "seed", "scene", "end", "lap_s", "penalty_s", "returns", "score_s", "counts", "rho_end", "cmd_hz", "signal_by_line", "lat", "env")}
+             rows=[{k: r.get(k) for k in ("file", "seed", "scene", "end", "lap_s", "penalty_s", "returns", "score_s", "counts", "rho_end", "cmd_hz", "signal_by_line", "lat", "env", "stack_rate", "world_rate", "clock_flag")}
                    for r in laps])
     (root / f"{version}.json").write_text(json.dumps(s, ensure_ascii=False, indent=1))
     return s

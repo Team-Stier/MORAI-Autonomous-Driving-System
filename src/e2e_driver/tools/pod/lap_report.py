@@ -66,10 +66,15 @@ def report(d, k):
              npcs=dict(roundabout=v.get("roundabout_npcs"), highway=v.get("highway_npcs"), sizes=len(v.get("vehicle_sizes", []))) if v else None)
     if (d.parent / "ENV_INVALID").exists():           # eval3.sh's env guard tripped: kept, never aggregated
         r["env"], r["env_reason"] = "invalid", (d.parent / "ENV_INVALID").read_text().strip()
-    elif stack_rate is not None and abs(stack_rate / max(world_rate, 1e-3) - 1) > float(os.environ.get("GUARD_CLOCK_DREL", 0.15)):
-        # SIM_CLOCK's tau ran at another mean rate than the world's over the lap (its estimate settling after a stack
-        # start): the stack's timing was off for this lap
-        r["env"], r["env_reason"] = "invalid", f"stack clock {stack_rate} vs world {world_rate} sim s per wall s"
+    elif stack_rate is not None:
+        # SIM_CLOCK's tau against the world's over the lap: both estimates hold while the car stands, so a mostly
+        # stuck lap differs by 5-20 % (v0, 10/29) -> flagged; off by > GUARD_CLOCK_DREL (0.30: the estimate settling
+        # after a stack start, 0.47 vs 0.88) -> env-invalid
+        rel = abs(stack_rate / max(world_rate, 1e-3) - 1)
+        if rel > float(os.environ.get("GUARD_CLOCK_DREL", 0.30)):
+            r["env"], r["env_reason"] = "invalid", f"stack clock {stack_rate} vs world {world_rate} sim s per wall s"
+        elif rel > 0.15:
+            r["clock_flag"] = f"stack clock {stack_rate} vs world {world_rate}"
     json.dump(r, open(d / f"lap_{k + 1:02d}.json", "w"), ensure_ascii=False, indent=1)
     f = lambda x, n=0: "-" if x is None else f"{x:.{n}f}"
     span = f" CP{r['start_cp']}→{('CP' + str(r['end_cp'])) if r['end_cp'] else 'END'}" if r["start_cp"] or r["end_cp"] else ""
