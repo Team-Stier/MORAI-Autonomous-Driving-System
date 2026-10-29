@@ -21,7 +21,8 @@ def report(d, k):
     d = Path(d)
     lap = next(x for x in map(json.loads, open(d / "eval_map/laps.jsonl")) if x["lap"] == k)
     c = np.array(json.load(open(d / f"eval_map/lap{k:03d}.clock.json")))
-    dbg, ms, cmd_hz, clock_rho = [], [], None, None
+    dbg, ms, cmd_hz, clock_rho, stack_rate = [], [], None, None, None
+    world_rate = round(float((c[-1, 1] - c[0, 1]) / max(c[-1, 0] - c[0, 0], 1e-6)), 3)
     if (d / f"dbg_{d.name}.csv").exists():
         rows = list(csv.reader(open(d / f"clk_{d.name}.csv")))
         i0, i1 = rows[0].index("field.data0"), rows[0].index("field.data1")    # [wall, tau, rho, n]
@@ -41,6 +42,8 @@ def report(d, k):
             t0, t1 = np.interp([c[0, 0], c[-1, 0]], clk[:, 0], clk[:, 1])
             m = (clk[:, 0] >= c[0, 0]) & (clk[:, 0] <= c[-1, 0])
             clock_rho = round(float(clk[m, 2].mean()), 3) if m.any() else None
+            # mean rates over the lap: the stack's tau (SIM_CLOCK) and the world's (the manager's clock) per wall second
+            stack_rate = round(float((t1 - t0) / max(c[-1, 0] - c[0, 0], 1e-6)), 3)
         n = sum(t0 <= t <= t1 for t in ts)
         cmd_hz = round(n / max(t1 - t0, 1e-6), 1)
     sc, v, meta = lap.get("scorer", {}), lap.get("validation"), lap.get("scene_meta", {})
@@ -54,6 +57,7 @@ def report(d, k):
              signal_by_line=dict(Counter(f"{e.get('stop_line')}:{e['type']}" for e in sc.get("events", [])
                                          if e.get("type") in ("signal_violation", "signal_unverified"))),
              duration_s=sc.get("duration_s"), rho_end=lap.get("rho_end"), wall_s=lap.get("wall_s"), clock_rho=clock_rho,
+             stack_rate=stack_rate, world_rate=world_rate,
              lat=lap.get("lat"), lane_events=(sc.get("counts") or {}).get("lane", 0),
              late=round(float(np.mean([bool(x.get("late")) for x in dbg])), 3) if dbg else None,
              model_ms=[round(float(np.percentile(ms, q)), 1) for q in (50, 95)] if ms else None,
@@ -62,10 +66,10 @@ def report(d, k):
              npcs=dict(roundabout=v.get("roundabout_npcs"), highway=v.get("highway_npcs"), sizes=len(v.get("vehicle_sizes", []))) if v else None)
     if (d.parent / "ENV_INVALID").exists():           # eval3.sh's env guard tripped: kept, never aggregated
         r["env"], r["env_reason"] = "invalid", (d.parent / "ENV_INVALID").read_text().strip()
-    elif clock_rho is not None and r["rho_end"] and abs(clock_rho - r["rho_end"]) > float(os.environ.get("GUARD_CLOCK_DRHO", 0.15)):
-        # SIM_CLOCK's tau ran at another rate than the world (its estimate settling after a stack start): the stack's
-        # timing was off for this lap
-        r["env"], r["env_reason"] = "invalid", f"clock rho {clock_rho} vs world rho {r['rho_end']}"
+    elif stack_rate is not None and abs(stack_rate / max(world_rate, 1e-3) - 1) > float(os.environ.get("GUARD_CLOCK_DREL", 0.15)):
+        # SIM_CLOCK's tau ran at another mean rate than the world's over the lap (its estimate settling after a stack
+        # start): the stack's timing was off for this lap
+        r["env"], r["env_reason"] = "invalid", f"stack clock {stack_rate} vs world {world_rate} sim s per wall s"
     json.dump(r, open(d / f"lap_{k + 1:02d}.json", "w"), ensure_ascii=False, indent=1)
     f = lambda x, n=0: "-" if x is None else f"{x:.{n}f}"
     span = f" CP{r['start_cp']}→{('CP' + str(r['end_cp'])) if r['end_cp'] else 'END'}" if r["start_cp"] or r["end_cp"] else ""
