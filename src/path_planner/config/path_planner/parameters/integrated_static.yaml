@@ -90,3 +90,5 @@ integrated_borrow_before_m: 20.0
 integrated_borrow_after_m: 12.0
 # A start pose inside the road or paint margin is moved this far towards the reference (0 disables).
 integrated_start_snap_m: 0.3
+# Beside such an obstacle the search guide passes it this far clear on the free side (0 keeps the lane centre).
+integrated_detour_clearance_m: 0.4
