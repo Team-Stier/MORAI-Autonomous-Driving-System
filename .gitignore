@@ -8,3 +8,4 @@ src/CMakeLists.txt
 __pycache__/
 *.pyc
 .DS_Store
+CLAUDE.md
