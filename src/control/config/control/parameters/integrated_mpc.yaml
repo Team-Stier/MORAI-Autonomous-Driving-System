@@ -47,6 +47,7 @@ lateral:
   morai_weight_curvature_high: 0.03
   morai_weight_first_steer_change: 2.0
   morai_straight_steer_change_scale: 1.5
+  morai_minimum_model_speed_mps: 3.0
   morai_weight_front_point_error: 0.0
   morai_front_overhang_m: 0.845
 longitudinal:

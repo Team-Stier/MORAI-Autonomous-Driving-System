@@ -55,6 +55,20 @@ inline IntegratedStaticTrajectoryParameters loadIntegratedStaticTrajectoryParame
   if(!std::isfinite(p.dynamic_zone_speed_mps) || p.dynamic_zone_speed_mps<=0 ||
       !std::isfinite(p.dynamic_zone_approach_m) || p.dynamic_zone_approach_m<0)
     throw std::invalid_argument("invalid integrated dynamic zone cap");
+  if(r.has("integrated_paint_release_m"))p.paint_release_m=r.number("integrated_paint_release_m");
+  if(r.has("integrated_paint_release_lateral_m"))p.paint_release_lateral_m=r.number("integrated_paint_release_lateral_m");
+  if(r.has("integrated_paint_release_speed_mps"))p.paint_release_speed_mps=r.number("integrated_paint_release_speed_mps");
+  if(!std::isfinite(p.paint_release_m) || p.paint_release_m<0 || p.paint_release_m>30 ||
+      !std::isfinite(p.paint_release_lateral_m) || p.paint_release_lateral_m<=0 || p.paint_release_lateral_m>4 ||
+      !std::isfinite(p.paint_release_speed_mps) || p.paint_release_speed_mps<=0)
+    throw std::invalid_argument("invalid integrated paint release window");
+  if(r.has("integrated_borrow_width_m"))p.borrow_width_m=r.number("integrated_borrow_width_m");
+  if(r.has("integrated_borrow_before_m"))p.borrow_before_m=r.number("integrated_borrow_before_m");
+  if(r.has("integrated_borrow_after_m"))p.borrow_after_m=r.number("integrated_borrow_after_m");
+  if(!std::isfinite(p.borrow_width_m) || p.borrow_width_m<0 || p.borrow_width_m>6 ||
+      !std::isfinite(p.borrow_before_m) || p.borrow_before_m<0 || p.borrow_before_m>50 ||
+      !std::isfinite(p.borrow_after_m) || p.borrow_after_m<0 || p.borrow_after_m>50)
+    throw std::invalid_argument("invalid integrated lane borrow window");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
   if(r.has("integrated_recovery_lateral_acceleration_mps2"))p.recovery_lateral_acceleration_mps2=r.number("integrated_recovery_lateral_acceleration_mps2");

@@ -172,6 +172,11 @@ inline integrated_ai_mpc::Parameters loadIntegratedMpcParameters(const node_pipe
   if(!std::isfinite(p.lateral.morai_straight_steer_change_scale) ||
       p.lateral.morai_straight_steer_change_scale<1 || p.lateral.morai_straight_steer_change_scale>4)
     throw std::invalid_argument("invalid straight steering change scale");
+  if(params.has("lateral/morai_minimum_model_speed_mps"))
+    p.lateral.morai_minimum_model_speed_mps=params.number("lateral/morai_minimum_model_speed_mps");
+  if(!std::isfinite(p.lateral.morai_minimum_model_speed_mps) ||
+      p.lateral.morai_minimum_model_speed_mps<=0 || p.lateral.morai_minimum_model_speed_mps>10)
+    throw std::invalid_argument("invalid minimum lateral model speed");
   p.lateral.morai_weight_front_point_error = params.number("lateral/morai_weight_front_point_error");
   p.lateral.morai_front_overhang_m = params.number("lateral/morai_front_overhang_m");
   p.longitudinal.solver = params.text("longitudinal/solver");

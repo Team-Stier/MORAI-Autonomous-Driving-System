@@ -130,3 +130,46 @@ TEST(IntegratedStopStraight, BackwardStampRecountsGoFrames) {
   }
   EXPECT_FALSE(state.stopping);
 }
+
+namespace {
+// The approach() path started start_x metres further along +x, so the line at x=50 is 50 - start_x ahead.
+interfaces::Path approachFrom(double start_x) {
+  interfaces::Path path = approach();
+  for (auto& point : path.points) point.pose.pose.position.x += start_x;
+  return path;
+}
+
+interfaces::CompetitionVehicleStatus moving(double speed_mps) {
+  interfaces::CompetitionVehicleStatus status;
+  status.signed_velocity_mps = speed_mps;
+  return status;
+}
+}  // namespace
+
+TEST(IntegratedStopStraight, CloseYellowStopsWhenFrontAxleCanStop) {
+  velocity_planner::StopLineState state(stopLines());
+  auto parameters = blind();
+  parameters.yellow_stop_deceleration_mps2 = 4.5;
+  velocity_planner::IntegratedStopStraight core(parameters, state);
+  // Line 12 m ahead at 7.1 m/s: 7.1^2 / 9 + 7.1 * 0.35 = 8.09 <= 12 - 3 - 0.5.
+  core.process(approachFrom(38.0), light(interfaces::TrafficLight::YELLOW, 99.9), moving(7.1), {});
+  EXPECT_TRUE(state.stopping);
+}
+
+TEST(IntegratedStopStraight, CloseYellowPassesWithoutFrontAxleRule) {
+  velocity_planner::StopLineState state(stopLines());
+  velocity_planner::IntegratedStopStraight core(blind(), state);
+  // Comfortable stop needs 7.1^2 / 6 = 8.4 m, more than the 12 m line minus the rear-axle offset.
+  core.process(approachFrom(38.0), light(interfaces::TrafficLight::YELLOW, 99.9), moving(7.1), {});
+  EXPECT_FALSE(state.stopping);
+}
+
+TEST(IntegratedStopStraight, YellowTooCloseForFrontAxlePasses) {
+  velocity_planner::StopLineState state(stopLines());
+  auto parameters = blind();
+  parameters.yellow_stop_deceleration_mps2 = 4.5;
+  velocity_planner::IntegratedStopStraight core(parameters, state);
+  // Line 9 m ahead: 8.09 m > 9 - 3 - 0.5.
+  core.process(approachFrom(41.0), light(interfaces::TrafficLight::YELLOW, 99.9), moving(7.1), {});
+  EXPECT_FALSE(state.stopping);
+}

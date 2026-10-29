@@ -140,6 +140,9 @@ struct LateralParameters {
   double morai_straight_steer_change_scale = 1.0;
   double morai_weight_front_point_error = 0.0;
   double morai_front_overhang_m = 0.845;
+  // Lowest speed the lateral model plans with. Below it the horizon length, speed-scheduled
+  // weights and error dynamics stay at this speed, so stopping does not scale steering up.
+  double morai_minimum_model_speed_mps = 0.5;
 };
 
 // Shared by the MPC model and command-history predictor, as in the source adapter.
@@ -266,9 +269,10 @@ class AutowareLateral {
 
 namespace control { namespace autoware_ai_mpc { namespace autoware {
 
-inline int moraiPredictionSteps(int base, int maximum, double dt, double speed, double metres) {
+inline int moraiPredictionSteps(int base, int maximum, double dt, double speed, double metres,
+                                double minimum_speed) {
   if (metres==0.) return base;
-  const double needed=std::ceil(metres/(std::max(.5,std::abs(speed))*dt))+1.;
+  const double needed=std::ceil(metres/(std::max(minimum_speed,std::abs(speed))*dt))+1.;
   // Five-step blocks reduce repeated solver resizes as speed changes.
   return std::max(base,static_cast<int>(std::min(double(maximum),5.*std::ceil(needed/5.))));
 }
@@ -849,7 +853,7 @@ inline void AutowareLateral::prepareTrajectory(const control::autoware_ai_mpc::a
 
   const int steps = moraiPredictionSteps(p_.mpc_prediction_horizon,
       p_.morai_max_prediction_horizon, p_.mpc_prediction_sampling_time,
-      speed_mps, p_.morai_min_prediction_length_m);
+      speed_mps, p_.morai_min_prediction_length_m, p_.morai_minimum_model_speed_mps);
   // Preserve the source stationary terminal extension, covering the actual
   // adaptive horizon. This does not supply additional spatial path information.
   const double extension = (steps + 1) * p_.mpc_prediction_sampling_time +
@@ -869,7 +873,7 @@ inline double AutowareLateral::calculate(const control::autoware_ai_mpc::autowar
   control_pose.orientation.w = 1.0;
   const double DT = p_.mpc_prediction_sampling_time;
   const int N = moraiPredictionSteps(p_.mpc_prediction_horizon, p_.morai_max_prediction_horizon,
-      DT, speed_mps, p_.morai_min_prediction_length_m);
+      DT, speed_mps, p_.morai_min_prediction_length_m, p_.morai_minimum_model_speed_mps);
   const int DIM_X = vehicle_model_ptr_->getDimX();
   const int DIM_U = vehicle_model_ptr_->getDimU();
   const int DIM_Y = vehicle_model_ptr_->getDimY();
@@ -1232,7 +1236,7 @@ class MoraiMpc {
     for (const auto& point : reference.points) {
       control::autoware_ai_mpc::autoware::Waypoint waypoint;
       waypoint.pose = point.pose;
-      waypoint.twist.twist.linear.x = std::max(0.5, std::abs(speed_mps));
+      waypoint.twist.twist.linear.x = std::max(parameters_.lateral.morai_minimum_model_speed_mps, std::abs(speed_mps));
       waypoints.waypoints.push_back(waypoint);
     }
     const double requested = lateral_.calculate(waypoints, speed_mps,

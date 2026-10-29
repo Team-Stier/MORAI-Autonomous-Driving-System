@@ -57,4 +57,4 @@ CtrlCmd에는 Header가 없으므로 헤더를 주입하지 않는다. 출력 �
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
 `docs/`와 bag 분석 도구는 기존 데모의 설계·측정 기록을 보존한다.
 
-기존 횡방향 MPC와 차량 보정값은 유지한다. 통합 MPC는 장시간 선택되지 않았다가 다시 사용될 때 현재 실측 조향으로 예측·필터·입력 이력을 초기화한다.
+기존 횡방향 MPC와 차량 보정값은 유지하고, 횡방향 MPC가 계획에 쓰는 속도의 하한은 `lateral.morai_minimum_model_speed_mps`로 설정한다. 통합 MPC는 장시간 선택되지 않았다가 다시 사용될 때 현재 실측 조향으로 예측·필터·입력 이력을 초기화한다.

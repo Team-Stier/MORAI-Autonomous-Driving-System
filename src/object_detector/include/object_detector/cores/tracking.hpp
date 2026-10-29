@@ -13,6 +13,15 @@ namespace object_detector {
 struct TrackingParameters {
   bool use_observation_velocity = false;
   double association_gate_m = 2.5;
+  // A velocity-unknown track may move this fast between /objects frames:
+  // its gate is max(association_gate_m, min(association_max_gate_m,
+  // association_max_speed_mps * frame interval + association_speed_margin_m)).
+  // It applies when the track and the observation both extend beyond
+  // association_min_moving_extent_m. association_max_speed_mps = 0 keeps the fixed gate.
+  double association_max_speed_mps = 0;
+  double association_speed_margin_m = 0;
+  double association_max_gate_m = 0;
+  double association_min_moving_extent_m = 0;
   double shape_weight = 0.2;
   double max_age_sec = 0.6;
   double moving_vehicle_coast_sec = 0;
@@ -59,7 +68,10 @@ class Tracking {
     std::vector<Eigen::Vector3d> positions;
     for (const auto& object : objects.objects)
       positions.push_back(vector(object.position));
-    const auto matches = associateTeamHungarian(objects, positions, time);
+    const double frame_interval = has_last_time_ ? std::max(0., time - last_time_) : 0.;
+    has_last_time_ = true;
+    last_time_ = time;
+    const auto matches = associateTeamHungarian(objects, positions, time, frame_interval);
     interfaces::Objects output;
     output.objects = objects.objects;
     for (std::size_t i = 0; i < output.objects.size(); ++i) {
@@ -313,12 +325,20 @@ class Tracking {
     track.velocity_time = now;
   }
   std::vector<std::size_t> associateTeamHungarian(const interfaces::Objects& objects,
-                                    const std::vector<Eigen::Vector3d>& positions, double time) const {
+                                    const std::vector<Eigen::Vector3d>& positions, double time,
+                                    double frame_interval) const {
     const std::size_t rows = positions.size(), columns = tracks_.size() + rows;
     std::vector<std::size_t> result(rows, noTrack());
     if (rows == 0) return result;
     const double unmatched = parameters_.association_gate_m * parameters_.association_gate_m;
     const double forbidden = 1e12;
+    // Velocity-unknown tracks are expected at their last position; between
+    // sparse frames a moving body leaves the fixed gate. Distances inside the
+    // widened gate are scaled back onto the fixed gate's new-track cost.
+    const double moving_gate = parameters_.association_max_speed_mps > 0 ?
+        std::max(parameters_.association_gate_m, std::min(parameters_.association_max_gate_m,
+            parameters_.association_max_speed_mps * frame_interval + parameters_.association_speed_margin_m)) :
+        parameters_.association_gate_m;
     std::vector<std::vector<double>> costs(rows, std::vector<double>(columns, unmatched));
     for (std::size_t i = 0; i < rows; ++i) {
       for (std::size_t j = 0; j < tracks_.size(); ++j) {
@@ -328,11 +348,16 @@ class Tracking {
         if (track.velocity_available) expected = parameters_.moving_vehicle_coast_sec>0?
             vector(projected(track,time).position):expected+track.velocity*dt;
         const double distance = (positions[i] - expected).squaredNorm();
+        const double extent = parameters_.association_min_moving_extent_m;
+        const bool large = std::max(track.size.x(), track.size.y()) > extent &&
+            std::max(objects.objects[i].bbox_size.x, objects.objects[i].bbox_size.y) > extent;
+        const double gate = !track.velocity_available && large ? moving_gate : parameters_.association_gate_m;
+        const double allowed = gate * gate;
         const auto expected_body=track.velocity_available?projected(track,time):track.last_object;
         const bool same_body=sameBody(objects.objects[i],expected_body) ||
             sameBody(expected_body,objects.objects[i]);
         const auto& label = objects.objects[i].label;
-        if ((distance > unmatched && !same_body) || (label != "unknown" && track.label != "unknown" && label != track.label)) {
+        if ((distance > allowed && !same_body) || (label != "unknown" && track.label != "unknown" && label != track.label)) {
           costs[i][j] = forbidden;
           continue;
         }
@@ -340,7 +365,7 @@ class Tracking {
         // Visibility can change either observed extent; compare them symmetrically.
         const Eigen::Vector3d delta = (size - track.size).cwiseQuotient(
           size.cwiseAbs() + track.size.cwiseAbs() + Eigen::Vector3d::Constant(0.1));
-        costs[i][j] = (same_body?.25:1.)*distance + parameters_.shape_weight * delta.squaredNorm();
+        costs[i][j] = (same_body?.25:1.)*distance*(unmatched/allowed) + parameters_.shape_weight * delta.squaredNorm();
       }
     }
     // Team Tracking::match augmentation; cost/gating and tuning: workspace maintainer.
@@ -384,5 +409,7 @@ class Tracking {
   TrackingParameters parameters_;
   std::vector<Track> tracks_;
   std::uint32_t next_id_ = 1;
+  bool has_last_time_ = false;
+  double last_time_ = 0;
 };
 }  // namespace object_detector

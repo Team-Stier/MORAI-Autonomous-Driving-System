@@ -12,6 +12,17 @@ inline TrackingParameters loadTrackingParameters(const node_pipeline::ParamReade
   TrackingParameters p;
   if(reader.has("use_observation_velocity"))p.use_observation_velocity=reader.flag("use_observation_velocity");
   p.association_gate_m = reader.number("association_gate_m");
+  if(reader.has("association_max_speed_mps")) {
+    p.association_max_speed_mps = reader.number("association_max_speed_mps");
+    p.association_speed_margin_m = reader.number("association_speed_margin_m");
+    p.association_max_gate_m = reader.number("association_max_gate_m");
+    p.association_min_moving_extent_m = reader.number("association_min_moving_extent_m");
+    if(!std::isfinite(p.association_max_speed_mps) || p.association_max_speed_mps < 0 ||
+       !std::isfinite(p.association_min_moving_extent_m) || p.association_min_moving_extent_m < 0 ||
+       !std::isfinite(p.association_speed_margin_m) || p.association_speed_margin_m < 0 ||
+       !std::isfinite(p.association_max_gate_m) || p.association_max_gate_m < p.association_gate_m)
+      throw std::invalid_argument("invalid tracking association speed gate");
+  }
   p.shape_weight = reader.number("shape_weight");
   p.max_age_sec = reader.number("max_age_sec");
   if(reader.has("moving_vehicle_coast_sec"))p.moving_vehicle_coast_sec=reader.number("moving_vehicle_coast_sec");

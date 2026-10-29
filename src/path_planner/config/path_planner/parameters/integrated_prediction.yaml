@@ -1,0 +1,6 @@
+# Track gap max(0.3 s, 1.5 frames) and fit window max(0.5 s, 2.5 frames): fixed limits from 5 Hz up,
+# three samples at 3.4 Hz.
+continuity_gap_sec: 0.3
+continuity_gap_frames: 1.5
+fit_window_sec: 0.5
+fit_window_frames: 2.5

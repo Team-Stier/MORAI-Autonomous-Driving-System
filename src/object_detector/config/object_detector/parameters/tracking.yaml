@@ -1,10 +1,17 @@
 # Sensor/vehicle calibration and parameter tuning: workspace maintainer.
 association_gate_m: 2.5
+# Velocity-unknown tracks: gate = max(2.5, min(7.0, 20 m/s x frame interval + 0.1)); 2.5 m up to 0.12 s frames.
+# Only bodies longer than 1.5 m on both sides; walkers keep 2.5 m.
+association_max_speed_mps: 20.0
+association_speed_margin_m: 0.1
+association_max_gate_m: 7.0
+association_min_moving_extent_m: 1.5
 shape_weight: 0.2
 max_age_sec: 1.5
 moving_vehicle_coast_sec: 1.3
 history_size: 21
-min_velocity_observations: 8
+# 1.0 s span needs >= 8 observations from 7 Hz up; 5 lets 3.4 Hz frames reach it inside the 2.0 s window.
+min_velocity_observations: 5
 minimum_velocity_span_sec: 1.0
 pair_baseline_sec: 0.3
 history_window_sec: 2.0

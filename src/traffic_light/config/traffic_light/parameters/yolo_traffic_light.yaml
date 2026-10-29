@@ -10,3 +10,22 @@ nms_iou: 0.45
 ambiguity_margin: 0.05
 history_size: 5
 minimum_votes: 1
+unknown_votes: false
+# camera_7 640x480 pitched up 10 deg: horizon near row 296; lights above it.
+maximum_center_y_px: 285
+# Weak candidates on a head accepted within timeout_sec, verified by the lit lamp colour (OpenCV HSV hue 0-180).
+track:
+  minimum_confidence: 0.05
+  minimum_iou: 0.3
+  timeout_sec: 3.0
+  minimum_lit_pixels: 3
+  lit_saturation: 100
+  lit_value: 120
+  red_hue_below: 10
+  red_hue_above: 165
+  yellow_hue: [12, 35]
+  green_hue: [40, 95]
+dehaze:
+  transmission: 0.6
+  window: 15
+  airlight_fraction: 0.001

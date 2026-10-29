@@ -16,6 +16,11 @@ namespace velocity_planner {
 struct IntegratedStopStraightParameters {
   double blind_detection_distance_m = 0.0;  // 0 disables the blind-approach limit.
   double blind_deceleration_mps2 = 2.5;
+  // >0: a YELLOW also latches the stop when the front axle (front_axle_m ahead of the rear axle) can
+  // still stop yellow_stop_margin_m before the line at this deceleration after the response time.
+  double yellow_stop_deceleration_mps2 = 0.0;
+  double front_axle_m = 3.0;
+  double yellow_stop_margin_m = 0.5;
 };
 class IntegratedStopStraight {
  public:
@@ -91,7 +96,8 @@ class IntegratedStopStraight {
     const double speed_mps = std::abs(static_cast<double>(competition.signed_velocity_mps));
     if (!state_.stopping && contact.id != 0 && contact.id != state_.released_stop_line_id &&
         (signal == Signal::Stop ||
-         (signal == Signal::Yellow && speed_mps * speed_mps / (2 * parameters.z_mps2) <= stop_station_m))) {
+         (signal == Signal::Yellow && (speed_mps * speed_mps / (2 * parameters.z_mps2) <= stop_station_m ||
+                                       frontAxleCanStop(speed_mps, contact.station_m, parameters))))) {
       state_.stopping = true;
       state_.stopping_started_sec = path.header.stamp.toSec();
       state_.stop_line_id = contact.id;
@@ -206,6 +212,13 @@ class IntegratedStopStraight {
     std::int64_t id = 0;
     double station_m = std::numeric_limits<double>::infinity();
   };
+
+  bool frontAxleCanStop(double speed_mps, double line_station_m, const StopLineStateParameters& state) const {
+    const double deceleration = parameters_.yellow_stop_deceleration_mps2;
+    if (deceleration <= 0) return false;
+    return speed_mps * speed_mps / (2 * deceleration) + speed_mps * state.stop_response_time_sec <=
+           line_station_m - parameters_.front_axle_m - parameters_.yellow_stop_margin_m;
+  }
 
   // While the light of the approached line is unobserved (UNKNOWN/OFF) and no GO was seen for it,
   // reach blind_detection_distance_m before the line no faster than the stop profile allows for a

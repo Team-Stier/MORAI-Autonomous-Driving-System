@@ -10,6 +10,13 @@
 #include <set>
 #include <tuple>
 namespace path_planner {
+// A track continues across gaps up to max(continuity_gap_sec, continuity_gap_frames x frame interval)
+// and fits velocity on samples within max(fit_window_sec, fit_window_frames x frame interval).
+// The frame interval is the latest /objects stamp step; frame factors 0 keep the fixed limits.
+struct IntegratedPredictionParameters {
+  double continuity_gap_sec=.3,continuity_gap_frames=0;
+  double fit_window_sec=.5,fit_window_frames=0;
+};
 class IntegratedPrediction {
   struct Sample {double time,x,y,length,width;};
   struct Track {
@@ -18,14 +25,18 @@ class IntegratedPrediction {
     bool motion=false;
   };
  public:
+  explicit IntegratedPrediction(IntegratedPredictionParameters parameters={}):parameters_(parameters) {}
   using Result=std::tuple<nav_msgs::Odometry,interfaces::CompetitionVehicleStatus,
       interfaces::Objects,tf2_msgs::TFMessage,sensor_msgs::Imu,Route,PredictedObjects>;
   Result process(const nav_msgs::Odometry& ego,const interfaces::CompetitionVehicleStatus& competition,
       const interfaces::Objects& objects,const tf2_msgs::TFMessage& tf,
       const sensor_msgs::Imu& imu,const Route& route) {
     const double now=objects.header.stamp.toSec();
-    if(now<last_)history_.clear();
+    if(now<last_){history_.clear();frame_interval_=0;}
+    else if(now>last_ && last_>0)frame_interval_=now-last_;
     last_=now;
+    const double gap=std::max(parameters_.continuity_gap_sec,parameters_.continuity_gap_frames*frame_interval_);
+    const double window=std::max(parameters_.fit_window_sec,parameters_.fit_window_frames*frame_interval_);
     for(auto it=history_.begin();it!=history_.end();)
       if(now-it->second.samples.back().time>1.)it=history_.erase(it);else ++it;
     auto current=objects;PredictedObjects future;
@@ -34,7 +45,7 @@ class IntegratedPrediction {
     for(auto& o:current.objects) {
       auto& track=history_[o.id];auto& samples=track.samples;
       bool linked_motion=false;double linked_vx=0,linked_vy=0;
-      if(!samples.empty() && now-samples.back().time>.3)track=Track{};
+      if(!samples.empty() && now-samples.back().time>gap)track=Track{};
       // LiDAR can replace an ID while the same car remains visible. Carry
       // measured motion only across a unique, nearby continuation of a track
       // absent from this observation. Never merge two currently observed IDs.
@@ -44,7 +55,7 @@ class IntegratedPrediction {
           const auto& old=it->second;
           if(!old.motion || old.samples.empty() || present.count(it->first) || associated.count(it->first))continue;
           const auto& last=old.samples.back();const double dt=now-last.time;
-          if(dt<=0 || dt>.3)continue;
+          if(dt<=0 || dt>gap)continue;
           const double dx=o.position.x-last.x-old.vx*dt,dy=o.position.y-last.y-old.vy*dt;
           const double speed=std::hypot(old.vx,old.vy);
           // Partial car faces can move the OBB centre along its travel axis.
@@ -61,7 +72,7 @@ class IntegratedPrediction {
         }
       }
       if(samples.empty() || now>samples.back().time)samples.push_back({now,o.position.x,o.position.y,o.bbox_size.x,o.bbox_size.y});
-      while(samples.size()>1 && now-samples.front().time>.5)samples.pop_front();
+      while(samples.size()>1 && now-samples.front().time>window)samples.pop_front();
       if(samples.size()>=3 && samples.back().time-samples.front().time>.15) {
         std::vector<double> vx,vy;
         for(std::size_t i=0;i<samples.size();++i)for(std::size_t j=i+1;j<samples.size();++j) {
@@ -98,7 +109,8 @@ class IntegratedPrediction {
     return std::make_tuple(ego,competition,objects,tf,imu,route,future);
   }
  private:
+  IntegratedPredictionParameters parameters_;
   std::map<std::uint32_t,Track> history_;
-  double last_=0;
+  double last_=0,frame_interval_=0;
 };
 }
