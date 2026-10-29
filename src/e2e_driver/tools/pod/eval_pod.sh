@@ -81,7 +81,10 @@ e=dict(l.split('=',1) for l in open('/proc/1/environ').read().split(chr(0)) if '
 h={'Authorization':'Basic '+base64.b64encode((e['B2_APPLICATION_KEY_ID'].strip()+':'+e['B2_APPLICATION_KEY'].strip()).encode()).decode()}
 a=json.load(u.urlopen(u.Request('https://api.backblazeb2.com/b2api/v2/b2_authorize_account',headers=h)))
 open('/bundle.py','wb').write(u.urlopen(u.Request(a['downloadUrl']+'/file/morai2026-alpamayo/podimg/${BUNDLE:-}/bundle.py',headers={'Authorization':a['authorizationToken']})).read())" | base64 | tr -d '\n')
-start="${BUNDLE:+mkdir -p /workspace && python3 -c \"\$(echo $boot | base64 -d)\" && python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
+# sshd before the bundle (ssh and the fetch log are watchable while ~27 GB come in; setup.sh starts it again)
+early="${BUNDLE:+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server > /dev/null; \
+mkdir -p ~/.ssh /run/sshd && chmod 700 ~/.ssh && echo \"\$PUBLIC_KEY\" >> ~/.ssh/authorized_keys && service ssh start) > /workspace/early.log 2>&1; }"
+start="${BUNDLE:+mkdir -p /workspace && $early python3 -c \"\$(echo $boot | base64 -d)\" && python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
 ACCOUNT_WAIT_S=$([[ -s ~/.morai-secrets/config.tar ]] && echo 600 || echo 4) bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
 ${wdprep}DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 &$hold"
 if [[ -n ${ATTACH:-} ]]; then   # a box this script started before (its eval3 died early): POD, ssh config and setup are there
@@ -149,7 +152,7 @@ until P true 2> /dev/null; do late 900 "no ssh 15 min after create (setup.sh die
 log "ssh up ($ip:$port)"
 if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
   M=/root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Version
-  until P "grep -q '^\[fetch\] ' /workspace/fetch.log"; do late 900 "bundle fetch (/workspace/fetch.log)"; sleep 5; done   # all shards in
+  until P "grep -q '^\[fetch\] ' /workspace/fetch.log"; do late ${FETCH_MAX_S:-3000} "bundle fetch (/workspace/fetch.log)"; sleep 10; done   # all shards in
   if [[ -s ~/.morai-secrets/config.tar ]]; then
   scp -q -F "$SSHC" ~/.morai-secrets/V2AccountInfo.byte pod:$M/ && P "mkdir -p /workspace/morai" &&
     scp -q -F "$SSHC" ~/.morai-secrets/config.tar pod:/workspace/morai/config.tar.part && P "mv /workspace/morai/config.tar.part /workspace/morai/config.tar"
@@ -160,7 +163,7 @@ rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --ex
   --exclude object_detector/models --exclude traffic_light/models "$REPO/" pod:/workspace/MORAI-Autonomous-Driving-System/
 rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/
 log "code synced"
-until P "test -e /workspace/setup.\$(hostname).log && grep -q 'setup.*done\|rror' /workspace/setup.\$(hostname).log"; do late 1500 "setup"; sleep 3; done
+until P "test -e /workspace/setup.\$(hostname).log && grep -q 'setup.*done\|rror' /workspace/setup.\$(hostname).log"; do late $(( ${FETCH_MAX_S:-3000} + 900 )) "setup"; sleep 3; done
 P "tail -3 /workspace/setup.\$(hostname).log; nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; nproc --all" | tee -a "$LOCAL/eval_pod.log"
 P "grep -q 'setup.*done' /workspace/setup.\$(hostname).log" || { log "setup failed"; exit 1; }
 log "setup done"
