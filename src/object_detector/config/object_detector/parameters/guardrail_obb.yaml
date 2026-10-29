@@ -1,0 +1,12 @@
+map_file: ../map/kcity_lanelet2_final_circle.osm
+maximum_width_m: 0.3
+maximum_height_m: 1.4
+minimum_fragment_length_m: 0.7
+minimum_rail_length_m: 6.0
+maximum_boundary_distance_m: 1.3
+maximum_heading_error_rad: 0.3
+maximum_gap_m: 2.5
+maximum_offset_difference_m: 0.6
+memory_sec: 2.0
+maximum_fragment_length_m: 3.0
+evidence_sec: 0.5

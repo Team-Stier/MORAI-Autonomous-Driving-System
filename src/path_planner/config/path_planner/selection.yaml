@@ -76,9 +76,9 @@ local:
     '8': integrated_final_circle.hpp
     '9': integrated_roundabout.hpp
     '10': integrated_highway_approach.hpp
-    '11': integrated_highway.hpp
-    '12': integrated_highway.hpp
-    '13': integrated_highway.hpp
+    '11': integrated_highway_merge.hpp
+    '12': integrated_highway_merge.hpp
+    '13': integrated_highway_merge.hpp
     '14': integrated_path.hpp
     '15': integrated_path.hpp
     '16': integrated_final_circle.hpp

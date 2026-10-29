@@ -8,8 +8,8 @@
 #include <string>
 
 namespace path_planner {
-inline RoundaboutGapFollowMissionParameters loadRoundaboutGapFollowMissionParameters(const node_pipeline::ParamReader& params) {
-  RoundaboutGapFollowMissionParameters p;
+inline IntegratedRoundaboutParameters loadIntegratedRoundaboutParameters(const node_pipeline::ParamReader& params) {
+  IntegratedRoundaboutParameters p;
   p.control_step_m=params.number("control_step_m");p.integration_step_m=params.number("integration_step_m");
   p.sample_step_m=params.number("sample_step_m");p.local_path_length_m=params.number("local_path_length_m");
   p.reference_before_entry_m=params.number("reference_before_entry_m");
@@ -108,7 +108,4 @@ inline RoundaboutGapFollowMissionParameters loadRoundaboutGapFollowMissionParame
   return p;
 }
 
-inline IntegratedRoundaboutParameters loadIntegratedRoundaboutParameters(const node_pipeline::ParamReader& reader) {
-  return loadRoundaboutGapFollowMissionParameters(reader);
-}
 }  // namespace path_planner

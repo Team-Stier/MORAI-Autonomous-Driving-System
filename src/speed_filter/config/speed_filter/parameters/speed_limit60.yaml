@@ -1,4 +1,4 @@
-speed_limit_kph: 60.0
+speed_limit_kph: 59.0
 stop_tolerance_sec: 90.0
 start_duration_sec: 1.0
 start_accel: 0.2

@@ -10,7 +10,7 @@ vehicle_front_m: 3.845008
 vehicle_rear_m: 0.79
 vehicle_half_width_m: 1.080418
 front_gap_m: 8
-rear_gap_m: 18
+rear_gap_m: 10
 gap_confirmation_sec: 0.3
 completion_lateral_m: 0.2
 completion_heading_rad: 0.05
