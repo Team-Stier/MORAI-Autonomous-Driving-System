@@ -64,4 +64,4 @@ Prediction Core의 반환과 LocalPath Core의 입력은 **Objects 메시지를 
 
 작성 계약은 [루트 README](../../README.md)와 [Pipeline 가이드](../node_pipeline/README.md)를 따른다.
 
-새 워크스페이스의 일반·정적장애물·톨게이트 구간은 링크에서 이식한 DP/QP로 횡방향 경로를 탐색하고 속도·가속도·시간을 계획한다. `Path.lateral_reference`에는 선택된 최적화 경로의 전체 공간 형상을 전달하고 `Path.points`에는 시간 계획 구간을 전달한다. 회전교차로(S8~S10·S16)와 고주로(S11~S13)는 기존 수현 경로·미션 판단을 유지한다. GT 객체는 비교에만 사용한다.
+새 워크스페이스의 일반·정적장애물·톨게이트 구간은 링크에서 이식한 DP/QP로 횡방향 경로를 탐색하고 속도·가속도·시간을 계획한다. `Path.lateral_reference`에는 선택된 최적화 경로의 전체 공간 형상을 전달하고 `Path.points`에는 시간 계획 구간을 전달한다. 회전교차로(S8~S10·S16)와 고주로(S11~S13)는 기존 수현 경로·미션 판단을 유지한다. S4·S5의 `static_detour.hpp`는 `integrated_path.hpp`와 같은 계획을 쓰되, 설정 상자 안 정지 객체가 차로를 막으면 `detour_drivable_lanelet_ids` 영역에서 램프·유지·복귀 횡 오프셋 경로를 고정하고 속도·시간만 계획한다. GT 객체는 비교에만 사용한다.
