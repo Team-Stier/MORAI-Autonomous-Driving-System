@@ -479,16 +479,26 @@ class Manager:
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
         lats = []                                         # |lateral offset| from the route while moving (path following)
-        self.weather(lap, seed, 0, 0.0)
+        j0 = self.a.start_cp                           # --start-cp J: the lap starts at checkpoint J (a section run)
+        if j0:
+            lap["start_cp"], lap["start_how"] = j0, self.spawn(j0)
+            for _ in range(50):                           # the transform lands before play, so the move test starts there
+                e0 = self.ego()
+                if math.hypot(e0["x"] - self.cps[j0, 0], e0["y"] - self.cps[j0, 1]) < 3.0:
+                    break
+                time.sleep(0.1)
+        if self.a.end_cp:
+            lap["end_cp"] = self.a.end_cp
+        self.weather(lap, seed, j0, 0.0)
         if self.a.sync:
             lap["sync"] = dict(mode=self.set_sync(True), tick_ms=self.a.tick_ms, serial=self.a.serial, k0=self.k)
         played = threading.Event()                      # MSC confirms play 1-15 s late (10/26): record from the paused START on
         threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
         tr, clock = self.track, self.clock
-        tr.i, clock.last, passed = 0, None, 0
+        tr.i, clock.last, passed = (self.cp_i[j0] if j0 else 0), None, j0
         t_play, w_play, t_move, x0 = None, time.time(), None, None
-        best_s = 0.0
-        off_t, grace, st = None, math.inf, Stuck(clock.tau)
+        best_s = float(tr.s[self.cp_i[j0]]) if j0 else 0.0
+        off_t, grace, st = None, math.inf, Stuck(clock.tau, best_s)
         end = t_end = None
         lt = lap_s = 0.0
         interrupted = False
@@ -515,8 +525,9 @@ class Manager:
                                                  for o in objs]))
                 if e["tl"]:
                     rows["signal"].append((ns, (e["tl"], e["color"])))
-                x0 = x0 or (e["x"], e["y"])
-                if t_move is None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
+                if x0 is None and (not j0 or math.hypot(e["x"] - self.cps[j0, 0], e["y"] - self.cps[j0, 1]) < 3.0):
+                    x0 = (e["x"], e["y"])                 # --start-cp: from the spawned pose (not a late transform)
+                if t_move is None and x0 is not None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
                     t_move = tau
                 if t_play is None and (played.is_set() or t_move is not None):
                     t_play, grace = tau, tau + GRACE_S
@@ -530,6 +541,8 @@ class Manager:
                 if end is None:
                     if passed == 14 and s >= tr.s[-1] - FINISH_M:
                         end = "finish"
+                    elif self.a.end_cp and passed >= self.a.end_cp:
+                        end = f"cp{self.a.end_cp}"
                     elif lt > LIMIT_S:
                         end = "time_limit"
                     elif t_play is not None and tau - t_play > START_S and best_s < START_FRAC * tr.s[-1]:
@@ -686,6 +699,9 @@ def main():
     ap.add_argument("--tick-ms", type=int, default=100, choices=(50, 100), help="--sync: simulator step (100: one per decision, 50: two)")
     ap.add_argument("--serial", action="store_true", help="--sync: each decision's reply before the tick (default: during it)")
     ap.add_argument("--max-s", type=float, default=0.0, help="end a lap after this many seconds of driving (0: off)")
+    ap.add_argument("--start-cp", type=int, default=0, help="start each lap at checkpoint J (1-13; spawned before play, "
+                    "returns, CP order and the start test go on from there; lap_s = from the first move to the end)")
+    ap.add_argument("--end-cp", type=int, default=0, help="end each lap when checkpoint K is passed (0: at the finish)")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
     a = ap.parse_args()
     global BC, GRPC, LAUNCHER, SCEN

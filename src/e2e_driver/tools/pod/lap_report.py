@@ -47,7 +47,10 @@ def report(d, k):
     dyn = Counter(a.get("cls") for a in meta.get("actors", []) if a.get("zone", "").endswith("_dynamic"))
     r = dict(lap=k + 1, seed=lap["seed"], scene=lap["scene"], end=lap["end"], lap_s=lap["lap_s"], penalty_s=sc.get("penalty_s"),
              returns=len(lap["returns"]), total_s=lap["total_s"], score_s=lap["total_s"], steps=len(dbg), cmd_hz=cmd_hz,
-             finished=bool(sc.get("finished")) and not sc.get("competition_failed") and lap["end"] == "finish",
+             start_cp=lap.get("start_cp", 0), end_cp=lap.get("end_cp", 0),
+             # a section lap (--start-cp / --end-cp) finishes at its end CP; the scorer's CP judgment covers the whole route
+             finished=(lap["end"] == (f"cp{lap['end_cp']}" if lap.get("end_cp") else "finish")) and
+                      (bool(lap.get("start_cp")) or (bool(sc.get("finished")) and not sc.get("competition_failed"))),
              signal_by_line=dict(Counter(f"{e.get('stop_line')}:{e['type']}" for e in sc.get("events", [])
                                          if e.get("type") in ("signal_violation", "signal_unverified"))),
              duration_s=sc.get("duration_s"), rho_end=lap.get("rho_end"), wall_s=lap.get("wall_s"), clock_rho=clock_rho,
@@ -61,7 +64,8 @@ def report(d, k):
         r["env"], r["env_reason"] = "invalid", (d.parent / "ENV_INVALID").read_text().strip()
     json.dump(r, open(d / f"lap_{k + 1:02d}.json", "w"), ensure_ascii=False, indent=1)
     f = lambda x, n=0: "-" if x is None else f"{x:.{n}f}"
-    line = (f"{d.parent.name} 바퀴 {r['lap']} (seed {r['seed']}): {r['end']} {f(r['lap_s'])} s + 감점 {f(r['penalty_s'])} s + 복귀 "
+    span = f" CP{r['start_cp']}→{('CP' + str(r['end_cp'])) if r['end_cp'] else 'END'}" if r["start_cp"] or r["end_cp"] else ""
+    line = (f"{d.parent.name} 바퀴 {r['lap']}{span} (seed {r['seed']}): {r['end']} {f(r['lap_s'])} s + 감점 {f(r['penalty_s'])} s + 복귀 "
             f"{r['returns']}×15 s = {f(r['total_s'])} s | 위반 {r['counts'] or {}} | "
             + (f"신호 {r['signal_by_line']} | " if r['signal_by_line'] else "")
             + (f"횡오차 RMS {r['lat']['rms_m']} m p95 {r['lat']['p95_m']} m | " if r['lat'] else "")

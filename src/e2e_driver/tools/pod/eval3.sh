@@ -15,6 +15,7 @@
 # (--gather GATHER 0.1 s, --prep PREP process). SIMS: engine slots (N). Parts already up (worlds, stacks, an engine
 # from sync_bench.sh or an earlier KEEP_UP=1 run) are reused; KEEP_UP=1 leaves them up at the end (another wave).
 # CPU_LAYOUT=shared (SYNC default): worlds and stacks share all CPUs but the engine's 8, every world's camera spinners on 4 CPUs.
+# START_CP=J / END_CP=K: section laps (eval_manager --start-cp / --end-cp; lap_s from the first move at CP J to CP K).
 # DRIVER=stack (campaign default; DELIVER is ignored, give -): the competition stack of DRIVE_WS (stacks.sh, built by
 # drive_setup.sh) drives instead of e2e_driver + engine, on wall time (free run, SYNC=0 only). No engine; each stack's
 # /morai_udp_bridge/control_cmd is recorded (cmd_wN.csv, the first-steps signal) and the CPUs are split between the
@@ -133,7 +134,7 @@ for n in $(seq "$N"); do
   fi
   (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
     --port $((8094 + n)) --no-view --direct --host local --grpc 127.0.0.1:$((7788 + n)) --launcher "$(wdir "$n")/MoraiLauncher_Lin_Data" \
-    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
+    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" --start-cp "${START_CP:-0}" --end-cp "${END_CP:-0}" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
   echo $! >> /root/actor/managers.pids
 done
 stamp "drives started ($N managers)"
