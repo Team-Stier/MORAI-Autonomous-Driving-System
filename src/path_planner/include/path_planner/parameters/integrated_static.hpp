@@ -75,6 +75,21 @@ inline IntegratedStaticTrajectoryParameters loadIntegratedStaticTrajectoryParame
   if(r.has("integrated_detour_clearance_m"))p.detour_clearance_m=r.number("integrated_detour_clearance_m");
   if(!std::isfinite(p.detour_clearance_m) || p.detour_clearance_m<0 || p.detour_clearance_m>1.)
     throw std::invalid_argument("invalid integrated detour clearance");
+  if(r.has("integrated_static_zone_speed_mps")) {
+    p.static_zone_speed_mps=r.number("integrated_static_zone_speed_mps");
+    p.static_zone_min_x_m=r.number("integrated_static_zone_min_x_m");
+    p.static_zone_max_x_m=r.number("integrated_static_zone_max_x_m");
+    p.static_zone_min_y_m=r.number("integrated_static_zone_min_y_m");
+    p.static_zone_max_y_m=r.number("integrated_static_zone_max_y_m");
+    p.static_zone_approach_m=r.number("integrated_static_zone_approach_m");
+  }
+  for(double value:{p.static_zone_speed_mps,p.static_zone_min_x_m,p.static_zone_max_x_m,p.static_zone_min_y_m,
+                    p.static_zone_max_y_m,p.static_zone_approach_m})
+    if(!std::isfinite(value))throw std::invalid_argument("invalid integrated static zone");
+  if(p.static_zone_speed_mps<0 || p.static_zone_speed_mps>20 || (p.static_zone_speed_mps>0 &&
+      (p.static_zone_min_x_m>=p.static_zone_max_x_m || p.static_zone_min_y_m>=p.static_zone_max_y_m ||
+       p.static_zone_approach_m<0 || p.static_zone_approach_m>100)))
+    throw std::invalid_argument("invalid integrated static zone");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
   if(r.has("integrated_recovery_lateral_acceleration_mps2"))p.recovery_lateral_acceleration_mps2=r.number("integrated_recovery_lateral_acceleration_mps2");

@@ -189,6 +189,24 @@ TEST(IntegratedStatic, PassesBoxRightOfCentreAtZoneStart) {
   expectPass(-59.1, -152.0, true, -60.93, -171.5, 84.8 * M_PI / 180);
 }
 
+TEST(IntegratedStatic, CapsPlannedSpeedInStaticObstacleZone) {
+  Scene scene;
+  // 20 m before the official box zone at 7.5 m/s with nothing detected yet: no acceleration
+  // above the 7 m/s zone cap, and no faster than it inside the zone.
+  scene.place(-61.4, -175.8, 1.44, 7.5);
+  const auto path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  bool reached = false;
+  for (const auto& point : path.points) {
+    EXPECT_LT(point.velocity, 7.5 + 0.05);
+    if (point.pose.pose.position.y >= -156.0) {
+      reached = true;
+      EXPECT_LT(point.velocity, 7.0 + 0.05);
+    }
+  }
+  EXPECT_TRUE(reached);
+}
+
 TEST(IntegratedStatic, FirstSearchPassFindsSwerveBesideBox) {
   Scene scene;
   // 9.8 m before box 40100004 on the lane centre at 3.8 m/s, where the swerve begins.
@@ -269,6 +287,23 @@ TEST(IntegratedStatic, KeepsBorrowedLaneAfterPassedBoxLeavesView) {
     const auto& p = point.pose.pose.position;
     if (p.y > -143.6 - 3.85 && p.y < -143.04 + 0.79) EXPECT_LT(p.x, -59.05 - 0.28 - 1.08);
   }
+}
+
+TEST(IntegratedStatic, ForgetsWaitingBodyThatLeavesAhead) {
+  Scene scene;
+  // A body waits in the lane 15 m ahead, then drives off out of the LiDAR view.
+  scene.addBox(-62.6, -183.2, 1.8);
+  scene.place(-66.1, -197.7, 1.30, 5.0);
+  ASSERT_GT(scene.plan().points.size(), 1u);
+  scene.objects.objects.clear();
+  for (auto& future : scene.predictions) future.objects.clear();
+  scene.stamp = ros::Time(100.1);
+  scene.place(-66.1, -197.7, 1.30, 5.0);
+  const auto path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  double farthest = -1e9;
+  for (const auto& point : path.points) farthest = std::max(farthest, point.pose.pose.position.y);
+  EXPECT_GT(farthest, -183.2 + 3.0);  // drives on through the place it left
 }
 
 TEST(IntegratedStatic, MovingBodyInLaneReleasesNoPaint) {
