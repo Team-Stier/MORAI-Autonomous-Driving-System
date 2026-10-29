@@ -6967,6 +6967,10 @@ struct StaticDetourGeometryParameters {
   // Bypass memory is kept only while the rear axle is inside this map box.
   double active_min_x_m=0,active_max_x_m=0,active_min_y_m=0,active_max_y_m=0;
   std::vector<lanelet::Id> drivable_lanelet_ids;
+  // While the rear axle is on these lanelets (single lane between solid lines before
+  // the stop line) the offset stays within keep_lane_offset_m: no wheel waits on paint.
+  std::vector<lanelet::Id> keep_lane_lanelet_ids;
+  double keep_lane_offset_m=.35;
   // Solid paint polylines; wheels may cross them but not run along them.
   std::vector<std::vector<integrated_native::Vec2>> paint_lines;
   double lookahead_m=45,stationary_speed_mps=1.;
@@ -7021,17 +7025,21 @@ class IntegratedTrajectory {
   IntegratedTrajectory(StaticDetourTrajectoryParameters p,const lanelet::LaneletMap& map)
       : p_(std::move(p)),solver_(p_.solver,map),recovery_solver_(solver_,recoveryParameters(p_)),
         initial_solver_(solver_),initial_recovery_solver_(recovery_solver_) {
-    for(const auto id:p_.detour.drivable_lanelet_ids) {
-      const auto found=map.laneletLayer.find(id);
-      if(found==map.laneletLayer.end()){ROS_WARN("[static detour] drivable lanelet %lld is not in the map",static_cast<long long>(id));continue;}
-      DetourRing ring;
-      for(const auto& point:found->polygon2d()) {
-        ring.points.push_back({point.x(),point.y()});
-        ring.min.x=std::min(ring.min.x,point.x());ring.min.y=std::min(ring.min.y,point.y());
-        ring.max.x=std::max(ring.max.x,point.x());ring.max.y=std::max(ring.max.y,point.y());
+    const auto rings=[&](const std::vector<lanelet::Id>& ids,std::vector<DetourRing>& out) {
+      for(const auto id:ids) {
+        const auto found=map.laneletLayer.find(id);
+        if(found==map.laneletLayer.end()){ROS_WARN("[static detour] lanelet %lld is not in the map",static_cast<long long>(id));continue;}
+        DetourRing ring;
+        for(const auto& point:found->polygon2d()) {
+          ring.points.push_back({point.x(),point.y()});
+          ring.min.x=std::min(ring.min.x,point.x());ring.min.y=std::min(ring.min.y,point.y());
+          ring.max.x=std::max(ring.max.x,point.x());ring.max.y=std::max(ring.max.y,point.y());
+        }
+        if(ring.points.size()>=3)out.push_back(std::move(ring));
       }
-      if(ring.points.size()>=3)detour_area_.push_back(std::move(ring));
-    }
+    };
+    rings(p_.detour.drivable_lanelet_ids,detour_area_);
+    rings(p_.detour.keep_lane_lanelet_ids,detour_keep_lane_);
     // Only paint the vehicle can reach while the bypass is active is checked.
     const auto& d=p_.detour;const double reach=p_.solver.vehicle.front_m+d.maximum_offset_m+5;
     for(const auto& line:d.paint_lines)for(std::size_t i=1;i<line.size();++i) {
@@ -7435,6 +7443,11 @@ class IntegratedTrajectory {
       if(next>=stop)break;
       stop=next;profile(stop);hit=conflict();
     }
+    // A conflict left before the stop goes to the regular plan and its full checks.
+    if(hit<stop) {
+      ROS_WARN_THROTTLE(1.,"[static detour] forecast conflict %.1f m ahead not cleared by stopping",path[hit].progress_m);
+      return {};
+    }
     auto spatial=std::make_shared<std::vector<integrated_native::Pose2>>();
     for(const auto& point:path)spatial->push_back(point.pose);
     std::vector<integrated_native::PathPoint> timed;
@@ -7477,8 +7490,9 @@ class IntegratedTrajectory {
       e.s_max=e.s_min+p_.detour.face_length_m;
     return e;
   }
-  bool insideDetourArea(integrated_native::Vec2 p) const {
-    for(const auto& ring:detour_area_) {
+  bool insideDetourArea(integrated_native::Vec2 p) const {return insideRings(detour_area_,p);}
+  static bool insideRings(const std::vector<DetourRing>& area,integrated_native::Vec2 p) {
+    for(const auto& ring:area) {
       if(p.x<ring.min.x || p.x>ring.max.x || p.y<ring.min.y || p.y>ring.max.y)continue;
       bool inside=false;
       for(std::size_t i=0,j=ring.points.size()-1;i<ring.points.size();j=i++) {
@@ -7556,6 +7570,9 @@ class IntegratedTrajectory {
       const double c=std::cos(yaw),s=std::sin(yaw);
       const auto& p=path[i].pose.position;
       const auto point=[&](double x,double y)->integrated_native::Vec2 {return {p.x+x*c-y*s,p.y+x*s+y*c};};
+      // Within the single lane before the stop line the offset does not grow
+      // beyond the keep-lane limit (or the offset the vehicle already has).
+      if(std::abs(offsets[i])>std::max(d.keep_lane_offset_m,std::abs(l0)+.05) && insideRings(detour_keep_lane_,p))return {};
       if(std::abs(offsets[i])>d.area_offset_m)
         for(const auto& corner:{point(front,half),point(front,-half),point(-rear,half),point(-rear,-half),
                                 point((front-rear)/2,half),point((front-rear)/2,-half)})
@@ -7685,7 +7702,7 @@ class IntegratedTrajectory {
     return {};
   }
 
-  std::vector<DetourRing> detour_area_;
+  std::vector<DetourRing> detour_area_,detour_keep_lane_;
   std::vector<DetourSegment> detour_paint_;
   std::vector<DetourBox> detour_boxes_;
   std::vector<std::uint32_t> detour_ids_;
