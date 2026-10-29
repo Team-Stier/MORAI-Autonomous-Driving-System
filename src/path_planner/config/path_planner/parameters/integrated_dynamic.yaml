@@ -53,8 +53,8 @@ integrated_maximum_lateral_acceleration_mps2: 5.5
 integrated_preferred_lateral_acceleration_mps2: 2.8
 integrated_following_gap_m: 1.5
 integrated_following_headway_sec: 0.8
-# Match the existing control-side dynamic-zone cap in the planned trajectory.
-integrated_dynamic_zone_speed_mps: 6.944444444444445
+# 40 km/h: the prediction-based hold keeps zone crossings collision-free at this speed.
+integrated_dynamic_zone_speed_mps: 11.111111111111111
 integrated_dynamic_zone_approach_m: 30.0
 # Hold only for a body measured moving at least this fast inside the stopping envelope.
 integrated_dynamic_zone_moving_speed_mps: 0.8

@@ -20,7 +20,7 @@ std::string contents(const std::string& path) {
   return text.str();
 }
 
-// Section 6 inside the dynamic zone: route station 480 m, heading north at 25 km/h.
+// Section 6 inside the dynamic zone by default: route station 480 m, heading north at 25 km/h.
 struct Scene {
   path_planner::SharedMap map{path_planner::loadSharedMapParameters(node_pipeline::ParamReader::fromFile(
       kPackage + "/config/path_planner/parameters/shared_map.yaml", kPackage))};
@@ -31,25 +31,36 @@ struct Scene {
   sensor_msgs::Imu imu;
   tf2_msgs::TFMessage tf;
   path_planner::Route route;
-  const ros::Time stamp{100.0};
-  const double yaw_rad = std::atan2(29.88, -0.165);
+  ros::Time stamp{100.0};
+  double yaw_rad = 0;
+  std::size_t next_checkpoint = 6;
 
-  Scene() {
+  Scene() { place(-60.41, 10.0, std::atan2(29.88, -0.165), 6.9, 6); }
+
+  // Puts the vehicle at (x, y) with yaw and speed; checkpoints from `next` (0-based row) remain.
+  void place(double x, double y, double yaw, double speed_mps, std::size_t next) {
+    yaw_rad = yaw;
+    next_checkpoint = next;
     ego.header.stamp = stamp;
     ego.header.frame_id = "map";
-    ego.pose.pose.position.x = -60.41;
-    ego.pose.pose.position.y = 10.0;
+    ego.pose.pose.position.x = x;
+    ego.pose.pose.position.y = y;
     ego.pose.pose.orientation.z = std::sin(yaw_rad / 2);
     ego.pose.pose.orientation.w = std::cos(yaw_rad / 2);
-    ego.twist.twist.linear.x = 6.9;
-    competition.velocity_x_mps = 6.9;
+    ego.twist.twist.linear.x = speed_mps;
+    competition.velocity_x_mps = speed_mps;
     imu.orientation.w = 1;
     const auto all = path_planner::readCheckpoints(contents(kPackage + "/../map/checkpoints.csv"));
-    const path_planner::Checkpoints remaining(all.begin() + 6, all.end());
+    const path_planner::Checkpoints remaining(all.begin() + next, all.end());
     interfaces::Objects none;
     none.header = ego.header;
     path_planner::GlobalPath global(map);
     route = std::get<5>(global.process(ego, competition, none, tf, imu, remaining));
+  }
+
+  void advance(double seconds) {
+    stamp += ros::Duration(seconds);
+    ego.header.stamp = stamp;
   }
 
   // Object at `ahead_m` along and `left_m` across the ego heading, moving at (vx, vy) in map.
@@ -85,6 +96,11 @@ struct Scene {
     return core.process(ego, competition, objects, tf, imu, route, predictions, stamp);
   }
 };
+
+double startOffset(const interfaces::Path& path, const nav_msgs::Odometry& ego) {
+  const auto& a = path.points.front().pose.pose.position;
+  return std::hypot(a.x - ego.pose.pose.position.x, a.y - ego.pose.pose.position.y);
+}
 
 double maximumSpeed(const interfaces::Path& path) {
   double speed = 0;
@@ -139,4 +155,49 @@ TEST(IntegratedDynamic, StationaryBodyIsLeftToSolver) {
   const auto path = scene.plan({scene.object(9.0, 0.0, 0.0, 0.0, 0.8)});
   EXPECT_STRNE(scene.core.planningOutcome(), "dynamic-zone-stop");
   EXPECT_FALSE(path.points.empty());
+}
+
+TEST(IntegratedDynamic, FirstCallWhileDrivingSection14) {
+  Scene scene;
+  // Section 13 -> 14 takeover: a fresh Core whose first call is at 58 km/h mid-section.
+  scene.place(69.497, -424.011, -1.7285, 16.0, 14);
+  ASSERT_TRUE(scene.route);
+  const auto path = scene.plan({});
+  EXPECT_STRNE(scene.core.planningOutcome(), "dynamic-zone-stop");
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_LT(startOffset(path, scene.ego), 1.0);
+  EXPECT_GT(maximumSpeed(path), 10.0);
+}
+
+TEST(IntegratedDynamic, ReplansAfterCheckpointReturn) {
+  Scene scene;
+  ASSERT_GT(scene.plan({}).points.size(), 2u);
+  // A checkpoint return moves the vehicle 40 m back along the road, standing still.
+  scene.advance(1.0);
+  scene.place(-60.173, -31.510, 1.5764, 0.0, 6);
+  const auto path = scene.plan({});
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_LT(startOffset(path, scene.ego), 1.0);
+  EXPECT_GT(maximumSpeed(path), 1.0);
+}
+
+TEST(IntegratedDynamic, JumpReplansLikeAFreshCore) {
+  Scene scene;
+  ASSERT_GT(scene.plan({}).points.size(), 2u);
+  // 0.1 s later the vehicle is 8 m further on: a jump, not driving.
+  // After a jump the output equals that of a Core that never saw the earlier call.
+  scene.advance(0.1);
+  const double yaw = scene.yaw_rad;
+  scene.place(-60.41 + 8.0 * std::cos(yaw), 10.0 + 8.0 * std::sin(yaw), yaw, 6.9, 6);
+  const auto after_jump = scene.plan({});
+  Scene fresh;
+  fresh.stamp = scene.stamp;
+  fresh.place(scene.ego.pose.pose.position.x, scene.ego.pose.pose.position.y, yaw, 6.9, 6);
+  const auto reference = fresh.plan({});
+  ASSERT_EQ(after_jump.points.size(), reference.points.size());
+  for (std::size_t i = 0; i < reference.points.size(); ++i) {
+    EXPECT_NEAR(after_jump.points[i].pose.pose.position.x, reference.points[i].pose.pose.position.x, 1e-6);
+    EXPECT_NEAR(after_jump.points[i].pose.pose.position.y, reference.points[i].pose.pose.position.y, 1e-6);
+    EXPECT_NEAR(after_jump.points[i].velocity, reference.points[i].velocity, 1e-6);
+  }
 }

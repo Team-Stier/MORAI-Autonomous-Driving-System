@@ -1,0 +1,3 @@
+# Rear-axle distance before the line at which /traffic_light first reports the light; 0 disables.
+blind_detection_distance_m: 9.0
+blind_deceleration_mps2: 2.5

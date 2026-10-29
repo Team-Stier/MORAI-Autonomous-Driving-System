@@ -8,6 +8,11 @@ inline IntegratedStopLeftParameters loadIntegratedStopLeftParameters(const node_
  IntegratedStopLeftParameters p;p.extra_stop_offset_m=reader.number("extra_stop_offset_m");
  if(!std::isfinite(p.extra_stop_offset_m) || p.extra_stop_offset_m<0 || p.extra_stop_offset_m>3)
   throw std::invalid_argument("invalid left stop offset");
+ p.blind_detection_distance_m=reader.number("blind_detection_distance_m");
+ p.blind_deceleration_mps2=reader.number("blind_deceleration_mps2");
+ if(!std::isfinite(p.blind_detection_distance_m) || p.blind_detection_distance_m<0 || p.blind_detection_distance_m>50 ||
+    !std::isfinite(p.blind_deceleration_mps2) || p.blind_deceleration_mps2<=0)
+  throw std::invalid_argument("invalid left stop blind-approach parameters");
  return p;
 }
 }

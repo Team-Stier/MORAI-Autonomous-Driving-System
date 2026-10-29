@@ -44,6 +44,7 @@ class HighwayMission {
           lanelet::Locations::Germany,lanelet::Participants::Vehicle)),graph_(lanelet::routing::RoutingGraph::build(map,*rules_)) {}
   Message process(const nav_msgs::Odometry& ego,const interfaces::CompetitionVehicleStatus& competition,
                   const interfaces::Objects& observations,const Route& route) {
+    restartOnReturn(ego);
     const auto objects=motionObservations(observations);
     publishMotion(objects);
     const double speed=std::abs(competition.velocity_x_mps),now=ego.header.stamp.toSec();
@@ -100,6 +101,24 @@ class HighwayMission {
     gap_since_=-1;follow(path,objects,speed,now);publishStatus(ego,"KEEP_LANE");return path;
   }
  private:
+  // A checkpoint return or a new lap re-enters this Core behind the place of its
+  // last call, or on an earlier clock. The merge count, maneuver and speed ramp
+  // belong to that earlier pass: plan from here as on the first call.
+  void restartOnReturn(const nav_msgs::Odometry& ego) {
+    const auto& position=ego.pose.pose.position;const double now=ego.header.stamp.toSec();
+    const double back=(last_position_.x-position.x)*std::cos(last_yaw_)+(last_position_.y-position.y)*std::sin(last_yaw_);
+    if(last_call_sec_>=0 && (now<last_call_sec_ || back>5)) {
+      previous_target_mps_=-1;last_follow_sec_=-1;last_follow_emergency_=false;following_gap_targets_.clear();
+      gap_entry_time_sec_=0;last_observation_sec_=-1;motion_history_.clear();maneuver_speed_mps_=0;
+      maneuver_.points.clear();waiting_path_.points.clear();target_path_.points.clear();
+      reference_handover_m_=handover_m_=transition_m_=change_begin_m_=0;gap_since_=-1;
+      reference_change_speed_mps_=waiting_stop_station_m_=0;
+      reference_completion_lateral_m_=maneuver_completion_lateral_m_=.2;
+      reference_end_index_=0;target_lane_id_=0;completed_changes_=0;blocking_id_=0;gap_reason_.clear();mode_.clear();
+      ROS_INFO("[highway] mission restarted: %.1f m back, clock %.1f -> %.1f s",back,last_call_sec_,now);
+    }
+    last_call_sec_=now;last_position_=position;last_yaw_=headingOf(ego.pose.pose);
+  }
   struct MotionSample {double time,x,y,length,width;};
   struct GapTarget {double distance,time;};
   interfaces::Objects motionObservations(const interfaces::Objects& observed) {
@@ -220,6 +239,9 @@ class HighwayMission {
     }
     for(const auto& object:objects.objects) {
       const auto q=coordinate(target_path_,object.bbox_pose.position.x,object.bbox_pose.position.y);
+      // A car behind that is nearer the ego's own lane than the target lane
+      // follows the ego; waiting for it to pass would hold both cars forever.
+      if(q.station<origin.station && std::abs(q.lateral-occupancy.front().lateral)<std::abs(q.lateral))continue;
       const double yaw=headingOf(object.bbox_pose)-q.yaw;
       const double width=(std::abs(std::sin(yaw))*object.bbox_size.x+std::abs(std::cos(yaw))*object.bbox_size.y)/2;
       if(std::abs(q.lateral)>parameters_.vehicle_half_width_m+width+.25)continue;
@@ -767,6 +789,7 @@ class HighwayMission {
     return found->second;
   }
   double previous_target_mps_=-1,last_follow_sec_=-1;
+  double last_call_sec_=-1,last_yaw_=0;geometry_msgs::Point last_position_;
   bool last_follow_emergency_=false;
   std::map<std::uint32_t,GapTarget> following_gap_targets_;
   double gap_entry_time_sec_=0;

@@ -22,6 +22,7 @@ map 경로에 속도를 주입하고 신호등 정지를 적용한 뒤 base_link
 - `stop_line_state.yaml`의 `x_m`만큼 정지선 앞을 뒷차축 기준 목표점으로 잡으며, 좌회전은 `stop_line_cutoff_left.yaml`의 `extra_stop_offset_m`(1.5 m)를 추가한다. 목표점 이전 `y_m` 범위에서는 남은 거리 `d = v²/(2 × z_mps2) + v × stop_response_time_sec`를 만족하는 속도 상한과 기존 속도 중 작은 값을 적용한다. 목표점까지 거리가 `stop_position_tolerance_m` 이하인 점과 목표점 이후의 속도는 0이다. 남은 거리가 `y_m`보다 작다는 이유로 경로 전체를 즉시 정지시키지 않는다.
 - 시간 경로가 짧아져 정지선이 검출 범위에서 사라지면 기존 정지선의 지도 위치와 남은 거리를 유지한다. 해당 정지선을 통과한 뒤에는 그 선의 정지 상태를 해제한다. 진행 방향과 정지선 위치를 확인할 수 없는 회피 경로에서는 정지를 유지한다.
 - 노란불은 `signed_velocity_mps² / (2 × z_mps2)`가 목표점까지의 경로 거리 이하이면 정지한다.
+- `integrated_stop_straight.hpp`·`integrated_stop_left.hpp`·`integrated_stop_dynamic.hpp`는 정지 상태가 아니고 최초 접촉 정지선이 있으며 신호가 UNKNOWN·OFF이고 그 정지선에서 진행 신호를 관측하지 않았으면, 정지선까지 `blind_detection_distance_m` 이내의 점에 목표점까지 남은 거리가 `blind_detection_distance_m`에서 목표점 오프셋을 뺀 값일 때의 위 정지 속도 상한을, 그 앞의 점에 `blind_deceleration_mps2` 감속으로 그 상한에 도달하는 속도 상한을 적용한다. 정지선 이후의 점은 제한하지 않는다. 진행 신호 관측은 최초 접촉 정지선이 바뀔 때까지 유지한다. 계수는 `config/velocity_planner/parameters/<core>.yaml`이며 `blind_detection_distance_m: 0`은 비활성이다.
 - 정지 상태와 시작 시각은 세 cutoff Core의 Bank에서 공유한다. 해당 방향의 진행 신호가 서로 다른 영상 stamp로 연속 `n_frames`회 관측되거나, 경로 stamp 기준 정지 시작 후 `stop_timeout_sec`(기본 100초)가 지나면 해제한다. 정지 신호·진행 신호 매핑 변경은 확인 횟수를 초기화한다.
 - 시간 만료로 해제한 정지선은 경로의 최초 접촉 정지선이 달라지거나 접촉이 사라질 때까지 재정지하지 않는다.
 - `stop_line_pass_through.hpp`는 진행 신호 확인 횟수를 초기화하고 시간 만료 전까지 기존 정지 상태를 유지한다.

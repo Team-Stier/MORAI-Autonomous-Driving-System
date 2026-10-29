@@ -6979,7 +6979,8 @@ class IntegratedPath {
 class IntegratedTrajectory {
  public:
   IntegratedTrajectory(IntegratedPathTrajectoryParameters p,const lanelet::LaneletMap& map)
-      : p_(std::move(p)),solver_(p_.solver,map),recovery_solver_(solver_,recoveryParameters(p_)) {}
+      : p_(std::move(p)),solver_(p_.solver,map),recovery_solver_(solver_,recoveryParameters(p_)),
+        initial_solver_(solver_),initial_recovery_solver_(recovery_solver_) {}
   const char* outcome()const{return outcome_;}
   std::string diagnostics()const{return used_recovery_ ? "dynamics-recovery "+recovery_solver_.diagnostics():solver_.diagnostics();}
   Message calculate(const nav_msgs::Odometry& ego,const interfaces::CompetitionVehicleStatus& status,
@@ -7024,6 +7025,20 @@ class IntegratedTrajectory {
       state.pose.position.x+=std::cos(state.pose.yaw_rad)*dx-std::sin(state.pose.yaw_rad)*dy;
       state.pose.position.y+=std::sin(state.pose.yaw_rad)*dx+std::cos(state.pose.yaw_rad)*dy;
       state.pose.yaw_rad+=angle;
+      // A checkpoint return, or this Core taking over after another section's
+      // Core drove on, moves the vehicle away from the place of the last call.
+      // Previous plans, maneuvers and per-object memories belong to that place:
+      // restart both solvers from their constructed state and replan from here.
+      const double moved=std::hypot(state.pose.position.x-last_position_.x,state.pose.position.y-last_position_.y);
+      // Planner stalls of up to 2 s at full speed stay below this bound.
+      const double elapsed=std::max(0.,std::min(2.,stamp.toSec()-last_position_stamp_));
+      if(has_last_position_ && (stamp.toSec()<last_position_stamp_ ||
+          moved>p_.solver.max_initial_distance_m+state.speed_mps*elapsed)) {
+        solver_=initial_solver_;recovery_solver_=initial_recovery_solver_;previous_.clear();
+        last_blocked_sec_=-std::numeric_limits<double>::infinity();
+        ROS_INFO("[native planner] planning state restarted after a %.1f m jump",moved);
+      }
+      has_last_position_=true;last_position_=state.pose.position;last_position_stamp_=stamp.toSec();
 
       auto reference=solver_.mapReference(state,route);
       Message guide;
@@ -7218,9 +7233,13 @@ class IntegratedTrajectory {
   const char* outcome_="native-search";
   IntegratedPathTrajectoryParameters p_;
   integrated_native::IntegratedSolver solver_,recovery_solver_;
+  const integrated_native::IntegratedSolver initial_solver_,initial_recovery_solver_;
   bool used_recovery_=false;
   std::vector<integrated_native::PathPoint> previous_;
   double last_stamp_=0,last_blocked_sec_=-std::numeric_limits<double>::infinity();
+  bool has_last_position_=false;
+  integrated_native::Vec2 last_position_;
+  double last_position_stamp_=0;
 };
  public:
   IntegratedPath(IntegratedPathParameters p,SharedMap& map):mission_parameters_(p.mission),

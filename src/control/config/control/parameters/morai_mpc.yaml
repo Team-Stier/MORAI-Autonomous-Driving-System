@@ -5,7 +5,7 @@ dynamic_zone_min_x_m: -75.0
 dynamic_zone_max_x_m: -40.0
 dynamic_zone_min_y_m: -100.0
 dynamic_zone_max_y_m: 85.0
-dynamic_zone_speed_mps: 6.944444444444445  # 25 km/h
+dynamic_zone_speed_mps: 11.11111111111111  # 40 km/h
 dynamic_zone_approach_m: 30.0
 # Set 0 to disable the temporary MPC reference history trial.
 reference_history_length_m: 4.0

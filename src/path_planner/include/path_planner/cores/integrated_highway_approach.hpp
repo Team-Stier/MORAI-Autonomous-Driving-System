@@ -103,6 +103,15 @@ class PathPlannerMission {
         speed*std::sqrt(6*parameters_.maximum_lane_offset_m/parameters_.maximum_lateral_acceleration_mps2)+
         parameters_.vehicle_front_m+parameters_.stop_buffer_m);
     reference_lane_change_=false;
+    // A new lap can restart the clock. Object memories and a maneuver from the
+    // later time would never expire, so plan from here as on the first call.
+    if(ego.header.stamp.toSec()<last_call_sec_) {
+      tracks_.clear();lane_change_.points.clear();normal_lane_change_=false;handover_m_=0;
+      continuation_route_=Route{};continuation_index_=0;
+      dynamic_zone_last_blocked_sec_=-std::numeric_limits<double>::infinity();
+      ROS_INFO("[path_planner] planning state restarted after a clock rewind");
+    }
+    last_call_sec_=ego.header.stamp.toSec();
     updateTracks(objects, ego.header.stamp.toSec());
     publishMotion(objects);
     Message current;
@@ -226,6 +235,7 @@ class PathPlannerMission {
 
  private:
   double prediction_speed_mps_=0;
+  double last_call_sec_=-std::numeric_limits<double>::infinity();
   double dynamic_zone_last_blocked_sec_ = -std::numeric_limits<double>::infinity();
   static double headingOf(const geometry_msgs::Pose& p) {
     return std::atan2(2*(p.orientation.w*p.orientation.z+p.orientation.x*p.orientation.y),
