@@ -85,10 +85,12 @@ TEST(TunnelRoadRoi, KeepsLanePointsAtEveryHeight) {
 }
 
 TEST(TunnelRoadRoi, DropsWallClearanceBehindAndBeyondPortal) {
-  // Right wall at -6.01 m keeps 0.6 m clear: lateral -5.9 m is 4.2 m right of us.
-  const Point wall{15.f, -4.2f, 1.0f}, behind{-2.f, -2.6f, 0.5f};
-  const auto inside = kept(Frame(-30.0, {wall, behind}));
+  // Walls at -6.01 / +6.00 m keep 1.0 m clear: lateral -5.9 m is 4.2 m right of us, +5.35 m (a ledge along the
+  // left wall) is 7.05 m left of us.
+  const Point wall{15.f, -4.2f, 1.0f}, ledge{15.f, 7.05f, 0.5f}, behind{-2.f, -2.6f, 0.5f};
+  const auto inside = kept(Frame(-30.0, {wall, ledge, behind}));
   EXPECT_FALSE(contains(inside, wall));
+  EXPECT_FALSE(contains(inside, ledge));
   EXPECT_FALSE(contains(inside, behind));
   // 25 m before the entrance portal (station -58.6 m) the walkway band does not apply.
   const Point outside{15.f, -2.6f, 0.5f};

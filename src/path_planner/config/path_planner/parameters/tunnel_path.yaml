@@ -56,11 +56,11 @@ integrated_following_headway_sec: 0.8
 # 45 km/h through section 15; the zone box covers the whole section.
 integrated_dynamic_zone_speed_mps: 12.5
 integrated_dynamic_zone_approach_m: 30.0
-# Hold only for a body measured moving at least this fast inside the stopping envelope.
+# Hold only for a body measured crossing the road at least this fast inside the stopping envelope.
 integrated_dynamic_zone_moving_speed_mps: 0.8
-# Moving footprints up to 1.5 m grow 0.3 m per forecast second, at most 1.0 m.
+# Footprints up to 1.5 m are small bodies; their forecasts do not grow (box fragments seen at 3.4 Hz carry false motion).
 integrated_vulnerable_extent_m: 1.5
-integrated_vulnerable_uncertainty_mps: 0.3
+integrated_vulnerable_uncertainty_mps: 0.0
 integrated_vulnerable_uncertainty_max_m: 1.0
 integrated_interaction_speed_searches: 12
 
@@ -83,9 +83,9 @@ integrated_minimum_curve_speed_mps: 4.166666666666667
 # Keep the optimized curve close to the Lanelet reference.
 integrated_reference_piece_m: 7.5
 integrated_road_margin_m: 0.05
-# Pedestrian-sized bodies (at most 1.5 m footprint, at least 0.7 m tall) within 3 m beyond our side:
+# Pedestrian-sized bodies (at most 1.5 m footprint, at least 0.3 m tall) within 3 m beyond our side:
 # approach at most at the speed that stops at 2.5 m/s^2 short of them, pass at 5.5 m/s.
-tunnel_vulnerable_min_height_m: 0.7
+tunnel_vulnerable_min_height_m: 0.3
 tunnel_vulnerable_reach_m: 3.0
 tunnel_vulnerable_pass_speed_mps: 5.5
 tunnel_vulnerable_deceleration_mps2: 2.5

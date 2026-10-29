@@ -40,7 +40,7 @@ struct TunnelRoadRoiParameters {
   double tunnel_max_station_m = 0;
   double tunnel_left_wall_m = 0;
   double tunnel_right_wall_m = 0;
-  double wall_clearance_m = 0.6;
+  double wall_clearance_m = 1.0;
   double walkway_min_z_m = -0.15;
 };
 class TunnelRoadRoi {
