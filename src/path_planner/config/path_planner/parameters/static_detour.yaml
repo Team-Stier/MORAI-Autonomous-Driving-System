@@ -88,6 +88,9 @@ detour_approach_speed_mps: 5.555555555555555
 detour_drivable_lanelet_ids: [130766, 130767, 130785, 130786, 130868, 130869, 130870, 130871, 130872, 130873, 100564, 100557,
                               109761, 109754, 109749, 109743, 130859, 130858, 130857, 130856, -50]
 detour_paint_file: models/static_corridor.csv
+# Single lane between solid lines up to stop line 6254: the bypass starts beyond it (offset at most 0.35 m here).
+detour_keep_lane_lanelet_ids: [130766, 130767, 130785]
+detour_keep_lane_offset_m: 0.35
 detour_lookahead_m: 45.0
 detour_stationary_speed_mps: 1.0
 detour_minimum_observations: 2
