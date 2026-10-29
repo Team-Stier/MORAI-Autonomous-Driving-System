@@ -52,10 +52,14 @@ sensor_preset() {  # n -> the sensor preset world n loads: SENSOR_PRESET (w1_col
   # camera, and each camera costs MORAI Linux frames (RTX 3080 / i5-13600K, 10/29: IMU per wall s 9 Hz with four, 20
   # with camera_7 only, 39 with none; sensors are sampled once per frame)
   local p=${SENSOR_PRESET:-w1_collect} S; S=$(dir "$1")/MoraiLauncher_Lin_Data/SaveFile/Sensor/25.S4.MolitComp03
-  [[ $p == camp_cam7 ]] && python3 - "$S/w1_collect.json" "$S/camp_cam7.json" <<'PY2'
+  # camp_cam7hd: camp_cam7 with camera_7 as on the competition PC (1280x720, FOV 80, pitch 350 = -10 deg; omen preset 10/29)
+  [[ $p == camp_cam7 || $p == camp_cam7hd ]] && python3 - "$S/w1_collect.json" "$S/$p.json" "$p" <<'PY2'
 import json, sys
 d = json.load(open(sys.argv[1]))
 d["cameraList"] = [c for c in d["cameraList"] if c["cc"]["udpConfig"]["destinationPort"] % 1000 == 297]
+if sys.argv[3] == "camp_cam7hd":
+    for c in d["cameraList"]:
+        c["cc"]["cameraResWidth"], c["cc"]["cameraResHeight"], c["cc"]["cameraFOV"], c["rot"]["pitch"] = 1280, 720, 80.0, 350.0
 json.dump(d, open(sys.argv[2], "w"))
 PY2
   echo "$p"
