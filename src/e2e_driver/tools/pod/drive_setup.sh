@@ -4,7 +4,7 @@
 # DRIVER=stack. Idempotent: ONNX Runtime GPU 1.19.2 at /opt/onnxruntime-gpu/1.19.2 with the CUDA 12 / cuDNN 9 libraries
 # of the NVIDIA wheels in its cuda/lib (traffic_light's launch.sh puts both on LD_LIBRARY_PATH), rosdep keys of
 # DRIVE_WS/src, then catkin_make (every package but visualizer, which the stack does not run). Writes DRIVE_WS/BUILT
-# (the REF built) on success; the log is $V/drive_build.log.
+# ("<sha of the synced snapshot's SHA file> <REF>") on success; the log is $V/drive_build.log.
 set -uo pipefail
 V=${V:-/workspace}; D=${DRIVE_WS:-$V/drive}; ORT=/opt/onnxruntime-gpu/1.19.2
 export DEBIAN_FRONTEND=noninteractive
@@ -33,7 +33,7 @@ rm -f BUILT
 find build -type f -name '*.o' -size 0c -delete 2> /dev/null
 if ONNXRUNTIME_ROOT=$ORT catkin_make -DCMAKE_BUILD_TYPE=RelWithDebInfo -DONNXRUNTIME_ROOT=$ORT -DCATKIN_BLACKLIST_PACKAGES=visualizer \
      -j"$(nproc --all | awk '{print ($1 > 16) ? 16 : $1}')" > $V/drive_build.log 2>&1; then
-  echo "$REF" > BUILT; log "built $REF"
+  echo "$(cat SHA 2> /dev/null || echo nosha) $REF" > BUILT; log "built $(cat BUILT)"
 else
   log "build FAILED ($REF): $(command grep -m3 -E 'error|Error' $V/drive_build.log | cut -c1-200)"; exit 1
 fi

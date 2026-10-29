@@ -33,11 +33,16 @@
 #   (before MSG_PREFIX) and every delivered lap's lap_KK.json to RESULTS_DIR/vN/ (campaign_results.py aggregates).
 #   NO_EVAL=1: stop after the deploy (pod kept, as CREATE_ONLY).
 set -uo pipefail
+# run from a private copy: an edit of this file (git checkout, another session) cannot break a run in progress
+if [[ -z ${EVAL_POD_HERE:-} ]]; then
+  self=$(mktemp /tmp/eval_pod.XXXXXX); cp "$0" "$self"
+  EVAL_POD_HERE=$(cd "$(dirname "$0")" && pwd) exec bash "$self" "$@"
+fi
 DRIVER=${DRIVER:-stack}; BRANCH=${BRANCH:-}; [[ $DRIVER == stack && -z ${ATTACH:-} && -z $BRANCH ]] && BRANCH=main
 PODS_LOG=${PODS_LOG:-/home/opc/morai-campaign/shared/pods.log}; RESULTS_DIR=${RESULTS_DIR:-/home/opc/morai-campaign/shared/results}
 [[ -n ${VERSION:-} ]] && MSG_PREFIX="[${VERSION}] ${MSG_PREFIX:-}"
 podlog() { echo "$(date '+%F %T %Z') $*" >> "$PODS_LOG"; }
-HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
+HERE=$EVAL_POD_HERE; REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
 # no seed given: a new one per run (scenes S*1000+k, in laps.jsonl, every lap report and the results name NAME_sS); give
 # one only to replay scenes. draw: eval seeds are 0-99 (DAgger actors 1000+, PPO 2000+), never 7, 28 or 29 (the scenes of
@@ -76,15 +81,15 @@ trap bye EXIT; trap 'exit 130' INT TERM
 hold=" sleep infinity"; [[ ${PROVIDER:-runpod} == vast ]] && hold=   # RunPod: the start command is the container's process
 wdprep=; [[ ${PROVIDER:-runpod} == vast ]] && wdprep="python3 -m pip install -q vastai > /dev/null 2>&1; "   # the watchdog's vast stop
 # BUNDLE: a stdlib-python bootstrap (the image has no curl) takes bundle.py from B2 and fetches the shards first
-boot=$(printf '%s' "import base64,json,os,urllib.request as u
+boot=$(printf '%s' "import base64,json,os,zlib,urllib.request as u
 e=dict(l.split('=',1) for l in open('/proc/1/environ').read().split(chr(0)) if '=' in l); e.update(os.environ)
 h={'Authorization':'Basic '+base64.b64encode((e['B2_APPLICATION_KEY_ID'].strip()+':'+e['B2_APPLICATION_KEY'].strip()).encode()).decode()}
 a=json.load(u.urlopen(u.Request('https://api.backblazeb2.com/b2api/v2/b2_authorize_account',headers=h)))
-open('/bundle.py','wb').write(u.urlopen(u.Request(a['downloadUrl']+'/file/morai2026-alpamayo/podimg/${BUNDLE:-}/bundle.py',headers={'Authorization':a['authorizationToken']})).read())" | base64 | tr -d '\n')
+open('/bundle.py','wb').write(zlib.decompress(base64.b64decode('$(python3 -c 'import base64,sys,zlib; print(base64.b64encode(zlib.compress(open(sys.argv[1],"rb").read(),9)).decode())' "$HERE/bundle.py")')))" | base64 | tr -d '\n')
 # sshd before the bundle (ssh and the fetch log are watchable while ~27 GB come in; setup.sh starts it again)
-early="${BUNDLE:+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server > /dev/null; \
+early="${BUNDLE:+(apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server rsync > /dev/null; \
 mkdir -p ~/.ssh /run/sshd && chmod 700 ~/.ssh && echo \"\$PUBLIC_KEY\" >> ~/.ssh/authorized_keys && service ssh start) > /workspace/early.log 2>&1; }"
-start="${BUNDLE:+mkdir -p /workspace && $early python3 -c \"\$(echo $boot | base64 -d)\" && python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
+start="${BUNDLE:+mkdir -p /workspace && $early python3 -c \"\$(echo $boot | base64 -d)\" && STREAMS=\${STREAMS:-16} python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
 ACCOUNT_WAIT_S=$([[ -s ~/.morai-secrets/config.tar ]] && echo 600 || echo 4) bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
 ${wdprep}DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 &$hold"
 if [[ -n ${ATTACH:-} ]]; then   # a box this script started before (its eval3 died early): POD, ssh config and setup are there
@@ -177,15 +182,18 @@ fi
 [[ ${CREATE_ONLY:-0} == 1 && $DRIVER != stack ]] && { KEEP=1; exit 0; }
 if [[ $DRIVER == stack && -n $BRANCH ]]; then   # the drive checkout: prepared here, synced, built on the pod
   rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ \
-    "$REPO/src/e2e_driver/tools/" pod:/workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/   # an ATTACH gets the harness too
-  read -r SHA _ < <(bash "$HERE/drive_prep.sh" "$BRANCH") || { log "drive_prep $BRANCH failed"; exit 1; }
+    "$REPO/src/e2e_driver/tools/" pod:/workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/ &&   # an ATTACH gets the harness too
+  rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/ || { log "harness sync failed"; exit 1; }
+  read -r SHA _ SNAPDIR < <(bash "$HERE/drive_prep.sh" "$BRANCH") && [[ -s $SNAPDIR/SHA ]] || { log "drive_prep $BRANCH failed"; exit 1; }
   P "bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/stacks.sh down > /dev/null 2>&1; mkdir -p /workspace/drive"
   rsync -rlt --delete -e "ssh -F $SSHC" --exclude .git --exclude /build --exclude /devel --exclude /REF --exclude /BUILT \
-    /home/opc/morai-campaign/drive-src/ pod:/workspace/drive/ && P "echo '${SHA:0:10} $BRANCH' > /workspace/drive/REF" || { log "drive sync failed"; exit 1; }
+    "$SNAPDIR/" pod:/workspace/drive/ && P "echo '$BRANCH' > /workspace/drive/REF" || { log "drive sync failed"; exit 1; }
   log "drive $BRANCH (${SHA:0:10}) synced, building"
   P "touch /workspace/keepalive; (while sleep 120; do touch /workspace/keepalive; done) & k=\$!; bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/drive_setup.sh > /workspace/drive_setup.log 2>&1; r=\$?; kill \$k; exit \$r" ||
     { log "drive build failed: $(P "tail -3 /workspace/drive_setup.log")"; exit 1; }
-  log "drive built: $(P "cat /workspace/drive/BUILT")"
+  BUILT=$(P "cat /workspace/drive/BUILT"); log "drive built: $BUILT"
+  [[ ${BUILT%% *} == "$SHA" ]] || { log "built sha ${BUILT%% *} is not $SHA"; exit 1; }
+  echo "$BUILT" > "$LOCAL/built_sha"
 fi
 [[ ${CREATE_ONLY:-0} == 1 || ${NO_EVAL:-0} == 1 ]] && { KEEP=1; exit 0; }
 
