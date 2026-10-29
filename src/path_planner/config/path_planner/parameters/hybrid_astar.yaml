@@ -9,7 +9,7 @@ wheelbase_m: 3.0
 vehicle_front_m: 3.845008
 vehicle_rear_m: 0.79
 vehicle_half_width_m: 1.080418
-collision_margin_m: 1.2
+collision_margin_m: 0.6
 road_margin_m: 0.05
 prediction_acceleration_mps2: 6.0
 emergency_deceleration_mps2: 6.0
