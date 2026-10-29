@@ -123,6 +123,8 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/rec.pids
   inrosn "$n" "exec rostopic echo -p /sim_clock/state" > "$O/clk_w$n.csv" 2> /dev/null < /dev/null &   # SIM_CLOCK: [wall, tau, rho, n]
   echo $! >> /root/actor/rec.pids
+  WS=${DRIVE_WS:-$V/drive} inrosn "$n" "exec python3 $HERE/diag_rec.py $O/diag_w$n.jsonl 5" > "$O/diag_rec.log" 2>&1 < /dev/null &   # stop diagnosis
+  echo $! >> /root/actor/rec.pids
   else
   inrosn "$n" "PYTHONUNBUFFERED=1 exec rostopic echo -p /e2e_driver/debug/data" > "$O/dbg_w$n.csv" 2> /dev/null < /dev/null &
   echo $! >> /root/actor/rec.pids
