@@ -189,6 +189,18 @@ TEST(IntegratedStatic, PassesBoxRightOfCentreAtZoneStart) {
   expectPass(-59.1, -152.0, true, -60.93, -171.5, 84.8 * M_PI / 180);
 }
 
+TEST(IntegratedStatic, FirstSearchPassFindsSwerveBesideBox) {
+  Scene scene;
+  // 9.8 m before box 40100004 on the lane centre at 3.8 m/s, where the swerve begins.
+  scene.addBox(-59.05, -143.32, 0.56);
+  scene.place(-60.0, -153.1, M_PI / 2, 3.8);
+  const auto path = scene.plan();
+  ASSERT_GT(path.points.size(), 2u);
+  EXPECT_GT(speedAhead(path, scene.ego, 1.0), 1.0);
+  // The moving plan comes from the first search pass, without the wider second one.
+  EXPECT_NE(scene.core.planningDiagnostics().find("retry=0"), std::string::npos) << scene.core.planningDiagnostics();
+}
+
 TEST(IntegratedStatic, ApproachesAndPassesInLaneBoxInClosedLoop) {
   Scene scene;
   const double bx = -59.05, by = -143.32;  // box 40100004, right of the lane centre
