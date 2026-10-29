@@ -111,6 +111,17 @@ if [[ $DRIVER == stack ]]; then
       fi
     fi
     stamp "stack $n $(cat "${DRIVE_WS:-$V/drive}/BUILT" 2> /dev/null): ${miss:+missing$miss}${miss:-all nodes up}"
+    # a node that registered but failed its startup waits without processing (no /traffic_light, laps judged as if it
+    # ran): one fresh start of the nodes, then env-invalid like a missing node (a fresh pod is replaced)
+    sleep 15; bad=$(bash "$HERE/stacks.sh" startfail "$n" | tr '\n' ' ')
+    if [[ -n $bad ]]; then
+      stamp "stack $n startup failed: $bad- nodes restarted once ($(bash "$HERE/stacks.sh" renodes "$n" 2>&1 | tail -1))"
+      sleep 15; bad=$(bash "$HERE/stacks.sh" startfail "$n" | tr '\n' ' ')
+      if [[ -n $bad ]]; then
+        echo "w$n startup failed after a restart: $bad($(tac /root/stack/$n/nodes.log | grep -m1 -o 'startup failed; waiting without processing: .\{0,80\}')) at $(date +%T)" > "$OUT/ENV_INVALID"
+        stamp "ENV_INVALID: $(cat "$OUT/ENV_INVALID")"; bash "$HERE/stacks.sh" down > /dev/null; exit 1
+      fi
+    fi
   done
 else
 if ! grep -q "listening on" "$OUT/server.log"; then   # idle worlds burn ~3.8 cores each: the engine gets the CPU quota (10/28)

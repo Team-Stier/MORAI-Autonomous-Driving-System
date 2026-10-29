@@ -99,6 +99,7 @@ EOF
 
 nodes1() {  # n: the competition nodes of stack n in a session of their own (pids in nodes.pids, log nodes.log)
   local d=$R/$1
+  echo "=== nodes start $(date +%T)" >> "$d/nodes.log"   # startfail reads the log from the last start
   setsid taskset -c "${STACK_CPUS:-0-$(($(nproc) - 1))}" bash "$d/nodes.sh" >> "$d/nodes.log" 2>&1 < /dev/null &
   echo $! >> "$d/nodes.pids"
 }
@@ -110,6 +111,11 @@ nodesdown1() {
   for i in $(seq 30); do alive=0; for w in $(cat "$d/nodes.pids"); do pgrep -s "$w" > /dev/null && alive=1; done; (( alive )) || break; sleep 0.5; done
   for w in $(cat "$d/nodes.pids"); do pkill -KILL -s "$w" 2> /dev/null; done
   rm -f "$d/nodes.pids"
+}
+
+startfail() {  # n: the nodes of stack n's last start that logged node_pipeline's "startup failed" (they wait without
+  # processing, e.g. traffic_light on "CUDA failure 999" of a broken pod, control worker 10/29), one per line
+  tac "$R/$1/nodes.log" 2> /dev/null | sed '/^=== nodes start /q' | grep -o '\[node_pipeline\] [^ ]* startup failed' | awk '{print $2}' | sort -u
 }
 
 renodes() {  # n: a fresh start of stack n's nodes between laps (the competition starts each run from a fresh stack;
@@ -141,5 +147,6 @@ case ${1:-} in
   down) for d in "$R"/*/; do [[ -e $d/stack.pid ]] && down1 "$(basename "$d")"; done; true ;;
   config) config "$2"; cat "$R/$2/bridge.yaml" ;;
   renodes) renodes "$2" ;;
+  startfail) startfail "$2" ;;
   *) sed -n 2,8p "$0"; exit 1 ;;
 esac
