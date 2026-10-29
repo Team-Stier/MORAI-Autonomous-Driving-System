@@ -1,5 +1,5 @@
 # Rear-axle distance before the line at which /traffic_light first reports the light; 0 disables.
-blind_detection_distance_m: 9.0
+blind_detection_distance_m: 12.0
 blind_deceleration_mps2: 2.5
 # YELLOW also stops when the front axle can stop yellow_stop_margin_m before the line at this deceleration; 0 disables.
 yellow_stop_deceleration_mps2: 4.5

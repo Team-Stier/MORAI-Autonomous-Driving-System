@@ -7625,30 +7625,52 @@ class IntegratedTrajectory {
     const double slope0=std::max(-1.,std::min(1.,std::tan(std::remainder(state.pose.yaw_rad-reference_yaw,kTurn))));
 
     const double seen=objects.header.stamp.toSec();
+    std::vector<bool> refreshed(detour_boxes_.size(),false);
+    std::vector<std::uint32_t> moving;
     for(const auto& object:objects.objects) {
       const auto& c=object.bbox_pose.position;
       if(c.x<d.object_min_x_m || c.x>d.object_max_x_m || c.y<d.object_min_y_m || c.y>d.object_max_y_m)continue;
       if(object.velocity_available && std::hypot(object.velocity.x,object.velocity.y)>=d.stationary_speed_mps) {
-        detour_boxes_.erase(std::remove_if(detour_boxes_.begin(),detour_boxes_.end(),
-            [&](const DetourBox& known){return known.id==object.id;}),detour_boxes_.end());
+        moving.push_back(object.id);
         continue;
       }
       DetourBox box;box.center={c.x,c.y};box.yaw_rad=heading(object.bbox_pose.orientation);
       box.length_m=object.bbox_size.x;box.width_m=object.bbox_size.y;box.id=object.id;box.seen_sec=seen;box.observations=1;
-      DetourBox* known=nullptr;double nearest=2.5;
-      for(auto& candidate:detour_boxes_) {
-        const double gap=std::hypot(candidate.center.x-box.center.x,candidate.center.y-box.center.y);
-        if(gap<nearest){nearest=gap;known=&candidate;}
+      // Tracker identity first: a body keeps its id while its fitted box grows or
+      // shifts. Another body near it (a fragment) must not overwrite it in the same scan.
+      std::size_t match=detour_boxes_.size();double nearest=2.5;
+      for(std::size_t k=0;k<detour_boxes_.size();++k)
+        if(detour_boxes_[k].id==object.id){match=k;nearest=0;break;}
+      if(match==detour_boxes_.size())
+        for(std::size_t k=0;k<detour_boxes_.size();++k) {
+          if(refreshed[k])continue;
+          const double gap=std::hypot(detour_boxes_[k].center.x-box.center.x,detour_boxes_[k].center.y-box.center.y);
+          if(gap<nearest){nearest=gap;match=k;}
+        }
+      if(match<detour_boxes_.size()) {
+        auto& known=detour_boxes_[match];
+        const bool same=known.id==object.id,confirmed=known.observations>=d.minimum_observations;
+        const int next=known.observations+(seen>known.seen_sec?1:0);
+        // An unconfirmed box that jumps between scans is a body in motion, not an obstacle.
+        // A confirmed box takes another body's fit only if it is larger (a re-tracked view).
+        if(same || !confirmed || box.length_m*box.width_m>=known.length_m*known.width_m) {
+          box.observations=same || confirmed || nearest<=d.match_jump_m ? next : 1;
+          known=box;
+        } else {
+          known.observations=next;known.seen_sec=seen;
+        }
+        refreshed[match]=true;
+      } else {
+        detour_boxes_.push_back(box);refreshed.push_back(true);
       }
-      // An unconfirmed box that jumps between scans is a body in motion, not an obstacle.
-      if(known) {
-        const int next=known->observations+(seen>known->seen_sec?1:0);
-        box.observations=known->observations>=d.minimum_observations || nearest<=d.match_jump_m ? next : 1;
-        *known=box;
-      }
-      else detour_boxes_.push_back(box);
       detour_ids_.push_back(object.id);
     }
+    // A body reported moving is no obstacle, unless it was already confirmed
+    // standing: a partly seen box carries false speed now and then.
+    detour_boxes_.erase(std::remove_if(detour_boxes_.begin(),detour_boxes_.end(),[&](const DetourBox& known) {
+      return known.observations<d.minimum_observations &&
+             std::find(moving.begin(),moving.end(),known.id)!=moving.end();
+    }),detour_boxes_.end());
     // Keep bodies beside and behind us (they leave the forward view) and far
     // ahead (small ones are seen late); drop near ones the sensor no longer reports.
     std::vector<DetourBox> kept;std::vector<DetourExtent> extents;

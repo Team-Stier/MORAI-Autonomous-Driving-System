@@ -359,3 +359,22 @@ TEST(StaticDetour, ReturnsToLaneWhenObstacleIsGone) {
   ASSERT_TRUE(std::isfinite(back));
   EXPECT_NEAR(back, kLaneCentreX, 0.5);
 }
+
+// A box seen with a thin fragment beside it (another track, now and then with
+// false speed) stays confirmed: the fragment neither overwrites nor resets it.
+TEST(StaticDetour, KeepsBoxConfirmedBesideFragment) {
+  Scene scene;
+  scene.place(kApproachX, kApproachY, kApproachYaw, 5.0);
+  scene.add(-59.45, -147.39, 1.5708, 2.33, 0.88);
+  scene.add(-58.33, -147.71, 1.5708, 1.01, 0.05, 0.77, 0.0, true);
+  interfaces::Path path;
+  for (int scan = 0; scan < 4; ++scan) {
+    scene.objects.objects[1].velocity.x = scan % 2 ? 1.2 : 0.6;
+    path = scene.plan();
+  }
+  ASSERT_FALSE(path.lateral_reference.empty());
+  // Box edge x = -59.89 with the 0.5 m gap and half the body width.
+  const double beside = crossingX(path, -147.39);
+  ASSERT_TRUE(std::isfinite(beside));
+  EXPECT_LT(beside, -59.89 - 0.5 - 1.08 + 0.05);
+}
