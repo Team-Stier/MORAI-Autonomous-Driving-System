@@ -78,3 +78,9 @@ integrated_minimum_curve_speed_mps: 4.166666666666667
 # Bound avoidance and return slopes and reserve tracking clearance.
 integrated_road_margin_m: 0.15
 integrated_maximum_lateral_slope: 0.35
+
+# Paint within this distance of a stationary obstacle inside the route lane (lateral window) is not a hard limit.
+integrated_paint_release_m: 12.0
+integrated_paint_release_lateral_m: 2.0
+# Objects measured at or above this speed release no paint.
+integrated_paint_release_speed_mps: 1.0

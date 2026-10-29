@@ -55,6 +55,13 @@ inline IntegratedStaticTrajectoryParameters loadIntegratedStaticTrajectoryParame
   if(!std::isfinite(p.dynamic_zone_speed_mps) || p.dynamic_zone_speed_mps<=0 ||
       !std::isfinite(p.dynamic_zone_approach_m) || p.dynamic_zone_approach_m<0)
     throw std::invalid_argument("invalid integrated dynamic zone cap");
+  if(r.has("integrated_paint_release_m"))p.paint_release_m=r.number("integrated_paint_release_m");
+  if(r.has("integrated_paint_release_lateral_m"))p.paint_release_lateral_m=r.number("integrated_paint_release_lateral_m");
+  if(r.has("integrated_paint_release_speed_mps"))p.paint_release_speed_mps=r.number("integrated_paint_release_speed_mps");
+  if(!std::isfinite(p.paint_release_m) || p.paint_release_m<0 || p.paint_release_m>30 ||
+      !std::isfinite(p.paint_release_lateral_m) || p.paint_release_lateral_m<=0 || p.paint_release_lateral_m>4 ||
+      !std::isfinite(p.paint_release_speed_mps) || p.paint_release_speed_mps<=0)
+    throw std::invalid_argument("invalid integrated paint release window");
   s.max_speed_mps=r.number("integrated_maximum_speed_mps");
   s.max_lateral_accel_mps2=r.number("integrated_maximum_lateral_acceleration_mps2");
   if(r.has("integrated_recovery_lateral_acceleration_mps2"))p.recovery_lateral_acceleration_mps2=r.number("integrated_recovery_lateral_acceleration_mps2");

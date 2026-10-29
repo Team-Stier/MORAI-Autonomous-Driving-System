@@ -6267,6 +6267,12 @@ static double curvature(Vec2 a, Vec2 b, Vec2 c) {
   }
 
  public:
+  // Hard paint for the following calls; the constructed set is kept in p_.
+  void setActivePaint(const std::vector<std::vector<Vec2>>& lines) {
+    physical_boundaries_.clear();
+    for(const auto& line:lines)if(line.size()>1)
+      physical_boundaries_.push_back(std::make_shared<const NativeRoadRegion::IndexedRing>(line));
+  }
   const char* failureReason() const {return failure_reason_;}
   std::string diagnostics() const {
     std::ostringstream out;out<<"source="<<selected_source_<<" extent="<<selected_extent_<<" peak_k="<<selected_curvature_<<" projection="<<projection_distance_<<" heading="<<projection_heading_<<" geometry_reason="<<geometry_reason_<<" road_reason="<<road_reason_<<" retry="<<extended_search_<<" layer="<<failed_layer_<<" check="<<path_check_reason_;
@@ -6881,6 +6887,7 @@ struct IntegratedStaticTrajectoryParameters {
   double recovery_deceleration_mps2=8.,recovery_jerk_mps3=8.,recovery_response_sec=.3;
   double recovery_lateral_acceleration_mps2=6.;
   double dynamic_zone_speed_mps=25./3.6,dynamic_zone_approach_m=30;
+  double paint_release_m=0.,paint_release_lateral_m=2.,paint_release_speed_mps=1.;
 };
 
 
@@ -6892,7 +6899,8 @@ class IntegratedStatic {
 class IntegratedTrajectory {
  public:
   IntegratedTrajectory(IntegratedStaticTrajectoryParameters p,const lanelet::LaneletMap& map)
-      : p_(std::move(p)),solver_(p_.solver,map),recovery_solver_(solver_,recoveryParameters(p_)) {}
+      : p_(std::move(p)),solver_(p_.solver,map),recovery_solver_(solver_,recoveryParameters(p_)),
+        initial_solver_(solver_),initial_recovery_solver_(recovery_solver_),active_paint_(p_.solver.physical_boundaries) {}
   const char* outcome()const{return outcome_;}
   std::string diagnostics()const{return used_recovery_ ? "dynamics-recovery "+recovery_solver_.diagnostics():solver_.diagnostics();}
   Message calculate(const nav_msgs::Odometry& ego,const interfaces::CompetitionVehicleStatus& status,
@@ -6937,6 +6945,21 @@ class IntegratedTrajectory {
       state.pose.position.x+=std::cos(state.pose.yaw_rad)*dx-std::sin(state.pose.yaw_rad)*dy;
       state.pose.position.y+=std::sin(state.pose.yaw_rad)*dx+std::cos(state.pose.yaw_rad)*dy;
       state.pose.yaw_rad+=angle;
+      // A checkpoint return, or this Core taking over after another section's
+      // Core drove on, moves the vehicle away from the place of the last call.
+      // Previous plans, maneuvers and paint releases belong to that place:
+      // restart both solvers from their constructed state and replan from here.
+      const double moved=std::hypot(state.pose.position.x-last_position_.x,state.pose.position.y-last_position_.y);
+      // Planner stalls of up to 2 s at full speed stay below this bound.
+      const double elapsed=std::max(0.,std::min(2.,stamp.toSec()-last_position_stamp_));
+      if(has_last_position_ && (stamp.toSec()<last_position_stamp_ ||
+          moved>p_.solver.max_initial_distance_m+state.speed_mps*elapsed)) {
+        solver_=initial_solver_;recovery_solver_=initial_recovery_solver_;previous_.clear();
+        avoidance_route_=Route{};released_.clear();
+        last_blocked_sec_=-std::numeric_limits<double>::infinity();
+        ROS_INFO("[native planner] planning state restarted after a %.1f m jump",moved);
+      }
+      has_last_position_=true;last_position_=state.pose.position;last_position_stamp_=stamp.toSec();
 
       if(avoidance_route_ && (dynamic_zone ||
           (state.pose.position.x-return_goal_.x)*return_direction_.x+
@@ -6993,6 +7016,7 @@ class IntegratedTrajectory {
           outcome_="dynamic-zone-stop";previous_.clear();return hold(ego);
         }
       } else last_blocked_sec_=-std::numeric_limits<double>::infinity();
+      releasePaint(reference,objects);
       auto native=convert(objects,predictions,reference);
 
       // Search/track the smooth target, but construct road permission from
@@ -7046,6 +7070,48 @@ class IntegratedTrajectory {
     }
   }
  private:
+  // Paint segments within paint_release_m of a stationary obstacle lying
+  // inside the route lane leave the hard paint set, so the body may cross the
+  // line while it passes. A moving body, such as a slower leading vehicle,
+  // releases nothing. Every other segment, and all collision checks, stay hard.
+  void releasePaint(const std::vector<integrated_native::ReferencePoint>& reference,const interfaces::Objects& objects) {
+    std::vector<integrated_native::Vec2> centers;
+    if(p_.paint_release_m>0)for(const auto& object:objects.objects) {
+      if(object.velocity_available && std::hypot(object.velocity.x,object.velocity.y)>=p_.paint_release_speed_mps)continue;
+      const integrated_native::Vec2 c{object.position.x,object.position.y};
+      double lateral=std::numeric_limits<double>::infinity();
+      for(std::size_t i=1;i<reference.size();++i)
+        lateral=std::min(lateral,segmentDistance(c,reference[i-1].position,reference[i].position));
+      if(lateral<=p_.paint_release_lateral_m)centers.push_back(c);
+    }
+    std::vector<bool> released;
+    for(const auto& line:p_.solver.physical_boundaries)for(std::size_t j=1;j<line.size();++j) {
+      bool near=false;
+      for(const auto& c:centers)near=near || segmentDistance(c,line[j-1],line[j])<p_.paint_release_m;
+      released.push_back(near);
+    }
+    if(released==released_)return;
+    released_=released;active_paint_.clear();std::size_t k=0;
+    for(const auto& line:p_.solver.physical_boundaries) {
+      std::vector<integrated_native::Vec2> piece;
+      if(!line.empty())piece.push_back(line.front());
+      for(std::size_t j=1;j<line.size();++j,++k) {
+        if(released[k]) {
+          if(piece.size()>1)active_paint_.push_back(piece);
+          piece.assign(1,line[j]);
+        } else piece.push_back(line[j]);
+      }
+      if(piece.size()>1)active_paint_.push_back(piece);
+    }
+    solver_.setActivePaint(active_paint_);recovery_solver_.setActivePaint(active_paint_);
+    if(std::find(released.begin(),released.end(),true)!=released.end())
+      ROS_INFO("[native planner] paint released near %zu in-lane objects",centers.size());
+  }
+  static double segmentDistance(integrated_native::Vec2 p,integrated_native::Vec2 a,integrated_native::Vec2 b) {
+    const double dx=b.x-a.x,dy=b.y-a.y,n=dx*dx+dy*dy;
+    const double u=n>1e-12?std::max(0.,std::min(1.,((p.x-a.x)*dx+(p.y-a.y)*dy)/n)):0.;
+    return std::hypot(p.x-a.x-u*dx,p.y-a.y-u*dy);
+  }
   static Message hold(const nav_msgs::Odometry& ego) {
     Message output;interfaces::PathPoint point;point.pose.pose=ego.pose.pose;point.velocity=0;point.acceleration=0;
     output.points.push_back(point);point.time_from_start=ros::Duration(5);output.points.push_back(point);return output;
@@ -7105,7 +7171,7 @@ class IntegratedTrajectory {
       const auto origin=reference[i].position;
       const double old_min=reference[i].min_l_m,old_max=reference[i].max_l_m;bool near_paint=false;
       double negative=-std::numeric_limits<double>::infinity(),positive=std::numeric_limits<double>::infinity();
-      for(const auto& line:p_.solver.physical_boundaries)for(std::size_t j=1;j<line.size();++j) {
+      for(const auto& line:active_paint_)for(std::size_t j=1;j<line.size();++j) {
         const double dx=line[j].x-line[j-1].x,dy=line[j].y-line[j-1].y;
         const double squared=dx*dx+dy*dy;
         if(squared>1e-9) {
@@ -7228,6 +7294,12 @@ class IntegratedTrajectory {
   const char* outcome_="native-search";
   IntegratedStaticTrajectoryParameters p_;
   integrated_native::IntegratedSolver solver_,recovery_solver_;
+  const integrated_native::IntegratedSolver initial_solver_,initial_recovery_solver_;
+  std::vector<std::vector<integrated_native::Vec2>> active_paint_;
+  std::vector<bool> released_;
+  bool has_last_position_=false;
+  integrated_native::Vec2 last_position_;
+  double last_position_stamp_=0;
   bool used_recovery_=false;
   std::vector<integrated_native::PathPoint> previous_;
   Route avoidance_route_;
