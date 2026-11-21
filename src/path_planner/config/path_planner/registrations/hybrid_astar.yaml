@@ -1,0 +1,6 @@
+stage: local
+inputs: [ego, objects, route, predictions]
+validator: frenet_speed_path_inputs.hpp
+policy: remove_invalid.hpp
+bank: shared_map.hpp
+allowed_issues: {}

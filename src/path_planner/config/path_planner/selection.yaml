@@ -66,12 +66,12 @@ prediction:
 local:
   section_core_map:
     '0': integrated_path.hpp
-    '1': integrated_dynamic.hpp
-    '2': integrated_dynamic.hpp
+    '1': hybrid_astar.hpp
+    '2': hybrid_astar.hpp
     '3': integrated_path.hpp
-    '4': static_detour.hpp
-    '5': static_detour.hpp
-    '6': integrated_dynamic.hpp
+    '4': hybrid_astar.hpp
+    '5': hybrid_astar.hpp
+    '6': hybrid_astar.hpp
     '7': integrated_path.hpp
     '8': roundabout_approach.hpp
     '9': roundabout_rolling_entry.hpp
@@ -79,7 +79,7 @@ local:
     '11': integrated_highway.hpp
     '12': integrated_highway.hpp
     '13': integrated_highway.hpp
-    '14': integrated_dynamic.hpp
-    '15': tunnel_path.hpp
+    '14': hybrid_astar.hpp
+    '15': hybrid_astar.hpp
     '16': integrated_final_circle.hpp
   health_core_map: []
