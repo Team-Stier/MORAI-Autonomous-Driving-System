@@ -92,11 +92,11 @@ def fetch(tag):
 
     def get(name, lo=None, hi=None):
         h = {"Authorization": tok, **({"Range": f"bytes={lo}-{hi}"} if lo is not None else {})}
-        for n in range(6):
+        for n in range(12):           # B2 answers 429 when many pods fetch at once: back off up to a minute
             try:
                 return urllib.request.urlopen(urllib.request.Request(f"{url}/{name}", headers=h), timeout=60).read()
             except OSError as e:
-                err = e; time.sleep(2 + 3 * n)
+                err = e; time.sleep(min(60, 2 + 5 * n))
         raise err
     t0, failed = time.time(), []
     manifest = [l.split() for l in get("MANIFEST").decode().splitlines() if l.strip()]
@@ -119,8 +119,15 @@ def fetch(tag):
         if not ok:
             failed.append(name)
         print(f"[fetch +{time.time() - t0:.0f}s] {name} {size / 1e9:.2f} GB in {time.time() - t:.0f} s{'' if ok else ' FAILED'}", flush=True)
-    with ThreadPoolExecutor(len(manifest)) as ex:
-        list(ex.map(one, [m for m in manifest if m[0] != "links.tgz"]))
+    only = set(os.environ.get("ONLY", "").split())      # ONLY="shard ...": just these (a repair after a failed fetch)
+    todo = [m for m in manifest if m[0] != "links.tgz" and (not only or m[0] in only)]
+    for round_ in range(4):                              # failed shards again (tar overwrites), 3 more rounds at most
+        with ThreadPoolExecutor(max(1, len(todo))) as ex:
+            list(ex.map(one, todo))
+        if not failed:
+            break
+        todo, failed[:] = [m for m in manifest if m[0] in failed], []
+        print(f"[fetch] round {round_ + 2}: {[m[0] for m in todo]}", flush=True); time.sleep(30)
     one(next(m for m in manifest if m[0] == "links.tgz"))
     total = sum(int(m[1]) for m in manifest)
     print(f"[fetch] {len(manifest)} shards, {total / 1e9:.1f} GB in {time.time() - t0:.0f} s ({total / 1e6 / (time.time() - t0):.0f} MB/s)"

@@ -8,6 +8,7 @@ http://HOST:PORT/ is a multipart JPEG stream of the largest window whose WM_CLAS
 XComposite (works on the headless Xwayland). Frames are captured only while someone is watching.
 """
 import io
+import os
 import sys
 import threading
 import time
@@ -20,6 +21,7 @@ from Xlib.ext import composite
 HOST, PORT = sys.argv[1], int(sys.argv[2])
 FPS = float(sys.argv[3]) if len(sys.argv) > 3 else 5.0
 WIDTH = int(sys.argv[4]) if len(sys.argv) > 4 else 960
+VIEW_CLASS = os.environ.get("VIEW_CLASS", "simulator").lower()   # VIEW_CLASS=rviz: the RViz window (eval3.sh RVIZ=1)
 frame, cond, viewers = None, threading.Condition(), 0
 
 
@@ -27,7 +29,7 @@ def find(d):
     def walk(w):
         for c in w.query_tree().children:
             cls = c.get_wm_class()
-            if cls and any("simulator" in s.lower() for s in cls) and c.get_attributes().map_state == X.IsViewable:
+            if cls and any(VIEW_CLASS in s.lower() for s in cls) and c.get_attributes().map_state == X.IsViewable:
                 yield c
             yield from walk(c)
     wins = sorted(walk(d.screen().root), key=lambda w: -(w.get_geometry().width * w.get_geometry().height))

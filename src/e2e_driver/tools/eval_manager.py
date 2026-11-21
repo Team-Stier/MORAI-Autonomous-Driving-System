@@ -23,7 +23,7 @@ off the drivable area outside the shadow zone, stuck after a collision, or the c
   - off road: all four wheels off the lanelets and the 2 m route corridor (tools/scorer's drive_inoperable test)
     outside the shadow zone for OFF_ROAD_S;
   - stuck (class Stuck, shared with rl_episode.py): less than PROGRESS_M of route progress for CRASH_STUCK_S after a
-    collision, for STUCK_S (red-light and yield time excluded), or for WAIT_MAX_S in all;
+    collision, for STUCK_S (time the light holds the Ego's movement and yield time excluded), or for WAIT_MAX_S in all;
   - order broken: route progress SKIP_M past the next checkpoint without having come within 3 m of it.
 The Ego goes to the last checkpoint passed (START before CP1) with MORAI's checkpoint Spawn program (MORAI_Spawn_Linux,
 10/13: point number on stdin; SetTransform to the 10/7 table pose, z and yaw as listed, speed left as it is).
@@ -83,7 +83,8 @@ FINISH_M = 1.0          # route progress within this of the last waypoint = fini
 # User 10/28: returns at once, not after minutes. 60 s with red time excluded let a car stand 330 s before a light without
 # a return (r2stop lap 1, s 306): now 30 s of no progress, red-light and yield time excluded, and 90 s in all at most
 STUCK_S = 30.0
-WAIT_MAX_S = 90.0       # any stop, red light or yield included (red phases seen: 53-61 s at C1256W000016, 10/27)
+WAIT_MAX_S = 150.0      # any stop, yield included; not judged while the light ahead is red (90 s returned cars waiting
+                        # out 75-78 s reds at S5 4188 after a slow approach, static worker 10/29; red phases 53-78 s)
 YIELD_M, YIELD_LAT_M, YIELD_V = 20.0, 10.0, 0.5   # yield = an object moving > YIELD_V m/s up to YIELD_M ahead, YIELD_LAT_M aside
 CRASH_STUCK_S = 15.0    # "cannot go on after a collision"
 PROGRESS_M = 5.0        # route progress that resets the stuck timers: a car pushing a small box creeps ~0.1 m/s (10/26)
@@ -157,8 +158,8 @@ class Stuck:
     """No-progress returns: update() each step -> None, "stuck" or "stuck_after_collision"; reset() after a return or at
     the start. objs: Object Info records (id, kind, x, y, ...) of this step, [] without Object Info."""
 
-    def __init__(self, tau, s=0.0):
-        self.prev = {}
+    def __init__(self, tau, s=0.0, left=()):
+        self.prev, self.left = {}, set(left)   # left: lights of a left-turn stop line (they hold the Ego until the arrow)
         self.reset(tau, s)
 
     def reset(self, tau, s):
@@ -182,12 +183,18 @@ class Stuck:
         yld = self.yielding(tau, e, objs)
         if hit:
             self.crash = tau
+        # the light holds the Ego's movement (scorer _signal_state): no green (16) or, at a left-turn line, no green-left
+        # arrow (32); a yellow or a plain green at S7 4356 is waiting too (stuck while 052 showed 16 then 4, wtl 10/29)
+        c = e["color"]
+        red = bool(e["tl"] and c is not None and c > 0 and not c & (32 if e["tl"] in self.left else 16))
         if s > self.s + PROGRESS_M:
             self.s, self.t, self.t0 = s, tau, tau
-        elif (e["tl"] and e["color"] & 1 and not e["color"] & 16) or yld:
+        elif red or yld:
             self.t += dt              # red light or yield: does not count (resetting let a car that let greens pass stand 229 s)
         if self.crash > self.t - 1.0 and tau - self.t >= CRASH_STUCK_S:
             return "stuck_after_collision"
+        if red:                       # waiting at a red light is no stuck, however long the phase (WAIT_MAX_S after it)
+            return None
         return "stuck" if tau - self.t >= STUCK_S or tau - self.t0 >= WAIT_MAX_S else None
 
 
@@ -366,9 +373,26 @@ def msc(action, option="", timeout=30):
     return out[-1] if out else ""
 
 
-def make_scene(seed):
+def file_scene(path):
+    """--scene-file: a scenario as given (e.g. the organizers' sample), copied into the scenario folder under its stem,
+    no variants: -> (scene name, shadow test, manifest entry {"file": path})."""
+    src = Path(path).expanduser()
+    shutil.copy(src, Path(SCEN.replace("~", str(Path.home()))) / f"{src.stem}.json")
+    return src.stem, shade_test(json.loads(src.read_text())["shadedAreaList"][0]), {"file": str(src), "actors": []}
+
+
+RING_PERIOD = {"high": (3.0, 5.0), "low": (8.0, 12.0)}   # s, as the 10/29 world_director
+HW_PERIOD = {"high": (3.0, 5.0), "low": (10.0, 15.0)}
+
+
+def lap_density(mode, lap):
+    return None if mode == "off" else ("low", "high")[lap % 2] if mode == "alternate" else mode
+
+
+def make_scene(seed, density=None):
     """-> (scene name, shadow test, scenario_variants manifest entry): lap variant generated on bc-250."""
-    out = ssh(f"cd {SCEN} && python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
+    env = "NPC_PERIOD=%g:%g,%g:%g " % (*RING_PERIOD[density], *HW_PERIOD[density]) if density else ""
+    out = ssh(f"cd {SCEN} && {env}python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
               f" > /dev/null && cat ev{seed}_000.json && echo && echo @@ && cat ev{seed}-manifest.json")
     scene, manifest = out.split("\n@@\n")
     name = f"ev{seed}_000"
@@ -428,6 +452,8 @@ class Manager:
         return not (self.kmap.on_road(w).any() or self.kmap.near_path(w, self.cfg["inoperable"]["route_corridor_m"]).any())
 
     def weather(self, lap, seed, section, t):
+        if self.a.scene_file:                             # the scenario's own weather and time, as given
+            return
         w, h = self.a.weather.split(":") if self.a.weather else combo(seed, section, 0)
         if self.a.weather and lap["weather"]:
             return
@@ -467,27 +493,60 @@ class Manager:
 
     def run_lap(self, k):
         seed = self.a.seed * 1000 + k
-        name, shaded, meta = make_scene(seed)
+        density = lap_density(self.a.density, k)
+        name, shaded, meta = file_scene(self.a.scene_file) if self.a.scene_file else make_scene(seed, density)
         if self.a.sync:
             self.set_sync(False)                          # the tick period applies when sync mode is entered
         msc("pause")
-        r = msc("load-scene", name + "/62", 90)
-        if not r.startswith("ok"):
-            raise RuntimeError(f"scene load {name}: {r}")
-        lap = dict(lap=k, scene=name, seed=seed, weather=[], checkpoints=[], returns=[], scene_meta=meta)
+        if self.a.manual_scene:   # --manual-scene: the scene was loaded in the simulator GUI (a field PC whose simulator
+            print(f"manual scene: {name} loaded by hand", flush=True)   # ignores MSC load-scene; pause/play still work)
+        else:
+            r = msc("load-scene", name + "/62", 90)
+            if not r.startswith("ok"):
+                raise RuntimeError(f"scene load {name}: {r}")
+        if self.a.scene_file:   # a scenario saved elsewhere replaces the Ego's network: Ego status stopped (official
+            lap_net = msc("load-network", self.a.network_preset, 60)   # sample, 10/29); the world's preset again
+            print(f"network preset {self.a.network_preset} after the scene: {lap_net[:40]}", flush=True)
+        lap = dict(lap=k, scene=name, seed=seed, density=density, weather=[], checkpoints=[], returns=[], scene_meta=meta)
         egot, objt = [], []                               # replay check: (tau, x, y, s) and the objects near the Ego
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
-        self.weather(lap, seed, 0, 0.0)
+        lats = []                                         # |lateral offset| from the route while moving (path following)
+        j0 = self.a.start_cp                           # --start-cp J: the lap starts at checkpoint J (a section run)
+        if j0:
+            lap["start_cp"], lap["start_how"] = j0, self.spawn(j0)
+            for t in range(4):   # position, then heading: after a lap that ended turned around in the tunnel the spawn
+                for _ in range(50):   # kept the old yaw (-3.10 instead of +0.07 rad at CP9, worker-highway 10/29)
+                    e0 = self.ego()       # the transform lands before play, so the move test starts there
+                    if math.hypot(e0["x"] - self.cps[j0, 0], e0["y"] - self.cps[j0, 1]) < 3.0:
+                        break
+                    time.sleep(0.1)
+                dyaw = (e0["yaw"] - math.radians(self.cps[j0, 3]) + math.pi) % (2 * math.pi) - math.pi
+                if abs(dyaw) < 0.5 or t == 3:
+                    break
+                print(f"spawn CP{j0}: yaw off by {dyaw:.2f} rad, spawning again", flush=True)
+                time.sleep(0.5)
+                lap["start_how"] = f"{self.spawn(j0)} retry {t + 1}"
+        if self.a.end_cp:
+            lap["end_cp"] = self.a.end_cp
+        self.weather(lap, seed, j0, 0.0)
+        if self.a.lap_hook and k > self.a.first_lap:
+            # e.g. a fresh start of the stack's nodes (eval3.sh LAP_RESTART), with the world paused at this lap's start
+            # pose: nodes started before the scene load / --start-cp spawn saw the old lap's end and transient poses (a
+            # fresh global Stage kept a route from one, worker-highway 10/29)
+            r = subprocess.run(self.a.lap_hook, shell=True, capture_output=True, text=True, timeout=300)
+            lap["lap_hook"] = dict(rc=r.returncode, out=r.stdout.strip()[-200:])
+            print(f"lap hook before lap {k}: rc {r.returncode} {r.stdout.strip()[-200:]}", flush=True)
         if self.a.sync:
             lap["sync"] = dict(mode=self.set_sync(True), tick_ms=self.a.tick_ms, serial=self.a.serial, k0=self.k)
         played = threading.Event()                      # MSC confirms play 1-15 s late (10/26): record from the paused START on
         threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
         tr, clock = self.track, self.clock
-        tr.i, clock.last, passed = 0, None, 0
+        tr.i, clock.last, passed = (self.cp_i[j0] if j0 else 0), None, j0
         t_play, w_play, t_move, x0 = None, time.time(), None, None
-        best_s = 0.0
-        off_t, grace, st = None, math.inf, Stuck(clock.tau)
+        best_s = float(tr.s[self.cp_i[j0]]) if j0 else 0.0
+        left = {l for v in self.cfg.get("signal", {}).get("stop_lines", {}).values() if v.get("movement") == "left" for l in v.get("lights", ())}
+        off_t, grace, st = None, math.inf, Stuck(clock.tau, best_s, left)
         end = t_end = None
         lt = lap_s = 0.0
         interrupted = False
@@ -500,6 +559,8 @@ class Manager:
                 tau = clock.tau if self.a.sync else clock.step(t, e["x"], e["y"], e["v"])
                 clk.append((round(t, 3), round(tau, 3)))
                 s, lat = tr.update(e["x"], e["y"])
+                if lat < 15.0 and e["v"] > 1.0:
+                    lats.append((s, lat))
                 shade = shaded(e["x"], e["y"])
                 ns = int(tau * 1e9)
                 rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
@@ -512,8 +573,9 @@ class Manager:
                                                  for o in objs]))
                 if e["tl"]:
                     rows["signal"].append((ns, (e["tl"], e["color"])))
-                x0 = x0 or (e["x"], e["y"])
-                if t_move is None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
+                if x0 is None and (not j0 or math.hypot(e["x"] - self.cps[j0, 0], e["y"] - self.cps[j0, 1]) < 3.0):
+                    x0 = (e["x"], e["y"])                 # --start-cp: from the spawned pose (not a late transform)
+                if t_move is None and x0 is not None and math.hypot(e["x"] - x0[0], e["y"] - x0[1]) > self.cfg["time"]["move_m"]:
                     t_move = tau
                 if t_play is None and (played.is_set() or t_move is not None):
                     t_play, grace = tau, tau + GRACE_S
@@ -527,6 +589,8 @@ class Manager:
                 if end is None:
                     if passed == 14 and s >= tr.s[-1] - FINISH_M:
                         end = "finish"
+                    elif self.a.end_cp and passed >= self.a.end_cp:
+                        end = f"cp{self.a.end_cp}"
                     elif lt > LIMIT_S:
                         end = "time_limit"
                     elif t_play is not None and tau - t_play > START_S and best_s < START_FRAC * tr.s[-1]:
@@ -564,8 +628,16 @@ class Manager:
         msc("pause")
         lap.update(end=end, lap_s=round(lap_s, 2), wall_s=round(time.time() - w_play, 1), rho_end=round(clock.rho, 3))
         lap["scorer"] = self.judge(rows)
+        if lats:
+            # path following: off the route line on purpose on the highway (lane changes) and the ring, so those spans
+            # are left out; lat_all keeps every sample (a full lap's lat_all rms is ~1-2 m from the highway alone)
+            sl = np.array(lats); la_all = np.abs(sl[:, 1])
+            keep = ~(((sl[:, 0] >= self.highway[0]) & (sl[:, 0] <= self.highway[1])) | ((sl[:, 0] >= self.ring[0]) & (sl[:, 0] <= self.ring[1])))
+            st = lambda a: dict(rms_m=round(float(np.sqrt(np.mean(a ** 2))), 3), p95_m=round(float(np.percentile(a, 95)), 3),
+                                max_m=round(float(a.max()), 3), n=len(a)) if len(a) else None
+            lap["lat"], lap["lat_all"] = st(la_all[keep]), st(la_all)
         if self.objects:
-            lap["validation"] = validate(meta, egot, objt, self.ring, self.highway)
+            lap["validation"] = None if self.a.scene_file else validate(meta, egot, objt, self.ring, self.highway)
             with gzip.open(self.out / f"lap{k:03d}.objects.json.gz", "wt") as f:
                 json.dump(dict(ego=egot, objects=objt), f)
         lap["return_penalty_s"] = RETURN_S * len(lap["returns"])
@@ -679,6 +751,16 @@ def main():
     ap.add_argument("--tick-ms", type=int, default=100, choices=(50, 100), help="--sync: simulator step (100: one per decision, 50: two)")
     ap.add_argument("--serial", action="store_true", help="--sync: each decision's reply before the tick (default: during it)")
     ap.add_argument("--max-s", type=float, default=0.0, help="end a lap after this many seconds of driving (0: off)")
+    ap.add_argument("--start-cp", type=int, default=0, help="start each lap at checkpoint J (1-13; spawned before play, "
+                    "returns, CP order and the start test go on from there; lap_s = from the first move to the end)")
+    ap.add_argument("--scene-file", default="", help="drive this scenario file as given (no variants, its own weather)")
+    ap.add_argument("--network-preset", default="w1_collect", help="--scene-file: network preset loaded after the scene")
+    ap.add_argument("--manual-scene", action="store_true", help="the lap's scene is loaded by hand in the simulator GUI "
+                    "(field PC whose simulator ignores MSC load-scene); pause and play still go through MSC")
+    ap.add_argument("--lap-hook", default="", help="shell command run before every lap after the first (the world paused)")
+    ap.add_argument("--end-cp", type=int, default=0, help="end each lap when checkpoint K is passed (0: at the finish)")
+    ap.add_argument("--density", choices=("off", "low", "high", "alternate"), default="off",
+                    help="roundabout / highway spawn intervals per lap (RING_PERIOD, HW_PERIOD); alternate: lap 0 low, lap 1 high, ...")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
     a = ap.parse_args()
     global BC, GRPC, LAUNCHER, SCEN

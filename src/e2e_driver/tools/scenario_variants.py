@@ -35,6 +35,9 @@ import os
 import random
 import sys
 
+# eval_manager --density (11/09): "ring_lo:ring_hi,hw_lo:hw_hi" s, the spawn interval ranges of a low / high lap
+NPC_PERIOD = [tuple(map(float, r.split(":"))) for r in os.environ["NPC_PERIOD"].split(",")] if os.environ.get("NPC_PERIOD") else None
+
 VEHICLES = [30100004, 30100005, 30100010, 30100014, 30200003, 30300002, 30400004, 30700003]  # IDs seen in saved scenes
 # Obstacle DataIDs that loaded in the 2026-10-20 probe (probe-assets.py), by unit-scale bbox (m). Vehicle-sized ones
 # keep scale 1. shortcut: only the 20 Object Info records nearest the start were read; probe the rest in batches.
@@ -375,10 +378,13 @@ def make(base, route, rng, uid0, cps=None):
 
     sps = []
     ring = ring_points(d)
+    prng = random.Random(repr(rng.getstate()[1][:8]))   # NPC_PERIOD draws apart: the scene draws stay the campaign's
     for sp in d.get("spawnPointList", []):
         roundabout = any(sp is q for q in ring)
         v = rng.uniform(10, 30) if roundabout else rng.uniform(50, 100)
         period = rng.uniform(3, 10) if roundabout else 5.0   # highway: the densest the rules allow (eval 10/27; collection 5-15 s)
+        if NPC_PERIOD:
+            period = prng.uniform(*NPC_PERIOD[0 if roundabout else 1])
         bias = rng.uniform(0, 0.4)
         # Safety distance and TTC never below the sample's 5 m / 1 s: lower values made roundabout NPCs drive into the
         # waiting Ego (64 collisions in 35 episodes, none with the sample scene).
