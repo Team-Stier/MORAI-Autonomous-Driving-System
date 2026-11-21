@@ -5,6 +5,7 @@ use_lidar: true
 server_host: 127.0.0.1
 server_port: 47011
 max_inflight: 2              # requests outstanding: the server prepares the next while the model runs
+apply_delay_s: 0.0            # eval only (delivery_drive.sh sets 0.1): plans drive from t0 + this on tau, never earlier
 command_topic: /control_cmd   # -> speed_filter -> /morai_udp_bridge/control_cmd
 lidar_topic: /lidar_bev/scan
 status_topic: /vehicle/competition_status
