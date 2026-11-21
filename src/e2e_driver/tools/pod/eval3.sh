@@ -58,7 +58,7 @@ if [[ ${SYNC:-0} == 1 ]]; then
 fi
 
 if [[ $DRIVER != stack && $DELIVER == b2:* ]]; then
-  src=${DELIVER#b2:}; DELIVER=$V/models/$(basename "$src"); mkdir -p "$DELIVER"
+  src=${DELIVER#b2:}; DELIVER=$V/models/$(echo "${src%/}" | tr / _); mkdir -p "$DELIVER"   # 11/09: runs/X/deliver all end in "deliver"
   ( b2env; $V/venv-tools/bin/b2 sync --threads 32 --no-progress "b2://morai2026-alpamayo/${src%/}/" "$DELIVER/" > "$OUT/b2_deliver.log" 2>&1 ) &
   DSYNC=$!
 fi
@@ -66,6 +66,12 @@ bash "$HERE/worlds.sh" up "$N" > "$OUT/worlds.log" 2>&1 &
 WORLDS=$!
 E2E_APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} bash "$HERE/stacks.sh" up "$N" > "$OUT/stacks.log" 2>&1
 [[ -n ${DSYNC:-} ]] && { wait $DSYNC && stamp "delivery synced from B2 ($(du -sh "$DELIVER" | cut -f1))" || { stamp "B2 sync failed"; exit 1; }; }
+# 11/09: an engine kept up (KEEP_UP) with another checkpoint is stopped first, never reused for this DELIVER
+if [[ $DRIVER != stack && -e /root/actor/server.pids ]] && kill -0 "$(cat /root/actor/server.pids)" 2> /dev/null && \
+   ! tr '\0' ' ' < "/proc/$(cat /root/actor/server.pids)/cmdline" | grep -qF -- "--ckpt $DELIVER "; then
+  old=$(cat /root/actor/server.pids); stamp "engine $old serves another checkpoint: stopped"; kill "$old"
+  for _ in $(seq 60); do kill -0 "$old" 2> /dev/null || break; sleep 1; done; kill -9 "$old" 2> /dev/null; : > /root/actor/server.pids
+fi
 if [[ $DRIVER == stack ]]; then
   : > /root/actor/server.pids; ENGINE=
 elif [[ -e /root/actor/server.pids ]] && kill -0 "$(cat /root/actor/server.pids)" 2> /dev/null; then
@@ -186,7 +192,7 @@ for n in $(seq "$N"); do
   hook=(); [[ $DRIVER == stack && ${LAP_RESTART:-1} == 1 ]] && hook=(--lap-hook "bash $HERE/stacks.sh renodes $n")
   (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
     --port $((8094 + n)) --no-view --direct --host local --grpc 127.0.0.1:$((7788 + n)) --launcher "$(wdir "$n")/MoraiLauncher_Lin_Data" \
-    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" --start-cp "${START_CP:-0}" --end-cp "${END_CP:-0}" ${SCENE_FILE:+--scene-file "$SCENE_FILE"} \
+    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" --start-cp "${START_CP:-0}" --end-cp "${END_CP:-0}" ${DENSITY:+--density "$DENSITY"} ${SCENE_FILE:+--scene-file "$SCENE_FILE"} \
     ${hook[@]+"${hook[@]}"} ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
   echo $! >> /root/actor/managers.pids
 done

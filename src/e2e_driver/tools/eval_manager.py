@@ -381,9 +381,18 @@ def file_scene(path):
     return src.stem, shade_test(json.loads(src.read_text())["shadedAreaList"][0]), {"file": str(src), "actors": []}
 
 
-def make_scene(seed):
+RING_PERIOD = {"high": (3.0, 5.0), "low": (8.0, 12.0)}   # s, as the 10/29 world_director
+HW_PERIOD = {"high": (3.0, 5.0), "low": (10.0, 15.0)}
+
+
+def lap_density(mode, lap):
+    return None if mode == "off" else ("low", "high")[lap % 2] if mode == "alternate" else mode
+
+
+def make_scene(seed, density=None):
     """-> (scene name, shadow test, scenario_variants manifest entry): lap variant generated on bc-250."""
-    out = ssh(f"cd {SCEN} && python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
+    env = "NPC_PERIOD=%g:%g,%g:%g " % (*RING_PERIOD[density], *HW_PERIOD[density]) if density else ""
+    out = ssh(f"cd {SCEN} && {env}python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
               f" > /dev/null && cat ev{seed}_000.json && echo && echo @@ && cat ev{seed}-manifest.json")
     scene, manifest = out.split("\n@@\n")
     name = f"ev{seed}_000"
@@ -484,7 +493,8 @@ class Manager:
 
     def run_lap(self, k):
         seed = self.a.seed * 1000 + k
-        name, shaded, meta = file_scene(self.a.scene_file) if self.a.scene_file else make_scene(seed)
+        density = lap_density(self.a.density, k)
+        name, shaded, meta = file_scene(self.a.scene_file) if self.a.scene_file else make_scene(seed, density)
         if self.a.sync:
             self.set_sync(False)                          # the tick period applies when sync mode is entered
         msc("pause")
@@ -497,7 +507,7 @@ class Manager:
         if self.a.scene_file:   # a scenario saved elsewhere replaces the Ego's network: Ego status stopped (official
             lap_net = msc("load-network", self.a.network_preset, 60)   # sample, 10/29); the world's preset again
             print(f"network preset {self.a.network_preset} after the scene: {lap_net[:40]}", flush=True)
-        lap = dict(lap=k, scene=name, seed=seed, weather=[], checkpoints=[], returns=[], scene_meta=meta)
+        lap = dict(lap=k, scene=name, seed=seed, density=density, weather=[], checkpoints=[], returns=[], scene_meta=meta)
         egot, objt = [], []                               # replay check: (tau, x, y, s) and the objects near the Ego
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
@@ -749,6 +759,8 @@ def main():
                     "(field PC whose simulator ignores MSC load-scene); pause and play still go through MSC")
     ap.add_argument("--lap-hook", default="", help="shell command run before every lap after the first (the world paused)")
     ap.add_argument("--end-cp", type=int, default=0, help="end each lap when checkpoint K is passed (0: at the finish)")
+    ap.add_argument("--density", choices=("off", "low", "high", "alternate"), default="off",
+                    help="roundabout / highway spawn intervals per lap (RING_PERIOD, HW_PERIOD); alternate: lap 0 low, lap 1 high, ...")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
     a = ap.parse_args()
     global BC, GRPC, LAUNCHER, SCEN

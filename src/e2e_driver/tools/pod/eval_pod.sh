@@ -193,7 +193,7 @@ log "CPU: $cpu, bench ${bench:-?} s (max ${CPU_BENCH_MAX_S:-0.80})"
 # CPU_GATE=0: no CPU gate (build / gtest pods: the CPU only matters for driving); NO_EVAL=1 / CREATE_ONLY=1 default to 0
 CPU_GATE=${CPU_GATE:-$([[ ${NO_EVAL:-0} == 1 || ${CREATE_ONLY:-0} == 1 ]] && echo 0 || echo 1)}
 [[ $CPU_GATE == 1 ]] || log "CPU gate off (CPU_GATE=0 or NO_EVAL/CREATE_ONLY): do not drive laps on this pod later"
-if [[ $CPU_GATE == 1 ]] && { [[ -z $bench || $cpu == *EPYC\ 7* || $cpu == *Xeon* ]] || python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2]) else 1)" "$bench" "${CPU_BENCH_MAX_S:-0.80}"; }; then
+if [[ $CPU_GATE == 1 ]] && { [[ -z $bench || $cpu == *EPYC\ 7* || $cpu == *Xeon* ]] || { [[ ${DESKTOP_CPU:-0} == 1 ]] && ! { [[ $cpu =~ Core\(TM\)|Core\ Ultra|Ryzen ]] && [[ ! $cpu =~ Threadripper ]]; }; } || python3 -c "import sys; sys.exit(0 if float(sys.argv[1]) > float(sys.argv[2]) else 1)" "$bench" "${CPU_BENCH_MAX_S:-0.80}"; }; then
   podlog "reject $POD ($NAME): CPU $cpu bench ${bench:-?} s"
   (( ${CPU_RETRY:-0} < ${CPU_RETRIES:-6} )) || { log "CPU gate: $((CPU_RETRY)) pods rejected, giving up"; KEEP=0 bye; exit 1; }
   KEEP=0 bye; log "CPU gate: pod rejected (deleted even with KEEP=1), creating another"
@@ -208,6 +208,16 @@ if ! grep -q "nvidia_icd.json" <<< "$vk" || ! grep -qiE "nvidia|geforce|rtx" <<<
   (( ${VK_RETRY:-0} < ${VK_RETRIES:-8} )) || { log "Vulkan gate: giving up"; KEEP=0 bye; exit 1; }
   KEEP=0 bye; log "Vulkan gate: pod rejected (deleted), creating another"
   VK_RETRY=$(( ${VK_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"   # its own budget (VK_RETRIES), not the CPU gate's
+fi
+# CUDA gate (11/09): cuInit must see the GPU; a host with Vulkan but CUDA error 999 leaves traffic_light (onnxruntime
+# CUDA) dead at startup -> ENV_INVALID before the first lap. Replaced like a Vulkan reject (same budget)
+cu=$(P "python3 -c \"import ctypes as t, sys; c=t.CDLL(sys.argv[1]); n=t.c_int(); r=c.cuInit(0); c.cuDeviceGetCount(t.byref(n)); print(r, n.value)\" libcuda.so.1" 2>&1 | tail -1)
+log "CUDA: cuInit, devices = $cu"
+if [[ ! $cu =~ ^0\ [1-9] ]]; then
+  podlog "reject $POD ($NAME): CUDA ($cu)"
+  (( ${VK_RETRY:-0} < ${VK_RETRIES:-8} )) || { log "CUDA gate: giving up"; KEEP=0 bye; exit 1; }
+  KEEP=0 bye; log "CUDA gate: pod rejected (deleted), creating another"
+  VK_RETRY=$(( ${VK_RETRY:-0} + 1 )) exec bash "$0" "${ORIG_ARGS[@]}"
 fi
 if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
   M=/root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Version
@@ -293,16 +303,18 @@ print(int(ok), "%s score %s s, 패널티 %s s" % (r.get("end"), f(r.get("score_s
     line="${MSG_PREFIX:-}[$summary] $line"
     if [[ $drove == 1 ]]; then
       scp -q -F "$SSHC" "pod:$vid" "$LOCAL/laps/" 2> /dev/null
+      if [[ ${NO_DM:-0} == 1 ]]; then code="kept, no DM"; else   # NO_DM=1 (11/09): the video stays in LOCAL/laps
       code=$( [[ -s $LOCAL/laps/$(basename "$vid") ]] && dm "$line" "$LOCAL/laps/$(basename "$vid")" || echo none)
       [[ $code == 200 ]] || code="$code, link: $(dm "$line
 영상(7일 링크): $url")"
       # the user's Mac Claude app (desktop session '개발 철학 이해' fetches the B2 link; the runner messages it per line)
       python3 -c 'import json,os,sys,time; print(json.dumps(dict(time=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), version=sys.argv[1], run=sys.argv[2], lap=int(sys.argv[3].split("_")[-1]), summary=sys.argv[4], url=sys.argv[5], size_mb=round(os.path.getsize(sys.argv[6]) / 1e6, 1) if os.path.exists(sys.argv[6]) else None, discord=sys.argv[7]), ensure_ascii=False))' \
         "${VERSION:-${MSG_PREFIX:-}}" "$1" "$K" "$summary" "$url" "$LOCAL/laps/$(basename "$vid")" "$code" >> "${VIDEO_FEED:-/home/opc/morai-campaign/shared/results/video_feed.jsonl}"
+      fi
     else
       code="not sent (no drive: $summary)"
     fi
-    rm -f "$LOCAL/laps/$(basename "$vid")"   # host disk: the video lives on in B2 and in the DM
+    [[ ${NO_DM:-0} == 1 ]] || rm -f "$LOCAL/laps/$(basename "$vid")"   # host disk: the video lives on in B2 and in the DM
     echo "$code" > "$LOCAL/${1}_$(basename "$f").sent"; log "lap $(basename "$f" .ready) sent to Discord ($code)"
   done
 }
@@ -326,7 +338,7 @@ redraw=${REDRAW:-1}
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   wave=("${SEEDS[@]:w:N}"); WN=$RUN; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${RUN}_wave$((w / N + 1))
   P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$RUN/timeline.txt /workspace/results/$WN/ && \
-     (DRIVER=$DRIVER SCENE_FILE=${SCENE_FILE:+/workspace/scene/$(basename "$SCENE_FILE")} RVIZ=${RVIZ:-0} RVIZ_FPS=${RVIZ_FPS:-5} START_CP=${START_CP:-0} END_CP=${END_CP:-0} SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} GUARD_RHO_FIRST=${GUARD_RHO_FIRST:-0.85} GUARD_EGO_HZ=${GUARD_EGO_HZ:-40} SENSOR_PRESET=${SENSOR_PRESET:-sub} \
+     (DRIVER=$DRIVER SCENE_FILE=${SCENE_FILE:+/workspace/scene/$(basename "$SCENE_FILE")} RVIZ=${RVIZ:-0} RVIZ_FPS=${RVIZ_FPS:-5} START_CP=${START_CP:-0} END_CP=${END_CP:-0} DENSITY=${DENSITY:-} SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} GUARD_RHO_FIRST=${GUARD_RHO_FIRST:-0.85} GUARD_EGO_HZ=${GUARD_EGO_HZ:-40} SENSOR_PRESET=${SENSOR_PRESET:-sub} \
       KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
   sleep 10   # setsid may not have exec'd eval3 yet when the next ssh looks for it
