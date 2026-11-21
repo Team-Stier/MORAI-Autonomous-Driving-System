@@ -18,7 +18,7 @@
 #   replay check are drawn anew once (new seeds, one more wave).
 #   ATTACH=<pod/instance id> (ATTACH_T0 = its create epoch): run the eval on a box this script set up before.
 #   PROVIDER=vast OFFER="<vastai offer id> ..." (with BUNDLE; the next offer when one is not running after LOAD_MIN, 6): a vast instance instead (B2 keys from the vast account's env
-#   vars, ssh keys from the account; vastai CLI on the Mac). LAPS=K: K laps per world (seed S -> scenes S*1000+k);
+#   vars, ssh keys from the account; vastai CLI on the Mac). LAPS=K: laps up to K per world (seed S -> scenes S*1000+k; FIRST_LAP=J starts at lap J);
 #   LAP_DELIVER=1: each lap's 1x phone video (< 24 MB) and one-line report go to B2 runs/eval_vps/NAME/lap_KK/ and, from
 #   the Mac, to the user's Discord DM (bot token in ~/.claude/channels/discord/.env, never printed; a failed attachment
 #   falls back to a 7-day B2 link). MSG_PREFIX starts each lap message (e.g. "[R2 미세조정 납품본] ").
@@ -27,9 +27,9 @@ set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd); AC=$(cd "$REPO/../Alpamayo-Cosmos" && pwd)
 NAME=$1; DELIVER=$2; shift 2; SEEDS=("$@")
 # no seed given: a new one per run (scenes S*1000+k, in laps.jsonl, every lap report and the results name NAME_sS); give
-# one only to replay scenes. draw: eval seeds are 0-99 (DAgger actors 1000+, PPO 2000+), never 7, 28 or 29 (the scenes of
-# earlier runs, user 10/28) or a seed of this run
-draw() { python3 -c 'import random,sys; print(random.choice([s for s in range(100) if s not in {7, 28, 29, *map(int, sys.argv[1:])}]))' "$@"; }
+# one only to replay scenes. draw: the clock (epoch s, user 10/29: always new scenes), clear of the 0-99 eval seeds of
+# earlier runs and the DAgger (1000+) / PPO (2000+) actors; + the seeds already drawn in this run, so none repeats
+draw() { echo $(( $(date +%s) + $# )); }
 (( ${#SEEDS[@]} )) || SEEDS=($(draw))
 RUN=${NAME}_s$(IFS=-; echo "${SEEDS[*]}")   # results and B2 runs/eval_vps/RUN; LOCAL (ssh_config) keeps NAME
 KEY=${RUNPOD_API_KEY:-$(sed -n 's/^api_key = "\(.*\)"/\1/p' ~/.runpod/config.toml)}
@@ -126,6 +126,12 @@ fi
 [[ -z ${ATTACH:-} ]] && printf 'Host pod\n  HostName %s\n  Port %s\n  User root\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  LogLevel ERROR\n  ServerAliveInterval 30\n' "$ip" "$port" > "$SSHC"
 P() { ssh -F "$SSHC" pod "$@"; }
 late() { (( $(date +%s) - ${T0%.*} > $1 )) && { log "$2: gave up"; exit 1; }; true; }   # the trap terminates the pod
+code_sync() {   # every start, ATTACH included (10/29: an attached box ran the old eval_manager)
+  rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ --exclude '*.onnx' \
+    --exclude object_detector/models --exclude traffic_light/models "$REPO/" pod:/workspace/MORAI-Autonomous-Driving-System/
+  rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/
+  log "code synced"
+}
 [[ -z ${ATTACH:-} ]] && {
 until P true 2> /dev/null; do late 900 "no ssh 15 min after create (setup.sh died before sshd? /workspace/setup.<host>.log)"; sleep 3; done
 log "ssh up ($ip:$port)"
@@ -136,15 +142,13 @@ if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (se
     scp -q -F "$SSHC" ~/.morai-secrets/config.tar pod:/workspace/morai/config.tar.part && P "mv /workspace/morai/config.tar.part /workspace/morai/config.tar"
   log "bundle fetched: $(P "tail -1 /workspace/fetch.log")"
 fi
-rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ --exclude '*.onnx' \
-  --exclude object_detector/models --exclude traffic_light/models "$REPO/" pod:/workspace/MORAI-Autonomous-Driving-System/
-rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/scorer" "$AC/tools/vast" pod:/workspace/Alpamayo-Cosmos/tools/
-log "code synced"
+code_sync
 until P "test -e /workspace/setup.\$(hostname).log && grep -q 'setup.*done\|rror' /workspace/setup.\$(hostname).log"; do late 1500 "setup"; sleep 3; done
 P "tail -3 /workspace/setup.\$(hostname).log; nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; nproc --all" | tee -a "$LOCAL/eval_pod.log"
 P "grep -q 'setup.*done' /workspace/setup.\$(hostname).log" || { log "setup failed"; exit 1; }
 log "setup done"
 }
+[[ -n ${ATTACH:-} ]] && code_sync
 [[ ${CREATE_ONLY:-0} == 1 ]] && { KEEP=1; exit 0; }
 
 dm() {  # TEXT [FILE] -> HTTP code: a Discord DM to the user (memory discord-urgent-dm), the bot token never printed
@@ -179,7 +183,7 @@ redraw=${REDRAW:-1}
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   wave=("${SEEDS[@]:w:N}"); WN=$RUN; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${RUN}_wave$((w / N + 1))
   P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$RUN/timeline.txt /workspace/results/$WN/ && \
-     (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
+     (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} FIRST_LAP=${FIRST_LAP:-0} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
       KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
   sleep 10   # setsid may not have exec'd eval3 yet when the next ssh looks for it

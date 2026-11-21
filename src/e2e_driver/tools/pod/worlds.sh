@@ -43,7 +43,7 @@ start1() {
 login1() {
   local n=$1 log=/root/inst/$1/Player.log cpus; cpus=$(taskset -pc "$(pgrep -f "inst/$n/Player[.]log" | head -1)" 2> /dev/null | sed 's/.*: //')
   for i in $(seq 60); do grep -q 'Login success' "$log" 2>/dev/null && break; sleep 3; done
-  grep -q 'Login success' "$log" || { echo "w$n: no login"; tail -3 "$log"; return 1; }
+  grep -q 'Login success' "$log" || { echo "w$n: no login (sim state $(ps -o stat=,etime=,rss= -p "$(pgrep -f "inst/$n/Player[.]log" | head -1)" 2> /dev/null), $(grep -E '^(Dirty|Writeback):' /proc/meminfo | tr -s ' ' | tr '\n' ' '))"; tail -3 "$log"; return 1; }
   echo "$(date +%T) w$n logged in (cpus $cpus, gRPC $((7788 + n)), DISPLAY :$n)"
 }
 

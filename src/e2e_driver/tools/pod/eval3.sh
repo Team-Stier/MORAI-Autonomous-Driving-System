@@ -5,8 +5,8 @@
 # Parts, started together: worlds.sh up N | the batched engine (model_server --sims N on 47011) | stacks.sh up N with
 # E2E_APPLY_DELAY_S 0.1 (the stacks run on tau; a plan observed at tau drives from tau + 0.1 s, a later reply is late).
 # Then per world n: viewer.py on Xvfb :n (MJPEG 127.0.0.1:8090+n) + lap_video.py record, /e2e_driver/debug and
-# /sim_clock/state recorders in stack n, eval_manager.py --laps 1 (scene variant of the seed, returns and weather over
-# gRPC 7788+n). After the laps: everything down, eval3_summary.py (summary.json), 1x plain videos <= 30 MB, plan overlays
+# /sim_clock/state recorders in stack n, eval_manager.py --laps LAPS (1; continuous laps in one pool scene of the seed, a
+# new obstacle layout per lap, returns and weather over gRPC 7788+n). After the laps: everything down, eval3_summary.py (summary.json), 1x plain videos <= 30 MB, plan overlays
 # (test/plan_overlay.py), all of $V/results/NAME (frames stay on the container disk) to B2 runs/eval_vps/NAME.
 # Timeline: $V/results/NAME/timeline.txt (epoch, clock, step). Env: VIEW_FPS (10), VIEW_WIDTH (1280), APPLY_DELAY_S (0.1),
 # SIM_FPS (60: uncapped; worlds.sh)
@@ -44,13 +44,16 @@ if [[ ${SYNC:-0} == 1 ]]; then
   SYNC_ARGS=(--tick-ms "${TICK_MS:-100}"); [[ ${SERIAL:-0} == 1 ]] && SYNC_ARGS+=(--serial)
 fi
 
-if [[ $DELIVER == b2:* ]]; then
-  src=${DELIVER#b2:}; DELIVER=$V/models/$(basename "$src"); mkdir -p "$DELIVER"
-  ( b2env; $V/venv-tools/bin/b2 sync --threads 32 --no-progress "b2://morai2026-alpamayo/${src%/}/" "$DELIVER/" > "$OUT/b2_deliver.log" 2>&1 ) &
-  DSYNC=$!
-fi
 bash "$HERE/worlds.sh" up "$N" > "$OUT/worlds.log" 2>&1 &
 WORLDS=$!
+if [[ $DELIVER == b2:* ]]; then
+  src=${DELIVER#b2:}; DELIVER=$V/models/$(basename "$src"); mkdir -p "$DELIVER"
+  # only once the worlds are up: a 15 GB download beside a fresh world's first load kept it in disk wait (D state) with
+  # no login in 180 s (vast 58138446, 10/29; earlier fresh boxes ran a delivery from the bundle)
+  ( while kill -0 $WORLDS 2> /dev/null; do sleep 2; done
+    b2env; $V/venv-tools/bin/b2 sync --threads 32 --no-progress "b2://morai2026-alpamayo/${src%/}/" "$DELIVER/" > "$OUT/b2_deliver.log" 2>&1 ) &
+  DSYNC=$!
+fi
 E2E_APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} bash "$HERE/stacks.sh" up "$N" > "$OUT/stacks.log" 2>&1
 [[ -n ${DSYNC:-} ]] && { wait $DSYNC && stamp "delivery synced from B2 ($(du -sh "$DELIVER" | cut -f1))" || { stamp "B2 sync failed"; exit 1; }; }
 if [[ -e /root/actor/server.pids ]] && kill -0 "$(cat /root/actor/server.pids)" 2> /dev/null; then
@@ -93,7 +96,7 @@ for n in $(seq "$N"); do
   echo $! >> /root/actor/rec.pids
   (cd $E2E/tools && exec $PY -u eval_manager.py eval_map --seed "${SEEDS[n-1]}" --scorer "$SCORER" --out "$O" \
     --port $((8094 + n)) --no-view --direct --host local --grpc 127.0.0.1:$((7788 + n)) --launcher "$(wdir "$n")/MoraiLauncher_Lin_Data" \
-    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
+    --objinfo-port $((7505 + 1000 * (n - 1))) --laps "${LAPS:-1}" --first-lap "${FIRST_LAP:-0}" ${SYNC_ARGS[@]+"${SYNC_ARGS[@]}"} $([[ ${SYNC:-0} == 1 ]] && echo --sync $((47100 + n))) > "$O/eval.log" 2>&1 < /dev/null) &
   echo $! >> /root/actor/managers.pids
 done
 stamp "drives started ($N managers)"
@@ -102,7 +105,8 @@ stamp "drives started ($N managers)"
   live=0; pgrep -f "[e]val_manager.py eval_map" > /dev/null && live=1
   for n in $(seq "$N"); do
     for ((k = ${done_[$n]:-0}; k < $(wc -l < "$OUT/w$n/eval_map/laps.jsonl" 2> /dev/null || echo 0); k++)); do
-      bash "$HERE/lap_deliver.sh" "$OUT" "$n" "$k" "$NAME" && stamp "lap $((k + 1)) of w$n delivered: $(cut -f1 "$OUT/lap_$(printf %02d $((k + 1))).ready" | cut -c1-160)"
+      j=$((k + ${FIRST_LAP:-0}))   # the lap's number (FIRST_LAP: a run split over boxes), k its line in laps.jsonl
+      bash "$HERE/lap_deliver.sh" "$OUT" "$n" "$j" "$NAME" && stamp "lap $((j + 1)) of w$n delivered: $(cut -f1 "$OUT/lap_$(printf %02d $((j + 1))).ready" | cut -c1-160)"
       done_[$n]=$((k + 1))
     done
   done
