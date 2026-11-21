@@ -535,6 +535,7 @@ uv run --no-project --with numpy python pod/shadow_replay.py plans $D/rec_w1 $D/
   - 예: 45 m 너머의 곡률, 계획기의 정지 장애물 반응, 회전교차로 합류 판단.
 
 ## 동적 장애물·터널 구간 (`--scene-preset brake`, 10/28)
+- **10/29부터 대체됨:** 액터도 랩 영상과 같은 `scenario_variants.py` v2 + `world_director.py`를 쓴다. v2가 모든 동적 구간에 must_stop/pass_front 타이밍을 넣으므로 `--scene-preset`은 받기만 하고 무시한다(segments.py는 그대로). 기본은 연속 에피소드다: 풀 장면을 한 번만 싣고, 에피소드마다 gRPC로 장애물을 다시 놓고 Ego를 START_CP에 둔 뒤 곧바로 시작한다. 예전 방식은 `--reload-each-episode`. 아래는 10/28 기록이다.
 - 사용자 결정: 이 구간 장면에는 동적 물체가 실제로 제동이나 양보를 일으키는 구성만 둔다.
 - `rl_episode --scene-preset brake` → `scenario_variants.py` `SCENE_PRESET=brake`:
   - 물체는 경로 차로를 가로지르는 것만 둔다(좌→우, 우→좌, 주차차 뒤에서). must_stop 85 %, pass_front 15 %이고, 미리 지나감·충돌 없음·길가 보행은 없다.

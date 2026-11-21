@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# stacks.sh up N | down | config n: N closed-loop ROS stacks on one host, stack n for MORAI world n (worlds.sh).
+# stacks.sh up N | down [n] | config n: N closed-loop ROS stacks on one host, stack n for MORAI world n (worlds.sh).
 # run.sh cannot be used N times: it kills every ROS process on the host and rebuilds the workspace. So this starts the
 # same chain as run.sh after its build (keep the two in step): roscore, sim_clock (/use_sim_time), bridge, velodyne,
 # vlp16_bev, tf_publisher, lidar_leveler, localization, section_annotator, e2e_driver, speed_filter.
@@ -64,7 +64,7 @@ down1() {
 cd "$WS" || exit 1
 case ${1:-} in
   up) for n in $(seq "${2:-3}"); do up1 "$n"; done ;;
-  down) for d in "$R"/*/; do [[ -e $d/stack.pid ]] && down1 "$(basename "$d")"; done; true ;;
+  down) if [[ -n ${2:-} ]]; then down1 "$2"; else for d in "$R"/*/; do [[ -e $d/stack.pid ]] && down1 "$(basename "$d")"; done; fi; true ;;
   config) config "$2"; cat "$R/$2/bridge.yaml" ;;
   *) sed -n 2,8p "$0"; exit 1 ;;
 esac

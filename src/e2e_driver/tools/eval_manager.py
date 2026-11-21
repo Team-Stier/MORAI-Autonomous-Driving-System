@@ -8,11 +8,16 @@ ssh (scene loads, play, pause), MORAI's official programs on bc-250 (checkpoint 
 
     tools/eval.sh NAME [--laps N] [--seed S] [--weather SUNNY:13]      after two_pc.sh up and two_pc.sh prep
 
-Laps: lap k gets a fresh random variant of the clcol scene, seed S*1000+k (scenario_variants.py on bc-250: Ego at
-START; signal phases, NPC traffic, static obstacles, pedestrian and the GPS shadow area drawn at random). It is loaded
-paused, the weather is set and play starts. A lap ends at the finish (the 14 checkpoints in order, then the last route
-waypoint), at the 15 min limit, or when the route's 5 % point is not passed within 1 min of the start (rules §3-2);
-the next lap's scene is loaded right away. Checkpoints: the official 10/7 table (checkpoints_20261007.csv, 3 m radius).
+Laps (continuous, user 10/29): the run loads one pool scene of seed S once (scenario_variants.py pool on bc-250: signal
+phases drawn, no spawn points, every obstacle asset parked off the route), with no MSC pause before the load. Lap k
+lays the obstacles out anew (scenario_variants.layout, seed S*1000+k) through world_director.py over gRPC, which also
+moves the dynamic ones on the Ego's timing and runs the roundabout's and the highway's traffic; from the second lap on the Ego is put
+back at START over gRPC first (the stack resets its history on the jump, as after a return). A lap ends at the finish
+(the 14 checkpoints in order, then the last route waypoint), at the 15 min limit, or when the route's 5 % point is not
+passed within 1 min of the start (rules §3-2); the next lap starts at once. --reload-each-lap: a fresh variant scene per
+lap instead (seed S*1000+k, loaded paused), as before 10/29. --density low | high | alternate (default: lap k low for
+even k, high for odd): the roundabout's and the highway's traffic per lap (world_director RING_PERIOD / HW_PERIOD; with
+--reload-each-lap the scene's spawn point intervals). Checkpoints: the official 10/7 table (checkpoints_20261007.csv, 3 m radius).
 Weather and time (rules §2-7-2): per checkpoint section (number of checkpoints passed), (Sunny | Foggy density 1) x
 (11 | 13 | 15 h) drawn from (lap seed, section) with env_follow.combo, set with MORAI's Time / Weather Changer
 (WeatherTimeChanger_Linux, 9/28; its buttons pressed by wtc.py) and read back over gRPC. The program sends Weather.type
@@ -40,9 +45,10 @@ simulation time -> the stack's step through its sync_clock_node on 127.0.0.1:POR
 the request sent on the 0.1 s grid; --serial: its reply awaited before the tick) -> Tick(1). Each step's wall-time
 breakdown goes to OUT/NAME/steps.jsonl. --max-s ends a lap after that much driving (speed measurements).
 Replay check (--objinfo-port, GT): MORAI Object Info within 80 m of the Ego per step (lapK.objects.json.gz) -> lap
-"validation": every dynamic object the Ego came within its trigger distance of moved, every static one stood where the
-scene put it, the roundabout and the highway had NPC vehicles while the Ego was there (and how many vehicle sizes), with
-tracks split at jumps (MORAI reuses object ids across scene loads: a new scene's object can show at the old position).
+"validation": every dynamic object the Ego came within its trigger distance of (world_director's: once the Ego reached
+its crossing s - 60 m) moved, every static one stood where the scene put it, the roundabout and the highway had NPC
+vehicles while the Ego was there (and how many vehicle sizes), with tracks split at jumps (MORAI reuses object ids
+across scene loads: a new scene's object can show at the old position).
 Viewer: http://localhost:8091 shows the simulator window (viewer.py on bc-250: MJPEG on 192.168.0.15:8090) and the
 lap status.
 """
@@ -53,6 +59,7 @@ import gzip
 import json
 import math
 import os
+import random
 import shutil
 import signal
 import socket
@@ -68,6 +75,7 @@ import numpy as np
 from google.protobuf import descriptor_pool, json_format, message_factory
 
 from env_follow import combo, get as get_env, send as send_weather
+from world_director import HW_PERIOD, RING_PERIOD, lap_density
 
 HERE = Path(__file__).resolve().parent
 MAP = HERE.parent.parent / "map"
@@ -80,6 +88,7 @@ EGO = {"id": {"value": "Ego"}, "object_type": "OBJECT_TYPE_VEHICLE", "client_key
 
 CP_R, LIMIT_S, START_S, START_FRAC, RETURN_S = 3.0, 900.0, 60.0, 0.05, 15.0    # rules §3-2
 FINISH_M = 1.0          # route progress within this of the last waypoint = finished (tools/scorer time.finish_m)
+START = (-131.486, -427.961, 28.883, 63.85)   # the clcol scene's Ego start, transform z as the scene has it (continuous laps)
 # User 10/28: returns at once, not after minutes. 60 s with red time excluded let a car stand 330 s before a light without
 # a return (r2stop lap 1, s 306): now 30 s of no progress, red-light and yield time excluded, and 90 s in all at most
 STUCK_S = 30.0
@@ -87,6 +96,8 @@ WAIT_MAX_S = 90.0       # any stop, red light or yield included (red phases seen
 YIELD_M, YIELD_LAT_M, YIELD_V = 20.0, 10.0, 0.5   # yield = an object moving > YIELD_V m/s up to YIELD_M ahead, YIELD_LAT_M aside
 CRASH_STUCK_S = 15.0    # "cannot go on after a collision"
 PROGRESS_M = 5.0        # route progress that resets the stuck timers: a car pushing a small box creeps ~0.1 m/s (10/26)
+STUCK_LOOP_N, STUCK_LOOP_M = 3, 10.0   # returned this many times for one place (m): the lap ends, the next scene
+# follows (user 10/29: a lap the Ego cannot get through goes to video at once); OUT/eval_map/SKIP ends it by hand
 OFF_ROAD_S = 2.0
 SKIP_M = 10.0
 GRACE_S = 10.0          # no failure checks right after a start or a return: the stack starts over from standstill
@@ -252,7 +263,7 @@ def validate(meta, ego, objs, ring, highway):
             if tr and math.hypot(x - tr[-1][1], y - tr[-1][2]) > 3.0 + (35.0 if k == 1 else 10.0) * (tau - tr[-1][0]):
                 tr.clear()                            # faster than a vehicle (35 m/s) or a prop / pedestrian (10 m/s)
             tr.append((tau, x, y))
-    E = np.array([e[:3] for e in ego]) if ego else np.zeros((0, 3))
+    E = np.array([e[:4] for e in ego]) if ego else np.zeros((0, 4))
     res, fails = dict(dynamic=[], static=[]), []
     for a in meta.get("actors", []):
         if "xy" not in a:
@@ -260,7 +271,10 @@ def validate(meta, ego, objs, ring, highway):
         ax, ay = a["xy"]
         dyn = a["zone"].endswith("_dynamic")
         reach = a.get("active", 0.0) + 2.0 if dyn else 40.0
-        near = E[np.hypot(E[:, 1] - ax, E[:, 2] - ay) <= reach] if len(E) else E
+        if dyn and "s_cross" in a:                    # world_director moves it on the Ego's timing, not MORAI's trigger
+            near = E[E[:, 3] >= a["s_cross"] - 60.0]
+        else:
+            near = E[np.hypot(E[:, 1] - ax, E[:, 2] - ay) <= reach] if len(E) else E
         if not len(near):
             (res["dynamic"] if dyn else res["static"]).append(dict(zone=a["zone"], id=a["id"], status="not_reached"))
             continue
@@ -366,14 +380,26 @@ def msc(action, option="", timeout=30):
     return out[-1] if out else ""
 
 
-def make_scene(seed, preset=""):
-    """-> (scene name, shadow test, scenario_variants manifest entry): lap variant generated on bc-250 (preset:
-    scenario_variants.py SCENE_PRESET)."""
-    out = ssh(f"cd {SCEN} && SCENE_PRESET={preset} python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
+def make_scene(seed, density=None):
+    """-> (scene name, shadow test, scenario_variants manifest entry): lap variant generated on bc-250. density low / high:
+    the spawn points' intervals from world_director's ranges for it (MORAI draws each between min and max)."""
+    env = ""
+    if density:
+        env = "NPC_PERIOD=%g:%g,%g:%g " % (*RING_PERIOD[density], *HW_PERIOD[density])
+    out = ssh(f"cd {SCEN} && {env}python3 ~/morai-eval-scenario-variants.py . clcol 1 {seed} ~/morai-eval-global-path.txt ev"
               f" > /dev/null && cat ev{seed}_000.json && echo && echo @@ && cat ev{seed}-manifest.json")
     scene, manifest = out.split("\n@@\n")
     name = f"ev{seed}_000"
     return name, shade_test(json.loads(scene)["shadedAreaList"][0]), json.loads(manifest)[name]
+
+
+def pool_scene(seed):
+    """-> (scene name, shadow test, asset pool): the run's one scene for continuous laps, generated on bc-250."""
+    name = f"ev{seed}_pool"
+    out = ssh(f"cd {SCEN} && python3 ~/morai-eval-scenario-variants.py pool . clcol {seed} ~/morai-eval-global-path.txt {name}"
+              f" > /dev/null && cat {name}.json && echo && echo @@ && cat {name}-pool.json")
+    scene, pool = out.split("\n@@\n")
+    return name, shade_test(json.loads(scene)["shadedAreaList"][0]), json.loads(pool)
 
 
 class Manager:
@@ -393,6 +419,7 @@ class Manager:
         self.out = Path(a.out).expanduser() / a.name
         self.out.mkdir(parents=True, exist_ok=True)
         self.status, self.history = "starting", []
+        self.director = self.played = None                # played None: the scene is loaded and not yet played
         self.objects = objinfo(a.objinfo_port) if a.objinfo_port else None
         cs = lambda j: float(self.track.s[self.cp_i[j]])
         self.ring, self.highway = (cs(8) - 20.0, cs(9) + 20.0), (1118.7, 1741.7)   # ring entry/exit checkpoints; RL_PLAN highway
@@ -466,24 +493,91 @@ class Manager:
                 time.sleep(0.5)
         raise RuntimeError(f"simulator gRPC unreachable: {err}")
 
-    def run_lap(self, k):
-        seed = self.a.seed * 1000 + k
-        name, shaded, meta = make_scene(seed)
+    def load(self, name, pause):
         if self.a.sync:
             self.set_sync(False)                          # the tick period applies when sync mode is entered
-        msc("pause")
+        if pause:
+            msc("pause")
         r = msc("load-scene", name + "/62", 90)
         if not r.startswith("ok"):
             raise RuntimeError(f"scene load {name}: {r}")
-        lap = dict(lap=k, scene=name, seed=seed, weather=[], checkpoints=[], returns=[], scene_meta=meta)
+        self.played = None
+
+    def load_pool(self):
+        """continuous laps: the run's one scene and its Director. No pause before the load: pause -> load-scene after
+        gRPC use crashed the world twice (Mono assertion, 10/29)."""
+        import scenario_variants as sv                    # here, not at the top: rl_episode.py and --reload-each-lap do not use it
+        from world_director import Director
+        self.scene, self.shaded, self.pool = pool_scene(self.a.seed)
+        for k in range(3):   # the load crashed MORAI in 2 of 3 fresh worlds on one 5090 host (Mono assertion, 10/29)
+            try:
+                self.load(self.scene, pause=False)
+                break
+            except RuntimeError as e:
+                if k == 2 or BC != "local":
+                    raise
+                print(f"{e}: a fresh world, loading again", flush=True)
+                self.restart_world()
+        self.sv, self.route = sv, sv.Route(str(MAP / "2026_molit_comp_global_path.txt"))
+        self.director = Director(self.sim, self.route, self.pool, random.Random(self.a.seed))
+
+    def restart_world(self):
+        """this manager's world (eval3: world n's gRPC port 7788 + n) killed and brought up again by worlds.sh, then its
+        stack n by stacks.sh (the others stay up). shortcut: eval3's /e2e_driver/debug and clock recorders of stack n
+        stop with the old stack (no model-latency rows after it); restart them too if that matters."""
+        n = int(GRPC.rsplit(":", 1)[1]) - 7788
+        for p in os.listdir("/proc"):
+            try:
+                if p.isdigit() and int(p) != os.getpid() and f"inst/{n}/Player.log".encode() in open(f"/proc/{p}/cmdline", "rb").read():
+                    os.kill(int(p), signal.SIGKILL)
+            except OSError:
+                continue
+        time.sleep(3)
+        subprocess.run(["bash", str(HERE / "pod" / "worlds.sh"), "up", str(n)], check=True, timeout=600)
+        # its stack too: on the old world's clock the pipeline rejected every input after the restart (v3m, 10/29)
+        env = dict(os.environ, E2E_APPLY_DELAY_S=os.environ.get("APPLY_DELAY_S", "0.1"))
+        subprocess.run(["bash", str(HERE / "pod" / "stacks.sh"), "down", str(n)], timeout=120)
+        subprocess.run(["bash", str(HERE / "pod" / "stacks.sh"), "up", str(n)], check=True, timeout=600, env=env)
+
+    def restart(self):
+        """continuous laps: the Ego back at START over gRPC, as a return does (the stack resets its history on the jump)."""
+        self.sim.put(*START)
+        for _ in range(20):                               # the lap's first row must be at START (scorer start, lap timer)
+            e = self.ego()
+            if math.hypot(e["x"] - START[0], e["y"] - START[1]) < CP_R:
+                return
+            self.tick(time.perf_counter()) if self.a.sync else time.sleep(0.1)   # sync: the transform may wait for a tick
+        raise RuntimeError(f"the Ego did not get to START: {e['x']:.1f} {e['y']:.1f}")
+
+    def run_lap(self, k):
+        seed, ev0 = self.a.seed * 1000 + k, []
+        density = lap_density(self.a.density, k)
+        if self.director is None:                         # --reload-each-lap
+            name, shaded, meta = make_scene(seed, density)
+            self.load(name, pause=True)
+        else:
+            name, shaded, meta = self.scene, self.shaded, self.sv.layout(self.route, random.Random(seed), self.pool)
+            # the lap's own draws (vehicle sets, periods, speeds): the same lap of the same seed gets the same traffic set-up
+            # whatever ran before it (another model, a run split over boxes with --first-lap)
+            self.director.rng = random.Random(f"director:{seed}")
+            ev0 = self.director.new_lap(meta, density)    # before the Ego is released; ring_lap / highway_lap: the traffic
+            if self.played:                               # not the scene's first lap
+                self.restart()
+        lap = dict(lap=k, scene=name, seed=seed, density=density, weather=[], checkpoints=[], returns=[], scene_meta=meta)
+        if self.director:
+            lap["director"] = ev0                         # its events (moves started, vehicle sets), as step() returns them
         egot, objt = [], []                               # replay check: (tau, x, y, s) and the objects near the Ego
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []                                          # (wall s, tau s): lap_video.py puts a screen recording on tau
         self.weather(lap, seed, 0, 0.0)
+        if self.played is None:                           # the scene's first lap
+            if self.a.sync:
+                self.sync_mode = self.set_sync(True)
+            self.played = threading.Event()               # MSC confirms play 1-15 s late (10/26): record from the paused START on
+            threading.Thread(target=lambda p=self.played: (msc("play"), p.set()), daemon=True).start()
         if self.a.sync:
-            lap["sync"] = dict(mode=self.set_sync(True), tick_ms=self.a.tick_ms, serial=self.a.serial, k0=self.k)
-        played = threading.Event()                      # MSC confirms play 1-15 s late (10/26): record from the paused START on
-        threading.Thread(target=lambda: (msc("play"), played.set()), daemon=True).start()
+            lap["sync"] = dict(mode=self.sync_mode, tick_ms=self.a.tick_ms, serial=self.a.serial, k0=self.k)
+        played = self.played
         tr, clock = self.track, self.clock
         tr.i, clock.last, passed = 0, None, 0
         t_play, w_play, t_move, x0 = None, time.time(), None, None
@@ -511,6 +605,8 @@ class Manager:
                 if self.objects:
                     objt.append((round(tau, 3), [[o[0], o[1], round(o[2], 2), round(o[3], 2), round(o[6], 2), round(o[7], 2), round(o[8], 2)]
                                                  for o in objs]))
+                if self.director:                         # sync: between ticks, like every gRPC call here
+                    lap["director"] += self.director.step(tau, dict(x=e["x"], y=e["y"], yaw=e["yaw"], v=e["v"], s=s))   # yaw rad
                 if e["tl"]:
                     rows["signal"].append((ns, (e["tl"], e["color"])))
                 x0 = x0 or (e["x"], e["y"])
@@ -534,6 +630,12 @@ class Manager:
                         end = "start_fail"
                     elif self.a.max_s and lt > self.a.max_s:
                         end = "max_s"
+                    elif len(lap["returns"]) >= STUCK_LOOP_N and sum(
+                            abs(r["s"] - lap["returns"][-1]["s"]) < STUCK_LOOP_M for r in lap["returns"]) >= STUCK_LOOP_N:
+                        end = "stuck_loop"
+                    elif (self.out / "SKIP").exists():
+                        (self.out / "SKIP").unlink()
+                        end = "skipped"
                     t_end, lap_s = tau, lt
                 # drive failures -> return to the last checkpoint passed
                 stuck = st.update(tau, s, e, objs, bool(e["hit"]))
@@ -562,7 +664,8 @@ class Manager:
                     time.sleep(max(0.0, 1.0 / HZ - (time.time() - t)))
         except KeyboardInterrupt:                         # Ctrl-C: keep the lap so far, then stop
             interrupted, lap_s, end = True, (lap_s if end else lt), end or "interrupted"
-        msc("pause")
+        if self.director is None:                         # continuous: the next lap starts at once, in the same scene
+            msc("pause")
         lap.update(end=end, lap_s=round(lap_s, 2), wall_s=round(time.time() - w_play, 1), rho_end=round(clock.rho, 3))
         lap["scorer"] = self.judge(rows)
         if self.objects:
@@ -681,6 +784,10 @@ def main():
     ap.add_argument("--serial", action="store_true", help="--sync: each decision's reply before the tick (default: during it)")
     ap.add_argument("--max-s", type=float, default=0.0, help="end a lap after this many seconds of driving (0: off)")
     ap.add_argument("--first-lap", type=int, default=0, help="start at lap K (scene seed*1000+K): go on with a run")
+    ap.add_argument("--reload-each-lap", action="store_true", help="a fresh scene per lap (before 10/29) instead of continuous laps")
+    ap.add_argument("--density", choices=("low", "high", "alternate"), default="alternate",
+                    help="roundabout / highway traffic per lap (world_director RING_PERIOD, HW_PERIOD); alternate: lap 0 "
+                         "low, lap 1 high, ...")
     a = ap.parse_args()
     global BC, GRPC, LAUNCHER, SCEN
     BC, GRPC = a.host or BC, a.grpc or GRPC
@@ -696,11 +803,15 @@ def main():
     print(f"viewer: http://localhost:{a.port}  records: {mgr.out}", flush=True)
     k = a.first_lap
     try:
+        if not a.reload_each_lap:
+            mgr.load_pool()
         while not a.laps or k < a.laps:
             mgr.run_lap(k)
             k += 1
     finally:
         signal.signal(signal.SIGINT, signal.SIG_IGN)     # a second Ctrl-C must not cut the clean-up short
+        if mgr.director:                                  # first: no scene change while its gRPC-spawned vehicles exist
+            mgr.director.close()
         msc("pause")
         if a.sync:
             mgr.steplog.close()

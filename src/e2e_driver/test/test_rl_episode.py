@@ -1,14 +1,18 @@
 """rl_episode offline: a fake simulator at RTF 0.7 is reset to CP9 and driven along the route. The test checks the reset
 order, the ends (slow below 60 kph past CP12, off road, time limit) with their rewards, and the learner spool: a fake
 engine writes this world's and another world's dumps at 10 Hz of simulator time, a fake car drives 40 m ahead.
+These run with --reload-each-episode; test_continuous: 2 episodes in one pool scene (stub pool_scene,
+scenario_variants.layout and world_director).
 
     SCORER=.../Alpamayo-Cosmos/tools/scorer uv run --python 3.12 --with grpcio --with protobuf \
         --with-requirements $SCORER/requirements.txt python test/test_rl_episode.py
 """
 import argparse
+import gzip
 import json
 import math
 import os
+import random
 import sys
 import tempfile
 import time
@@ -79,18 +83,18 @@ class FakeSim:
 
     def put(self, x, y, z, yaw_deg):
         self.order.append("spawn")
-        self.s = float(self.S[np.argmin(np.hypot(*(self.P - (x, y)).T))])
+        self.s, self.t = float(self.S[np.argmin(np.hypot(*(self.P - (x, y)).T))]), None   # SetVelocity 0: no move yet
 
 
-def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S, returns=False):
+def make(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S, returns=False, reload=True, return_hook=None):
     scorer = os.environ.get("SCORER", os.path.join(HERE, *[".."] * 4, "Alpamayo-Cosmos", "tools", "scorer"))
     out, dump = tempfile.mkdtemp(), tempfile.mkdtemp()
     json.dump(dict(version=3), open(os.path.join(out, "latest.json"), "w"))
     a = argparse.Namespace(name="t", start_cp=9, end_cp=12, past_m=100.0, seed=0, limit_s=limit_s, v_ref=80 / 3.6,
                            fail_s=100.0, weather=None, scorer=scorer, out=out, direct=True, loc_restart="true",
                            world=1, dump_dir=dump, objinfo_port=0, lora_latest=os.path.join(out, "latest.json"),
-                           sync=None, red_cap=None, returns=returns, return_hook=None, no_slow_end=False,
-                           scene_preset="")
+                           sync=None, red_cap=None, returns=returns, return_hook=return_hook, no_slow_end=False,
+                           scene_preset="", reload_each_episode=reload, density="alternate")
     wall, order = Wall(), []
     wall.t = time.time()                                  # dump mtimes are real: keep the fake wall clock near them
 
@@ -101,12 +105,17 @@ def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S, returns=False):
         return "ok"
     em.time = rl_episode.time = wall
     em.msc = msc
-    em.make_scene = lambda seed, preset="": ("ev_test", em.shade_test(BOX), {})
+    em.make_scene = lambda seed, density=None: ("ev_test", em.shade_test(BOX), {})
     em.send_weather = lambda host, w, h: order.append("weather")
     rl_episode.subprocess = types.SimpleNamespace(run=lambda *args, **kw: order.append("loc_restart"))
     mgr = rl_episode.Episodes(a)
     mgr.sim = FakeSim(mgr.kmap.path, wall, v, lat, order, dump)
     mgr.objects = mgr.sim.car
+    return mgr, out, dump, order
+
+
+def episode(v, lat=lambda s: 0.0, limit_s=rl_episode.LIMIT_S, returns=False):
+    mgr, out, dump, order = make(v, lat, limit_s, returns)
     mgr.run_episode(0)
     d = os.path.join(out, "t", "ep00000")
     ep = json.loads(open(os.path.join(out, "t", "episodes.jsonl")).read())
@@ -195,7 +204,60 @@ def test_time_limit():
     print("time_limit", ep["t_sim"], recs[-1]["s"], ep["r"])
 
 
+def test_continuous():
+    """2 episodes in one pool scene: one load (no pause before it or between them), each laid out and its traffic
+    re-seeded before the Ego is put at CP9, the second starts there at once (--return-hook, no localization restart),
+    the director is stepped with the Ego state and its events land in the episode record."""
+    hooks = []
+    mgr, out, dump, order = make(lambda s: 15.0 if s > 1721.7 or s < 1118.7 else 25.0, reload=False, return_hook="hook")
+    rl_episode.subprocess = types.SimpleNamespace(run=lambda c, **kw: hooks.append(c[-1]))
+
+    class Director:
+        def __init__(self, sim, route, pool, rng):
+            assert sim is mgr.sim and pool == {"parking": []}
+
+        def new_lap(self, meta, density):
+            order.append("new_lap")
+            self.n = 0
+            return [dict(event="ring_lap", density=density)]
+
+        def step(self, tau, ego):
+            assert set(ego) == {"x", "y", "yaw", "v", "s"}, ego
+            self.n += 1
+            return [dict(event="first step", s=ego["s"])] if self.n == 1 else []
+
+        def close(self):
+            order.append("close")
+
+    sys.modules["world_director"] = types.SimpleNamespace(Director=Director)
+    sys.modules["scenario_variants"] = types.SimpleNamespace(
+        Route=lambda p: p, layout=lambda route, rng, pool: dict(gen="test", actors=[], r=rng.random()))
+    em.pool_scene = lambda seed: (f"ev{seed}_pool", em.shade_test(BOX), {"parking": []})
+    em.make_scene = None                                  # never called in continuous mode
+    mgr.load_pool()
+    mgr.run_episode(0)
+    mgr.run_episode(1)
+    mgr.director.close()
+    eps = [json.loads(x) for x in open(os.path.join(out, "t", "episodes.jsonl"))]
+    o = [x for x in order if x != "weather"]
+    assert o == ["load-scene", "new_lap", "spawn", "play", "new_lap", "spawn", "close"], o
+    assert hooks == ["true", "hook"], hooks                # LOC_RESTART for the loaded scene, then the hook on the jump
+    assert [e["density"] for e in eps] == ["low", "high"] and {e["scene"] for e in eps} == {"ev0_pool"}, eps
+    assert [e["scene_meta"]["r"] for e in eps] == [random.Random(k).random() for k in (0, 1)], eps   # layout seed k
+    assert mgr.director.rng.random() == random.Random("director:1").random()           # re-seeded per episode
+    for e in eps:
+        assert e["end"] == "slow" and [c[0] for c in e["checkpoints"]] == [10, 11, 12], e
+        assert len(e["director"]) == 2 and e["director"][0] == dict(event="ring_lap", density=e["density"]), e["director"]
+        assert abs(e["director"][1]["s"] - mgr.track.s[mgr.cp_i[9]]) < 3.0, e["director"]   # first step at CP9
+        assert abs(e["t_sim"] - eps[0]["t_sim"]) < 0.3 and e["engine_decisions"], e
+    rows = json.load(gzip.open(os.path.join(out, "t", "ep00001", "rows.json.gz"), "rt"))
+    x, y = rows["ego_status"][0][1][:2]
+    assert math.hypot(x - mgr.cps[9, 0], y - mgr.cps[9, 1]) < em.CP_R, (x, y)            # the 2nd starts at CP9
+    assert not os.listdir(os.path.join(dump, "world1")), "this world's dumps all moved"
+    print("continuous", [(e["end"], e["density"], e["t_sim"], len(e["director"])) for e in eps])
+
+
 if __name__ == "__main__":
-    for f in (test_slow_exit, test_off_road, test_returns, test_time_limit):
+    for f in (test_slow_exit, test_off_road, test_returns, test_time_limit, test_continuous):
         f()
     print("ok")

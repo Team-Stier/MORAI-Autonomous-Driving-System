@@ -9,22 +9,30 @@ simulator, scene, weather and scorer parts it reuses.
 Checkpoints are the official 10/7 table rows (checkpoints_20261007.csv, START = 0, as MORAI's Spawn program numbers
 them). The 60 kph exemption (고주로) is CP10 s 1118.7 -> CP12 s 1741.7, so the default episode is CP9 (s 930.6) -> CP12
 + 100 m: the entry and the exit hand-over, where the limit applies again, are inside it.
-Episode k (seed S*1000+k):
-  - scene: a fresh clcol variant (scenario_variants.py, as an eval lap: signal phases, NPC traffic, obstacles drawn;
-    --scene-preset brake: DAgger dynamic/tunnel movers that make the Ego stop)
-  - pause -> load-scene -> Ego to START_CP with MORAI's Spawn program (gRPC SetTransform to the table pose with --direct
-    or on a simulator whose gRPC port is not 7789: the program only talks to 7789) -> weather and time of the start
-    section -> localization restart (LOC_RESTART) -> 4 s -> play
+Episode k (seed S*1000+k), continuous as eval_manager's laps (user 10/29: one randomization for lap videos, sync eval
+and these actors): the run loads one pool scene of seed S once (eval_manager.load_pool: no MSC pause before the load,
+3 tries with a fresh world on --host local), then per episode
+  - scene: the obstacles laid out anew (scenario_variants.layout v2, seed S*1000+k; its movers have the must_stop /
+    pass_front timings in every dynamic zone, so --scene-preset is accepted and ignored) by world_director.py over gRPC,
+    which also moves the dynamic ones on the Ego's timing and runs the roundabout's and the highway's traffic, --density
+    low | high | alternate (default: episode k low for even k, high for odd)
+  - Ego to START_CP with MORAI's Spawn program (gRPC SetTransform to the table pose with --direct or on a simulator
+    whose gRPC port is not 7789: the program only talks to 7789) -> weather and time of the start section; the scene's
+    first episode then localization restart (LOC_RESTART) -> 4 s -> play; a later one is a jump like a return
+    (--return-hook in the background) and drives on at once, no pause or reload between episodes
+  - --reload-each-episode (before 10/29): pause -> load-scene of a fresh variant (seed S*1000+k) -> Spawn -> weather ->
+    LOC_RESTART -> 4 s -> play, paused again at the end
   - weather and time per checkpoint section, drawn from (seed, section) as in evaluation (rules §2-7-2)
   - ends: "goal" (route s >= s_goal = s(END_CP) + PAST_M), "slow" (past END_CP below 60 kph; not with --no-slow-end),
     a failure ("off_road": all wheels off the drivable area outside the shadow for the scorer's inoperable.min_s;
     "missed_cpN"; "stuck" / "stuck_after_collision" as in evaluation) or "time_limit" (LIMIT_S of simulator time after
     play: truncated)
-  - recorded 1 s past the end, paused, scored by tools/scorer, rewards per decision (rl_reward.py), the privileged
-    critic vector per decision (rl_critic.py, from the 20 Hz Ego GT and MORAI Object Info on --objinfo-port)
+  - recorded 1 s past the end (paused only with --reload-each-episode), scored by tools/scorer, rewards per decision
+    (rl_reward.py), the privileged critic vector per decision (rl_critic.py, from the 20 Hz Ego GT and MORAI Object Info on --objinfo-port)
 Records = the learner's spool (Alpamayo-Cosmos train/rl/episodes.py): OUT is the spool, NAME the actor.
   OUT/NAME/inflight.json   {version, episode}, written at every episode start (version: --lora-latest's "version")
-  OUT/NAME/episodes.jsonl  one line per episode: end, time, return and its parts, scorer counts and events, weather
+  OUT/NAME/episodes.jsonl  one line per episode: end, time, return and its parts, scorer counts and events, weather,
+                           density, director (world_director's events: moves started, vehicle sets, spawns, errors)
   OUT/NAME/epK/steps.jsonl one line per decision: the rl_reward record + critic_obs (rl_critic.FIELDS order) + req, out:
                            this world's engine dumps (--dump-dir: model_server --dump DIR, DIR/world{n}/, requests
                            carrying t_wall and world), moved into epK/ as K.req.bin / K.out.bin. Without --dump-dir the decisions are a
@@ -49,6 +57,7 @@ import gzip
 import json
 import math
 import os
+import random
 import shutil
 import socket
 import struct
@@ -91,22 +100,41 @@ class Episodes(em.Manager):
         self.objects = objinfo(a.objinfo_port) if a.objinfo_port else (lambda: [])
 
     def reset(self, k, seed):
-        """pause -> load-scene -> Spawn START_CP -> start section's weather -> localization restart -> 4 s (-> play)."""
-        name, shaded, meta = em.make_scene(seed, self.a.scene_preset)
-        em.msc("pause")
-        r = em.msc("load-scene", name + "/62", 90)
-        if not r.startswith("ok"):
-            raise RuntimeError(f"scene load {name}: {r}")
-        ep = dict(episode=k, scene=name, seed=seed, start_cp=self.a.start_cp, end_cp=self.a.end_cp,
+        """continuous: layout -> director's new lap -> Spawn START_CP -> start section's weather, then (scene not yet
+        played) localization restart -> 4 s (-> play) or (playing) --return-hook. --reload-each-episode: pause ->
+        load-scene first, as before 10/29."""
+        density = em.lap_density(self.a.density, k)
+        if self.director is None:                         # --reload-each-episode
+            name, shaded, meta = em.make_scene(seed, density)
+            self.load(name, pause=True)
+        else:                                             # eval_manager.run_lap's continuous lap
+            name, shaded, meta = self.scene, self.shaded, self.sv.layout(self.route, random.Random(seed), self.pool)
+            self.director.rng = random.Random(f"director:{seed}")   # the episode's own traffic draws, whatever ran before
+        ep = dict(episode=k, scene=name, seed=seed, density=density, start_cp=self.a.start_cp, end_cp=self.a.end_cp,
                   s_goal=round(self.s_goal, 1), weather=[], checkpoints=[], scene_meta=meta)
+        if self.director:
+            ep["director"] = self.director.new_lap(meta, density)   # before the Ego is put back
         (self.out / f"ep{k:05d}").mkdir(exist_ok=True)
         latest = Path(self.a.lora_latest).expanduser() if self.a.lora_latest else None
         version = json.load(open(latest)).get("version", 0) if latest and latest.exists() else 0
         write_json(self.out / "inflight.json", dict(version=version, episode=f"ep{k:05d}"))
         ep["spawn"] = self.spawn(self.a.start_cp)
+        if self.played:                                   # playing: the episode's first row must be at START_CP
+            c = self.cps[self.a.start_cp]
+            for _ in range(20):
+                e = self.ego()
+                if math.hypot(e["x"] - c[0], e["y"] - c[1]) < em.CP_R:
+                    break
+                time.sleep(0.1)
+            else:
+                raise RuntimeError(f"the Ego did not get to CP{self.a.start_cp}: {e['x']:.1f} {e['y']:.1f}")
         self.weather(ep, seed, self.a.start_cp, 0.0)
-        subprocess.run(["bash", "-c", self.a.loc_restart], capture_output=True, timeout=60)
-        time.sleep(4.0)
+        if self.played is None:                           # a scene just loaded: the old start, paused
+            subprocess.run(["bash", "-c", self.a.loc_restart], capture_output=True, timeout=60)
+            time.sleep(4.0)
+        elif self.a.return_hook:                          # the jump back, as a return's (e.g. the shadow's planners)
+            threading.Thread(target=lambda: subprocess.run(["bash", "-c", self.a.return_hook], capture_output=True,
+                                                           timeout=120), daemon=True).start()
         return ep, shaded
 
     def run_episode(self, k):
@@ -114,8 +142,10 @@ class Episodes(em.Manager):
         ep, shaded = self.reset(k, seed)
         rows = {key: [] for key in ("ego_status", "collision", "signal", "gps")}
         clk = []
-        played = threading.Event()                      # MSC confirms play 1-15 s late: record from the paused start on
-        threading.Thread(target=lambda: (em.msc("play"), played.set()), daemon=True).start()
+        if self.played is None:                         # the scene's first episode (every one with --reload-each-episode)
+            self.played = threading.Event()             # MSC confirms play 1-15 s late: record from the paused start on
+            threading.Thread(target=lambda p=self.played: (em.msc("play"), p.set()), daemon=True).start()
+        played = self.played
         tr, clock, cps = self.track, self.clock, self.cps
         self.critic = rl_critic.Critic(self.kmap, self.cfg, self.lanes, self.s_exit, self.s_goal)
         tr.i, clock.last, passed = self.cp_i[self.a.start_cp], None, self.a.start_cp
@@ -134,6 +164,8 @@ class Episodes(em.Manager):
             objs = self.objects()
             self.critic.step(tau, e["x"], e["y"], e["yaw"], e["v"], s, tr.i, objs, shade)
             objt.append([round(tau, 3), round(t, 3), [[o[0], o[1], *(round(float(v), 3) for v in o[2:])] for o in objs]])
+            if self.director:
+                ep["director"] += self.director.step(tau, dict(x=e["x"], y=e["y"], yaw=e["yaw"], v=e["v"], s=s))   # yaw rad
             ns = int(tau * 1e9)
             rows["ego_status"].append((ns, (e["x"], e["y"], e["yaw"], e["v"])))
             rows["collision"].append((ns, [(h, e["x"], e["y"]) for h in e["hit"]]))
@@ -203,7 +235,8 @@ class Episodes(em.Manager):
             self.status = (f"episode {k} {ep['scene']}  t {tau - (t_play or tau):6.1f} s  rho {clock.rho:.2f}  CP {passed}  "
                            f"s {s:7.1f}/{self.s_goal:.0f} m  v {e['v'] * 3.6:5.1f} km/h  {end or ''}")
             time.sleep(max(0.0, 1.0 / em.HZ - (time.time() - t)))
-        em.msc("pause")
+        if self.director is None:                         # continuous: the next episode starts at once, in the same scene
+            em.msc("pause")
         self.finish(ep, rows, clk, end, t_play, t_end, time.time() - w0, objt)
 
     def finish(self, ep, rows, clk, end, t_play, t_end, wall_s, objt=()):
@@ -259,11 +292,14 @@ class Episodes(em.Manager):
     def decisions(self, w0, w1):
         """-> ([(t_wall, req, out)] of this world's engine decisions with t_wall in [w0, w1] (host clock), oldest first,
         [this world's other dump files]): the next episode has not started, so every dump of this world is one or the
-        other."""
+        other (continuous: the engine goes on deciding, so a later one lands in the next episode's outside/)."""
         time.sleep(1.0)                                   # the last responses land ~0.1 s after the pause
         inside, outside = [], []
         for p in Path(self.a.dump_dir).expanduser().glob(f"world{self.a.world}/req_*.bin" if self.a.world else "*/req_*.bin"):
-            h = head(p)
+            try:
+                h = head(p)
+            except (struct.error, ValueError):           # continuous: still being written, the next episode's outside/
+                continue
             if self.a.world and h.get("world") != self.a.world:
                 continue
             q = p.with_name(p.name.replace("req_", "out_"))
@@ -366,7 +402,13 @@ def main():
     ap.add_argument("--direct", action="store_true", help="Spawn and weather over gRPC instead of the official programs")
     ap.add_argument("--no-slow-end", action="store_true", help="end at the goal only, not \"slow\" past END_CP (a segment "
                     "goal short of the next light: the dynamic zone's CP5 + 90 m stops before the CP6 light)")
-    ap.add_argument("--scene-preset", default="", help="scenario_variants.py SCENE_PRESET (brake: DAgger dynamic/tunnel scenes)")
+    ap.add_argument("--scene-preset", default="", help="ignored (kept for segments.py's callers): scenario_variants v2 "
+                    "has the brake timings in every dynamic zone")
+    ap.add_argument("--reload-each-episode", action="store_true", help="a fresh scene per episode, paused between "
+                    "(before 10/29) instead of continuous episodes in one pool scene")
+    ap.add_argument("--density", choices=("low", "high", "alternate"), default="alternate",
+                    help="roundabout / highway traffic per episode (world_director RING_PERIOD, HW_PERIOD); alternate: "
+                         "episode k low for even k, high for odd")
     ap.add_argument("--red-cap", type=float, nargs=2, metavar=("LO", "HI"), help="red waits end after a time drawn from [LO, HI] s")
     ap.add_argument("--returns", action="store_true", help="a failure returns to the last checkpoint passed (eval_manager's "
                     "rules) and the lap goes on; the episode ends at the goal or --limit-s")
@@ -384,10 +426,14 @@ def main():
     # a restart goes on after the episodes already there (scene seed*1000+k: no repeat, no overwritten epK for the learner)
     k0 = k = 1 + max((int(p.name[2:]) for p in mgr.out.glob("ep[0-9]*") if p.name[2:].isdigit()), default=-1)
     try:
+        if not a.reload_each_episode:
+            mgr.load_pool()
         while not a.episodes or k - k0 < a.episodes:
             mgr.run_episode(k)
             k += 1
     finally:
+        if mgr.director:                                  # first: no scene change while its gRPC-spawned vehicles exist
+            mgr.director.close()
         em.msc("pause")
         if not a.direct:
             em.ssh("python3 ~/morai-eval-wtc.py down")
