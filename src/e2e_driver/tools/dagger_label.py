@@ -75,6 +75,14 @@ RB_LEAD_S, RB_GO_MPS, RB_STAMP_S, RB_REUSE_S = 0.8, 0.5, 0.15, 1.0
 # failed): it gets no moving ring car in section 9, and a label that meets one there (on the circle) is not valid,
 # except one already in the band that a car comes up to from behind (ring cars brake for a car in their lane)
 RING_C, RING_R, RING_BAND_M, RING_PAD_M, RING_STOP_M, RING_DEC_MPS2 = (-102.36, 343.88), 18.4, 2.5, 0.5, 5.0, 2.5   # 5 m: stop_line_state x_m (pp overshoots ~3 m)
+# gap acceptance (10/29 ring DAgger, --ring-gap-s / --ring-margin-m = RING_PAD_M): an entering label also yields when a
+# ring car would reach the car's box within RING_GAP_S of it being there while it merges (ring_meet gap_s). 0 = the
+# 10/28 rule (boxes overlap at the same time only); from a standstill at the line the car needs ~4 s to clear the band
+RING_GAP_S = 1.0
+# ring cars the Front camera shows (90 deg FOV, 448x256 model input: a car out to RING_CAM_M is >= ~20 px wide; 10/29
+# reports/ring_dagger/visibility.md) count as seen though the LiDAR BEV (label_check visible(), 20 m to each side) drops
+# the ring's far left at the entry (10/28 runs d, f: 58 of the 123 ring cars go labels met were out there); 0 = BEV only
+RING_CAM_M, RING_CAM_DEG = 45.0, 45.0
 EGO_BOX = (1.55, 2.35, 0.95)                          # base_link -> box centre, half length, half width (body_m [-0.8, 3.9])
 PLAN_AGE_S, NO_PLAN_S, PLAN_D0_M, PLAN_HE_RAD, LANE_D_M = 0.5, 2.0, 5.0, 0.5, 4.5
 # a plan that keeps the car off the route lane (both > 2 m from it, 30 m ahead too) is the planner following a wrong lane,
@@ -383,9 +391,24 @@ def ring_cars(objs):
             and abs(math.hypot(o[2] - RING_C[0], o[3] - RING_C[1]) - RING_R) < RING_BAND_M]
 
 
-def ring_meet(traj, objs, behind=True):
+def ring_seen(x, y, yaw, objs, vis):
+    """ring cars the Front camera sees: within RING_CAM_DEG of the heading and RING_CAM_M, no vehicle in the way
+    (visible()'s line test with its box widened to that range)."""
+    if RING_CAM_M <= 0 or not objs:
+        return np.zeros(len(objs), bool)
+    from label_check import visible
+    clear = visible(x, y, yaw, objs, dict(vis, bev_m=[0.0, RING_CAM_M, RING_CAM_M]))
+    ring = set(map(id, ring_cars(objs)))
+    return np.array([c and id(o) in ring and math.hypot(o[2] - x, o[3] - y) <= RING_CAM_M
+                     and abs(wrap(math.atan2(o[3] - y, o[2] - x) - yaw)) <= math.radians(RING_CAM_DEG) for o, c in zip(objs, clear)], bool)
+
+
+def ring_meet(traj, objs, behind=True, gap_s=0.0):
     """first 0.1 s step (or None) where traj (64, 4: x y yaw v) meets a ring car moved along the circle at its t0 speed;
-    behind=False: not counting a car that comes up from behind (more than 1 m back of the car's box centre)."""
+    behind=False: not counting a car that comes up from behind (more than 1 m back of the car's box centre).
+    gap_s: while the car merges (from its front entering the band until it has gone the band's width + its own length +
+    RING_PAD_M on), a ring car that reaches its box within gap_s after it is there meets it too (gap acceptance: that
+    car would have to brake)."""
     cx, cy = RING_C
     ring = []
     for o in ring_cars(objs):
@@ -394,18 +417,26 @@ def ring_meet(traj, objs, behind=True):
         ring.append((math.atan2(o[3] - cy, o[2] - cx), w, r, o[7] / 2 + RING_PAD_M, o[8] / 2 + RING_PAD_M))
     if not ring:
         return None
+    merge, n_gap = np.zeros(len(traj), bool), int(round(gap_s / 0.1))
+    if n_gap:
+        f = traj[:, :2] + (EGO_BOX[0] + EGO_BOX[1]) * np.stack([np.cos(traj[:, 2]), np.sin(traj[:, 2])], -1)
+        inb = np.flatnonzero(np.hypot(f[:, 0] - cx, f[:, 1] - cy) <= RING_R + RING_BAND_M)
+        if len(inb):
+            cum = np.r_[0, np.cumsum(np.hypot(*np.diff(traj[:, :2], axis=0).T))]
+            merge[inb[0]:] = cum[inb[0]:] - cum[inb[0]] <= 2 * (RING_BAND_M + EGO_BOX[1]) + RING_PAD_M   # across the band
     for k, (x, y, h, _) in enumerate(traj):
         bx, by = x + EGO_BOX[0] * math.cos(h), y + EGO_BOX[0] * math.sin(h)
         A = None
         for a0, w, r, hl, hw in ring:
-            a = a0 + w * 0.1 * (k + 1)
-            ox, oy = cx + r * math.cos(a), cy + r * math.sin(a)
-            if math.hypot(ox - bx, oy - by) > 8.0:
-                continue
-            A = _corners(bx, by, h, EGO_BOX[1] + RING_PAD_M, EGO_BOX[2] + RING_PAD_M) if A is None else A
-            if _overlap(A, _corners(ox, oy, a + math.copysign(math.pi / 2, w), hl, hw)) and \
-                    (behind or (ox - bx) * math.cos(h) + (oy - by) * math.sin(h) > -1.0):
-                return k
+            for m in range(n_gap + 1 if merge[k] else 1):
+                a = a0 + w * 0.1 * (k + 1 + m)
+                ox, oy = cx + r * math.cos(a), cy + r * math.sin(a)
+                if math.hypot(ox - bx, oy - by) > 8.0:
+                    continue
+                A = _corners(bx, by, h, EGO_BOX[1] + RING_PAD_M, EGO_BOX[2] + RING_PAD_M) if A is None else A
+                if _overlap(A, _corners(ox, oy, a + math.copysign(math.pi / 2, w), hl, hw)) and \
+                        (behind or (ox - bx) * math.cos(h) + (oy - by) * math.sin(h) > -1.0):
+                    return k
     return None
 
 
@@ -558,6 +589,7 @@ def one(j):
     objs_all = rec.objects(tw)
     keep = visible(x, y, yaw, objs_all, chk.lc["visibility"]) | np.array(
         [math.hypot(o[5], o[6]) < chk.lc["objects"]["static_mps"] for o in objs_all], bool)
+    keep |= ring_seen(x, y, yaw, objs_all, chk.lc["visibility"])
     objs = [o for o, k_ in zip(objs_all, keep) if k_]          # yield/AEB: moving ones only once the model could see them
     hidden_n = sum(1 for o, k_ in zip(objs_all, keep) if not k_ and math.hypot(o[2] - x, o[3] - y) < OBJ_R_M)
     bypass = any(math.hypot(o[5], o[6]) < 0.3 and abs(o[2] - x) + abs(o[3] - y) < 120.0 and
@@ -609,13 +641,17 @@ def one(j):
             mode = "stop" if v * v / (2 * VP["yellow_z"]) <= d_line + chk.front - VP["stop_x"] else "go_yellow"
     cap = VP["cap100"] if sec in NO_LIMIT_SECTIONS else VP["cap60"]
     speed = None
-    if uniform or mode != "plan":
+    rbs = rec.last("rbs", p[1]) if sec in ROUNDABOUT else None
+    # a kinematic no-merge reaches the plan as velocity_planner's uniform 0: it reuses the last schedule (rb_reuse), not
+    # the stop (10/29: rb_reuse never ran; run f with the ring emptied stopped 93 of 1,239 standing entry rows)
+    rb_kin = rbs is not None and abs(rbs[2] - p[2]) < RB_STAMP_S and not rbs[3] and rbs[4:] == ["kinematic"]
+    if (uniform and not rb_kin) or mode != "plan":
         v_t0 = v if mode.startswith("go") and plan_zero else float(Pv[0])
         stop_station = (d_line + chk.front - VP["stop_x"]) if mode == "stop" else None
         if mode == "plan" and plan_zero:
             stop_station = 0.0                        # stopping for a line this map reading does not see: keep it
         speed = Speeds(path, v_t0, cap, stop_station)
-    elif sec in ROUNDABOUT and (q := rec.last("rbs", p[1])) is not None and abs(q[2] - p[2]) < RB_STAMP_S:   # the plan's own cycle
+    elif sec in ROUNDABOUT and (q := rbs) is not None and abs(q[2] - p[2]) < RB_STAMP_S:   # the plan's own cycle
         mode = "rb_schedule"
         if not q[3] and q[4:] == ["kinematic"]:
             i = int(np.searchsorted(rec.t["rbs"], p[1], side="right"))
@@ -627,12 +663,12 @@ def one(j):
             mode = "plan"                             # no merge (the ring's objects): the planner's stop request
     out, fl = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, speed)
     entering = outside_band(out[:1])                  # ring cars the model sees at t0 (objs): a hidden one is the checker's
-    meet = sec in ROUNDABOUT and ring_meet(out, objs, behind=entering) is not None   # unavoidable, not a yield or ring:meet
+    meet = sec in ROUNDABOUT and ring_meet(out, objs, behind=entering, gap_s=RING_GAP_S * entering) is not None   # unavoidable, not a yield or ring:meet
     if mode.startswith("rb_") and meet and entering:
         speed.k = 0                                   # the same schedule from t0, capped to yield at the band
         for name, sp in (("rb_yield", yield_at_band(path, speed)), ("rb_stop", lambda n: 0.0)):
             stop, fs = rollout(path, vp, x, y, yaw, v, steer, objs, sec, gt, sp)
-            if ring_meet(stop, objs) is None:
+            if ring_meet(stop, objs, gap_s=RING_GAP_S) is None:
                 out, fl, mode, meet = stop, fs, name, False
                 break
     ring = set(map(id, ring_cars(objs_all))) if sec in ROUNDABOUT else set()
@@ -754,6 +790,20 @@ def selftest():
             -4.0 * math.sin(a0), 4.0 * math.cos(a0), 4.6, 1.9)]
     go, _ = rollout(line, np.full(len(a), 5.0), cx, cy - RING_R - 12.0, math.pi / 2, 5.0, 0.0, [], 9, gt)
     assert ring_meet(go, car) is not None and ring_meet(go, []) is None and outside_band(go[:1]) and not outside_band(go)
+    up = lambda d: [(1, "vehicle", cx + RING_R * math.cos(-math.pi / 2 - d), cy + RING_R * math.sin(-math.pi / 2 - d), -d,
+                     4.0 * math.cos(d), -4.0 * math.sin(d), 4.6, 1.9)]   # d rad before the entry point (4 m/s: 4.6 d s away)
+    offs = np.arange(0.3, 3.0, 0.05)
+    m0, m2 = ([ring_meet(go, up(d), gap_s=g) is not None for d in offs] for g in (0.0, 2.0))
+    assert all(b or not a for a, b in zip(m0, m2)) and sum(m2) > sum(m0) and not m2[-1], (m0, m2)   # the gap only adds
+    sys.path.insert(0, str(HERE.parents[3] / "Alpamayo-Cosmos" / "tools" / "scorer"))
+    from label_check import visible
+    vis = dict(bev_m=[20.0, 60.0, 20.0], lidar_x_m=1.4, occluder_m=2.0)          # label_check.yaml
+    a1 = math.radians(170.0)                                  # the ring's far left from the wait line: 29 m ahead, 23 m left
+    far = (2, "vehicle", cx + RING_R * math.cos(a1), cy + RING_R * math.sin(a1), a1 + math.pi / 2, -4.0 * math.sin(a1), 4.0 * math.cos(a1), 4.6, 1.9)
+    ego = (-97.0, 318.0, math.pi / 2)
+    assert not visible(*ego, [far], vis)[0] and ring_seen(*ego, [far], vis)[0]
+    wall = (3, "vehicle", -105.0, 330.0, a1, 0.0, 0.0, 12.0, 3.0)                      # a standing truck in the line of sight
+    assert not ring_seen(*ego, [far, wall], vis)[0]
     sched = Schedule([[0.0, 0.0, 5.0, 0.0], [5.0, 25.0, 5.0, 0.0]], RB_LEAD_S, line, 16.7)
     yl, _ = rollout(line, np.full(len(a), 5.0), cx, cy - RING_R - 12.0, math.pi / 2, 5.0, 0.0, [], 9, gt, yield_at_band(line, sched))
     gap = (cy - yl[-1, 1] - EGO_BOX[0] - EGO_BOX[1]) - RING_R - RING_BAND_M       # its front stops this short of the band
@@ -762,6 +812,7 @@ def selftest():
 
 
 def main():
+    global RING_GAP_S, RING_PAD_M, RING_CAM_M
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("episodes", nargs="*")
     ap.add_argument("--rec", help="shadow_rec dir (rec_w<n>)")
@@ -774,12 +825,16 @@ def main():
     ap.add_argument("--scorer", default=str(HERE.parents[3] / "Alpamayo-Cosmos" / "tools" / "scorer"),
                     help="tools/scorer (LabelChecker: verdicts, judged stop lines)")
     ap.add_argument("--lookahead-s", type=float, help="pp lookahead time (pp.yaml 0.6 s), for the curve test")
+    ap.add_argument("--ring-gap-s", type=float, default=RING_GAP_S, help="roundabout gap acceptance headway (s, 0: overlap only)")
+    ap.add_argument("--ring-margin-m", type=float, default=RING_PAD_M, help="roundabout box margin (m, RING_PAD_M)")
+    ap.add_argument("--ring-cam-m", type=float, default=RING_CAM_M, help="ring cars seen by the Front camera out to (m, 0: BEV only)")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         return selftest()
     if a.lookahead_s:
         PP["lookahead_time_sec"] = a.lookahead_s
+    RING_GAP_S, RING_PAD_M, RING_CAM_M = a.ring_gap_s, a.ring_margin_m, a.ring_cam_m
     cfg = json.load(open(a.config))["action_space_cfg"] if a.config else dict(
         accel_mean=0.02902694707164455, accel_std=0.6810426736454882, curvature_mean=0.0002692167976330542,
         curvature_std=0.026148280660833106, a_lambda=1e-4, a_ridge=1e-4, kappa_lambda=1e-4, kappa_ridge=1e-4,
