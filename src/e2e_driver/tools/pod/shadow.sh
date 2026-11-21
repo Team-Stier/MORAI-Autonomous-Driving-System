@@ -94,8 +94,8 @@ nodes() {  # n: the driver nodes as one session (restart kills and starts this s
     st tl_gt_driver python3 -u \$T/tl-gt-driver-node.py
     st objects python3 -u \$T/gt-objects-filter-node.py _object_port:=$((17505 + off)) /objects:=/shadow/objects_static
     st shadow_objects python3 -u $HERE/shadow_objects.py ${SCORER:-$V/Alpamayo-Cosmos/tools/scorer}
-    st gt_aeb python3 -u \$T/gt-aeb-node.py /shadow/objects_map $aeb
-    st gt_yield python3 -u \$T/gt-yield-node.py /shadow/yield_objects $yld
+    [[ ${NO_YIELD:-0} == 1 ]] || st gt_aeb python3 -u \$T/gt-aeb-node.py /shadow/objects_map $aeb   # NO_YIELD=1: the route only (popout)
+    [[ ${NO_YIELD:-0} == 1 ]] || st gt_yield python3 -u \$T/gt-yield-node.py /shadow/yield_objects $yld
     st tf rosrun tf_publisher tf_publisher_node
     st static_tf rosrun tf_publisher static_tf_publisher_node
     st section rosrun section_annotator section_annotator_node

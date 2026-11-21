@@ -103,6 +103,18 @@ class Episodes(em.Manager):
         version = json.load(open(latest)).get("version", 0) if latest and latest.exists() else 0
         write_json(self.out / "inflight.json", dict(version=version, episode=f"ep{k:05d}"))
         ep["spawn"] = self.spawn(self.a.start_cp)
+        self.start_at = (self.cp_i[self.a.start_cp], self.a.start_cp)
+        if self.a.spawn_before:                           # popout: the Ego LO-HI m short of the segment's mover, goal 25 m past it
+            import scenario_variants as sv
+            s_cp = float(self.track.s[self.cp_i[self.a.start_cp]])
+            s_obj = min(a["s"] for a in meta["actors"] if a["zone"].endswith("_dynamic") and a["s"] > s_cp)
+            s_sp = s_obj - float(np.random.default_rng(seed).uniform(*self.a.spawn_before))
+            x, y, z, h = sv.Route(str(em.MAP / "2026_molit_comp_global_path.txt")).at(s_sp, 0.0)
+            self.sim.put(x, y, z + 0.4, h)
+            j = int(np.argmin(np.hypot(*(self.kmap.path - (x, y)).T)))
+            self.start_at = (j, max(c for c in range(15) if self.track.s[self.cp_i[c]] <= s_sp))
+            self.s_goal = s_obj + 25.0
+            ep.update(spawn="grpc_before", spawn_s=round(s_sp, 1), s_goal=round(self.s_goal, 1))
         self.weather(ep, seed, self.a.start_cp, 0.0)
         subprocess.run(["bash", "-c", self.a.loc_restart], capture_output=True, timeout=60)
         time.sleep(4.0)
@@ -117,7 +129,7 @@ class Episodes(em.Manager):
         threading.Thread(target=lambda: (em.msc("play"), played.set()), daemon=True).start()
         tr, clock, cps = self.track, self.clock, self.cps
         self.critic = rl_critic.Critic(self.kmap, self.cfg, self.lanes, self.s_exit, self.s_goal)
-        tr.i, clock.last, passed = self.cp_i[self.a.start_cp], None, self.a.start_cp
+        (tr.i, passed), clock.last = self.start_at, None
         t_play = t_move = x0 = None
         prog_s, prog_t, crash_t, off_t, grace = 0.0, math.inf, -math.inf, None, math.inf
         end = t_end = None
@@ -149,11 +161,12 @@ class Episodes(em.Manager):
                 ep["checkpoints"].append([passed, round(tau - t_play, 2) if t_play is not None else 0.0])
                 self.weather(ep, seed, passed, tau - (t_play or tau))
             if self.a.red_cap and t_play is not None:   # cap red waits at the judged stop lines
+                ahead = self.a.red_cap[1] < 0             # --red-cap -1 -1: the route's green on approach, no stop
                 for s_stop, (ic, ph, bit) in RED_LIGHTS.items():
-                    if not s_stop - 40.0 <= s <= s_stop + 2.0:
+                    if not s_stop - (60.0 if ahead else 40.0) <= s <= s_stop + 2.0:
                         continue
                     col = e["color"] if e["color"] is not None else -1
-                    if abs(e["v"]) >= 0.5 or (col >= 0 and col & bit):
+                    if (abs(e["v"]) >= 0.5 and not ahead) or (col >= 0 and col & bit):
                         waits.pop(s_stop, None)   # moving, or the route's green is on; no light reading (-1) counts as
                         continue                  # waiting (10/28: -1 & 32 read as green kept a CP6 wait from ever ending)
                     w = waits.setdefault(s_stop, [tau, float(rng.uniform(*self.a.red_cap)), None])
@@ -166,6 +179,9 @@ class Episodes(em.Manager):
                         ep["red_cap"].append([s_stop, round(tau - w[0], 1), round(tau - (t_play or tau), 1)])
             if e["hit"]:
                 crash_t = tau
+                if self.a.end_on_hit and end is None and t_play is not None and tau - t_play > 1.0 and any(str(h) != "-100" for h in e["hit"]):   # popout: the next scene at once; 10/29: a phantom "-100" contact sticks from the spawn on after some batches, the car drives on
+                    # (a contact in the first second is the spawn settling; an episode with no decisions broke finish())
+                    end, t_end = "collision", tau
             if s > prog_s + em.PROGRESS_M:
                 prog_s, prog_t = s, tau
             elif self.a.returns and tau_prev is not None and e["tl"] and e["color"] & 1 and not e["color"] & 16:
@@ -191,7 +207,7 @@ class Episodes(em.Manager):
                     threading.Thread(target=lambda: subprocess.run(["bash", "-c", self.a.return_hook], capture_output=True,
                                                                    timeout=120), daemon=True).start()
             if end is None and t_play is not None:
-                if passed >= self.a.end_cp and lat < 15.0 and s >= self.s_goal:
+                if (passed >= self.a.end_cp or self.a.spawn_before) and lat < 15.0 and s >= self.s_goal:
                     end = "goal"
                 elif not self.a.no_slow_end and passed >= self.a.end_cp and abs(e["v"]) * 3.6 < self.cfg["speed"]["limit_kph"]:
                     end = "slow"
@@ -208,6 +224,8 @@ class Episodes(em.Manager):
                            f"s {s:7.1f}/{self.s_goal:.0f} m  v {e['v'] * 3.6:5.1f} km/h  {end or ''}")
             time.sleep(max(0.0, 1.0 / em.HZ - (time.time() - t)))
         em.msc("pause")
+        if self.a.end_hook:                               # e.g. the episode's rosbag closes
+            subprocess.run(["bash", "-c", self.a.end_hook], capture_output=True, timeout=60)
         self.finish(ep, rows, clk, end, t_play, t_end, time.time() - w0, objt)
 
     def finish(self, ep, rows, clk, end, t_play, t_end, wall_s, objt=()):
@@ -219,6 +237,12 @@ class Episodes(em.Manager):
                            frames=objt), f)
         labels, sm = self.score(self.episode_from_rows(rows, self.cfg, "rl_episode"), self.kmap, self.cfg)
         t0 = rows["ego_status"][0][0] / 1e9               # scorer frame t = 0
+        if self.a.end_hook:   # a recorded episode (popout_box.sh): the scorer labels and weather on the host clock for
+            W, T = np.asarray(clk, float).T               # tools/step0 (bag stamps are host time; t stays tau)
+            labels.assign(bag_time_ns=(np.interp(labels.t.to_numpy(float) + t0, T, W) * 1e9).astype(np.int64)).to_parquet(d / "labels.parquet")
+            with open(d / "env.log", "w") as f:
+                for _, w, h, t_rel, _ in ep["weather"]:
+                    f.write(f"{float(np.interp((t_play or T[0]) + t_rel, T, W)) - (0.0 if t_rel else 5.0):.3f} {w} {h}\n")
         tl = rl_reward.timeline(labels, sm, self.cfg, t0, end, t_end, self.s_goal, clk)
         tl.update(episode=f"{self.a.name}/ep{k:05d}", reward_args=dict(v_ref=self.a.v_ref, fail_s=self.a.fail_s))
         W, T = np.asarray(clk, float).T
@@ -228,6 +252,9 @@ class Episodes(em.Manager):
             shutil.move(src, d / "outside" / src.name)
         t_dec = np.interp([w for w, _, _ in dec], W, T) if self.a.dump_dir else np.arange(t_play, t_end, 0.1)
         recs = rl_reward.rewards(tl, t_dec, **tl["reward_args"])
+        if not recs:                                      # ended at once (no 0.1 s step): nothing to keep
+            print(f"episode {k} {ep['scene']}: {end} 0.0 s, no decisions (skipped)", flush=True)
+            return
         prev = [(0.0, 0.0)] + [first_step(q) for _, _, q in dec[:len(recs) - 1]] if dec else [(0.0, 0.0)] * len(recs)
         obs = self.critic.at([r["t_sim"] for r in recs], prev)
         with gzip.open(d / "rows.json.gz", "wt") as f:
@@ -369,7 +396,12 @@ def main():
     ap.add_argument("--no-slow-end", action="store_true", help="end at the goal only, not \"slow\" past END_CP (a segment "
                     "goal short of the next light: the dynamic zone's CP5 + 90 m stops before the CP6 light)")
     ap.add_argument("--scene-preset", default="", help="scenario_variants.py SCENE_PRESET (brake: DAgger dynamic/tunnel scenes)")
-    ap.add_argument("--red-cap", type=float, nargs=2, metavar=("LO", "HI"), help="red waits end after a time drawn from [LO, HI] s")
+    ap.add_argument("--red-cap", type=float, nargs=2, metavar=("LO", "HI"), help="red waits end after a time drawn from [LO, HI] s "
+                    "(-1 -1: the route's green once within 60 m)")
+    ap.add_argument("--spawn-before", type=float, nargs=2, metavar=("LO", "HI"), help="spawn LO-HI m short of the mover, goal 25 m past it")
+    ap.add_argument("--end-on-hit", action="store_true", help="a collision ends the episode")
+    ap.add_argument("--end-hook", help="shell command run at each episode's end (before scoring); also writes the episode's "
+                    "labels.parquet (host-clock bag_time_ns) and env.log for tools/step0")
     ap.add_argument("--returns", action="store_true", help="a failure returns to the last checkpoint passed (eval_manager's "
                     "rules) and the lap goes on; the episode ends at the goal or --limit-s")
     ap.add_argument("--return-hook", help="shell command run (in the background) after each return")

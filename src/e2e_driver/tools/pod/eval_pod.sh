@@ -57,8 +57,8 @@ boot=$(printf '%s' "import base64,json,os,urllib.request as u
 e=dict(l.split('=',1) for l in open('/proc/1/environ').read().split(chr(0)) if '=' in l); e.update(os.environ)
 h={'Authorization':'Basic '+base64.b64encode((e['B2_APPLICATION_KEY_ID'].strip()+':'+e['B2_APPLICATION_KEY'].strip()).encode()).decode()}
 a=json.load(u.urlopen(u.Request('https://api.backblazeb2.com/b2api/v2/b2_authorize_account',headers=h)))
-open('/bundle.py','wb').write(u.urlopen(u.Request(a['downloadUrl']+'/file/morai2026-alpamayo/podimg/${BUNDLE:-}/bundle.py',headers={'Authorization':a['authorizationToken']})).read())" | base64 | tr -d '\n')
-start="${BUNDLE:+mkdir -p /workspace && python3 -c \"\$(echo $boot | base64 -d)\" && python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
+open('/bundle.py','wb').write(u.urlopen(u.Request(a['downloadUrl']+'/file/morai2026-alpamayo/podimg/${BUNDLE:-}/${BUNDLE_PY:-bundle_retry.py}',headers={'Authorization':a['authorizationToken']})).read())" | base64 | tr -d '\n')
+start="${BUNDLE:+mkdir -p /workspace && python3 -c \"\$(echo $boot | base64 -d)\" && STREAMS=${STREAMS:-12} python3 /bundle.py fetch $BUNDLE > /workspace/fetch.log 2>&1 && }\
 bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/setup.sh > /workspace/setup.\$(hostname).log 2>&1; \
 ${wdprep}DPH_USD=\$DPH_USD BUDGET_USD=${BUDGET_USD:-6} nohup bash /workspace/Alpamayo-Cosmos/tools/vast/idle_watchdog.sh > /dev/null 2>&1 &$hold"
 if [[ -n ${ATTACH:-} ]]; then   # a box this script started before (its eval3 died early): POD, ssh config and setup are there
@@ -125,10 +125,11 @@ until P true 2> /dev/null; do late 900 "no ssh 15 min after create (setup.sh die
 log "ssh up ($ip:$port)"
 if [[ -n ${BUNDLE:-} ]]; then   # the competition account: from the Mac only (setup.sh waits for config.tar)
   M=/root/Workspaces/scratches/morai/MoraiLauncher_Lin_Data/Version
-  until P "grep -q '^\[fetch\] ' /workspace/fetch.log"; do late 900 "bundle fetch (/workspace/fetch.log)"; sleep 5; done   # all shards in
+  until P "grep -q '^\[fetch\] ' /workspace/fetch.log"; do late 2400 "bundle fetch (/workspace/fetch.log)"; sleep 5; done   # all shards in
   scp -q -F "$SSHC" ~/.morai-secrets/V2AccountInfo.byte pod:$M/ && P "mkdir -p /workspace/morai" &&
     scp -q -F "$SSHC" ~/.morai-secrets/config.tar pod:/workspace/morai/config.tar.part && P "mv /workspace/morai/config.tar.part /workspace/morai/config.tar"
   log "bundle fetched: $(P "tail -1 /workspace/fetch.log")"
+  P "tail -1 /workspace/fetch.log | grep -q FAILED" && { log "bundle fetch failed after retries: box dropped"; exit 1; }   # setup.sh never runs then
 fi
 rsync -rlt -e "ssh -F $SSHC" --exclude .git --exclude build --exclude devel --exclude __pycache__ --exclude '*.onnx' \
   --exclude object_detector/models --exclude traffic_light/models "$REPO/" pod:/workspace/MORAI-Autonomous-Driving-System/
@@ -173,7 +174,7 @@ redraw=${REDRAW:-1}; next=$(( $(printf '%s\n' "${SEEDS[@]}" | sort -n | tail -1)
 for ((w = 0; w < ${#SEEDS[@]}; w += N)); do
   wave=("${SEEDS[@]:w:N}"); WN=$NAME; (( w > 0 || ${#SEEDS[@]} > N )) && WN=${NAME}_wave$((w / N + 1))
   P "mkdir -p /workspace/results/$WN && cp -n /workspace/results/$NAME/timeline.txt /workspace/results/$WN/ && \
-     (SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
+     (SCENE_FIXED=${SCENE_FIXED:-} SIM_FPS=${SIM_FPS:-60} APPLY_DELAY_S=${APPLY_DELAY_S:-0.1} EVENT_T0=${EVENT_T0:-} LAPS=${LAPS:-1} LAP_DELIVER=${LAP_DELIVER:-0} VIEW_FPS=${VIEW_FPS:-10} SYNC=${SYNC:-0} TICK_MS=${TICK_MS:-100} SERIAL=${SERIAL:-0} \
       KEEP_UP=1 CPU_LAYOUT=${CPU_LAYOUT:-} GATHER=${GATHER:-0.1} PREP=${PREP:-process} setsid nohup bash \
       /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/eval3.sh $WN $DELIVER ${wave[*]} > /workspace/results/$WN.log 2>&1 < /dev/null &)"
   sleep 10   # setsid may not have exec'd eval3 yet when the next ssh looks for it

@@ -248,9 +248,19 @@ def r2_actor(d, rng, route, uid, kind, s0, side, ptype, timing, curb, v_e, sampl
         active = min(max(math.hypot(lon, abs(lat0)), ACTIVE_MIN, safe), ACTIVE_MAX)
     if kind in HOLD_LINE:                           # not set off from the stop line before the zone (preset brake)
         active = min(active, math.hypot(s_start - HOLD_LINE[kind], lat0) - 1.0)
-    x, y, z, h = route.at(s_start, lat0)
+    x, y, pts = put_mover(d, route, uid, data_id, as_ped, pts_sl, kph, active, length, sample_ped, sample_obj)
+    return dict(zone=f"{kind}_dynamic", cls=cls, id=data_id, ped=as_ped, ptype=ptype, timing=timing, s=round(s_start, 1),
+                xy=[round(x, 2), round(y, 2)], xy_end=[round(pts[-1][0], 2), round(pts[-1][1], 2)],
+                lat=round(lat0, 2), s_end=round(s_end, 1), lat_end=round(lat_end, 2), kph=round(kph, 1),
+                active=round(active, 1), move=round(length, 1), t_in=round(t_in, 2), t_e=round(t_e, 2))
+
+
+def put_mover(d, route, uid, data_id, as_ped, pts_sl, kph, active, length, sample_ped, sample_obj):
+    """A pedestrian (PedPath) or prop (ObstaclePath) walking the route-frame points pts_sl [(s, lat), ...] at kph once the
+    Ego is within active m. -> (x, y, [(x, y) of the path])"""
+    x, y, z, h = route.at(*pts_sl[0])
     pts = [(x, y)]
-    for s_, l_ in extra + [(s_end, lat_end)]:
+    for s_, l_ in pts_sl[1:]:
         xx, yy, _, _ = route.at(s_, l_)
         pts.append((xx, yy))
     heading = math.degrees(math.atan2(pts[-1][1] - pts[0][1], pts[-1][0] - pts[0][0]))
@@ -268,10 +278,7 @@ def r2_actor(d, rng, route, uid, kind, s0, side, ptype, timing, curb, v_e, sampl
                  isWaypointMode=True, moveSpeed=kph, activeDistance=active)
         d["objectList"].append(o)
         d["waypointDataList"].append({"pathName": f"ObstaclePath - {uid}", "waypointData": wps})
-    return dict(zone=f"{kind}_dynamic", cls=cls, id=data_id, ped=as_ped, ptype=ptype, timing=timing, s=round(s_start, 1),
-                xy=[round(x, 2), round(y, 2)], xy_end=[round(pts[-1][0], 2), round(pts[-1][1], 2)],
-                lat=round(lat0, 2), s_end=round(s_end, 1), lat_end=round(lat_end, 2), kph=round(kph, 1),
-                active=round(active, 1), move=round(length, 1), t_in=round(t_in, 2), t_e=round(t_e, 2))
+    return x, y, pts
 
 
 def r2_static(d, rng, route, uid, s, lat, sample_obj, data_id, tag, yaw_jitter=15.0):
@@ -305,6 +312,77 @@ if os.environ.get("SCENE_PRESET") == "brake":
     TUNNEL = [("dynamic", 0.6), ("both", 0.4)]
     V_NOMINAL = {"ra": 8.5, "rb": 14.0}
     RA_S, HOLD_LINE, NO_CARS = (465.0, 500.0), {"ra": 436.8}, ("rb",)
+# SCENE_PRESET=popout (user 10/29, near pop-outs: "갓길이나 반대 차선에 서 있어서 멀리서부터 보이더라도 차량이 가까워 져서야
+# 보험사기단마냥 뛰어드는 데이터"; Alpamayo-Cosmos reports/popout_collect_plan_20261029.md): one mover per zone stands still
+# until the Ego is 12-20 m short of it (the official sample: 15 m), then runs at 10-15 kph across the whole road. Start:
+# half in view from afar (near shoulder 25 %, far shoulder 25 %), half hidden until it steps out (in front of the nose of
+# a car parked in the right lane; tunnel: a car prop in the oncoming lane, as the right wall leaves no parking room).
+# Dynamic zone s 445-500 (its s 436.8 light goes green on approach: rl_episode --red-cap -1 -1), tunnel s 1885-1970 (the
+# tunnel segment's goal is s 1984.6), no in-lane tunnel box (its bypass would drive into the far-side start).
+# Far shoulders are timed instead: from the dynamic zone's (+9.6-10.4 m, 8-9 m from the Ego's corridor) no 12-20 m trigger
+# reaches the lane before the Ego is through, and from the tunnel's (+5.7-6.1 m) only 32 % do at 14 m/s; their trigger
+# leaves the Ego 0.2-0.8 s short of the mover's path when the mover enters its corridor, 12-35 m (the plan md asks the user).
+POPOUT = os.environ.get("SCENE_PRESET") == "popout"
+# hidden drawn 2/3: about half the hidden movers (standing in the lane in front of the car) never spawn (main 10/29: ra 12/25,
+# rb 9/16 NOT_MOVED), so the spawned ones come out near 50/50 visible / hidden
+POP_START = [("near", 1 / 6), ("far", 1 / 6), ("hidden", 2 / 3)]
+# POP_MIX=tstar (T* collection, main 10/29): near pop-outs 75 % (as above) + R2-type crossings from afar 25 % ("cross":
+# a walker 3-8 kph from either curb, set off early enough to be in the lane as the Ego arrives)
+if os.environ.get("POP_MIX") == "tstar":
+    POP_START = [("near", 0.1875), ("far", 0.1875), ("hidden", 0.375), ("cross", 0.25)]   # hidden on the sidewalk: spawns
+POP_LON, POP_KPH, POP_FAR_MAX = (12.0, 20.0), (10.0, 15.0), 35.0
+# POP_STARTS="ra:far,hidden;rb:hidden": only these starts per zone, equal shares (a catch-up batch for missing cells)
+POP_ONLY = {z: v.split(",") for z, v in (kv.split(":") for kv in os.environ.get("POP_STARTS", "").split(";") if kv)}
+if POPOUT:
+    RA_S, NO_CARS = (445.0, 500.0), ("rb",)
+    V_NOMINAL = {"ra": 10.0, "rb": 14.0}             # the collection driver (R2 pilot 10-13 m/s; tunnel 13-15.6)
+
+
+def popout(d, rng, route, uid, kind, s_lo, s_hi, curb, sample_ped, sample_obj, info):
+    """SCENE_PRESET=popout: one mover standing beside the road that runs across it once the Ego is close."""
+    table = [(k, 1.0 / len(POP_ONLY[kind])) for k in POP_ONLY[kind]] if kind in POP_ONLY else POP_START
+    start, s0, ra = pick(rng, table), rng.uniform(s_lo, s_hi), kind == "ra"
+    walk = (0.2, 1.0) if ra else (0.4, 0.8)          # sidewalk beyond the curb / walkway along the tunnel wall
+    side = rng.choice(("near", "far")) if start == "cross" else start
+    if side == "near":
+        lat0 = curb[0] - rng.uniform(*walk)
+    elif side == "far":
+        lat0 = curb[1] + rng.uniform(*walk)
+    else:   # in front of a parked car's nose, inside its shadow from an Ego approaching in the route lane
+        car = rng.choice(CAR_PROPS[:5])
+        tstar = os.environ.get("POP_MIX") == "tstar"   # T*: the car against the curb, the mover on the sidewalk edge in its
+        lat_car = (curb[0] + (1.1 if tstar else 1.6)) if ra else curb[1] - 1.3   # shadow (navmesh; in-lane ones did not spawn)
+        s_car = s0 - PROP_HALF_L[car] - rng.uniform(1.2, 1.6)   # 0.6-1.2 m: two tunnel movers never spawned (po29b)
+        info.append(r2_static(d, rng, route, uid[0], s_car, lat_car, sample_obj, car, f"{kind}_parked", 3.0))
+        uid[0] += 1
+        lat0 = (curb[0] - rng.uniform(0.2, 0.5) if lat_car < 0 else curb[1] + rng.uniform(0.3, 0.5)) if tstar else \
+            lat_car + math.copysign(rng.uniform(0.0, 0.4), lat_car)
+    far_end = 1.0 if ra else 0.8
+    lat_end = curb[1] + rng.uniform(0.3, far_end) if lat0 < 0 else curb[0] - rng.uniform(0.3, far_end)
+    s_end = s0 + rng.uniform(-1.5, 1.5)
+    # 5xxxxxxx assets only: moving props (4xxxxxxx) are not in the competition (MORAI 10/6); no cyclist either, it reports
+    # a 0 x 0 x 0 box (the visibility test and the labels need a size)
+    cls, as_ped = pick(rng, [("person", 0.85), ("other", 0.15)]), True
+    data_id = rng.choice(PERSONS if cls == "person" else [p for p in OTHER_PEDS if p != 50100084])
+    kph = rng.uniform(3.0, 8.0) if start == "cross" else rng.uniform(*POP_KPH)
+    v_o, v_e, corr = kph / 3.6, V_NOMINAL[kind], 1.2 + 0.35
+    leg = math.hypot(s_end - s0, lat_end - lat0)
+    t_in = max(abs(lat0) - corr, 0.0) * leg / abs(lat_end - lat0) / v_o   # to the Ego's corridor (route lane +-1.2 m)
+    if start == "cross":   # in the corridor 0.5-2.5 s before the Ego would reach its path
+        lon = min(max(v_e * max(t_in - rng.uniform(0.5, 2.5), 0.0) + rng.uniform(12.0, 20.0), 12.0), 60.0)
+    elif start == "far":
+        lon = min(max(v_e * (t_in + rng.uniform(0.2, 0.8)), POP_LON[0]), POP_FAR_MAX)
+    else:
+        lon = rng.uniform(*POP_LON)
+    active = math.hypot(lon, lat0)
+    x, y, pts = put_mover(d, route, uid[0], data_id, as_ped, [(s0, lat0), (s_end, lat_end)], kph, active, leg,
+                          sample_ped, sample_obj)
+    info.append(dict(zone=f"{kind}_dynamic", cls=cls, id=data_id, ped=as_ped, ptype="popout", start=start,
+                     timing="must_stop" if lon / v_e > t_in else "pass_front", s=round(s0, 1), xy=[round(x, 2), round(y, 2)],
+                     xy_end=[round(pts[-1][0], 2), round(pts[-1][1], 2)], lat=round(lat0, 2), s_end=round(s_end, 1),
+                     lat_end=round(lat_end, 2), kph=round(kph, 1), active=round(active, 1), lon=round(lon, 1),
+                     move=round(leg, 1), t_in=round(t_in, 2), t_e=round(lon / v_e, 2)))
+    uid[0] += 1
 
 
 def r2_dynamic(d, rng, route, uid, kind, s_lo, s_hi, curb, sample_ped, sample_obj, info, avoid=None):
@@ -440,7 +518,10 @@ def make(base, route, rng, uid0, cps=None):
     sample_ped = base["pedestrianList"][0]
     d["objectList"], d["pedestrianList"] = objs, peds
     # dynamic zone (the official sample pedestrian's, past stop line s 436.8): DATA_PLAN_R2 §4 A objects, s 445-500
-    r2_dynamic(d, rng, route, uid, "ra", *RA_S, A_CURB, sample_ped, sample_obj, info)
+    if POPOUT:
+        popout(d, rng, route, uid, "ra", *RA_S, A_CURB, sample_ped, sample_obj, info)
+    else:
+        r2_dynamic(d, rng, route, uid, "ra", *RA_S, A_CURB, sample_ped, sample_obj, info)
 
     if d.get("shadedAreaList"):
         area = d["shadedAreaList"][0]
@@ -451,8 +532,10 @@ def make(base, route, rng, uid0, cps=None):
         st = s_area + shift
         half = float(area["size"]["x"]) * 0.4
         meta["shade_shift_m"] = round(shift, 1)
-        comp = pick(rng, TUNNEL)
+        comp = "popout" if POPOUT else pick(rng, TUNNEL)
         meta["tunnel"] = comp
+        if POPOUT:
+            popout(d, rng, route, uid, "rb", 1885.0, 1970.0, B_CURB, sample_ped, sample_obj, info)
         if comp in ("both", "static"):
             # Only past s 1894 (front face >= 1890 even for a 6.6 m vehicle model): before that the solid left line of
             # lanelet 96340 leaves no legal bypass and the driver can only stand (rs2028_004, 2026-10-21).

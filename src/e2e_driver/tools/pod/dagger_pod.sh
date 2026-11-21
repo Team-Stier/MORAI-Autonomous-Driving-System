@@ -7,10 +7,11 @@
 #   Env: OFFER (vast offer ids, tried in order; eval_pod.sh), KEEP=1 leaves the box up (stop it yourself),
 #   ATTACH=<instance id> ATTACH_NAME=<its first run's name>: run again on that box (e2e_driver code synced anew).
 #   RANGE: rl_episode sections for dagger_box.sh (default the full lap); LATE_SEED: then one eval3 lap of that seed (late).
+#   BOX=popout_box.sh: the near pop-out collection instead (args NAME EPISODES_PER_ZONE BATCH SEED; README "근거리 돌출 녹화").
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); REPO=$(cd "$HERE/../../../.." && pwd)
 FORK=$REPO/../MORAI-Autonomous-Driving-System-collect; GT=$HOME/.claude/skills/morai-parallel-collect/scripts/wsl
-NAME=$1; K=${2:-2}; D=${3:-1}; SEED=${4:-28}
+NAME=$1; K=${2:-2}; D=${3:-1}; SEED=${4:-28}; BOX=${BOX:-dagger_box.sh}
 LOCAL=$HOME/morai-eval/dagger/$NAME; mkdir -p "$LOCAL"; SSHC=$HOME/morai-eval/pod/$NAME/ssh_config
 log() { echo "$(date +%T) $*" | tee -a "$LOCAL/dagger_pod.log"; }
 [[ $(git -C "$FORK" rev-parse --short HEAD) == e2cd63a && -z $(git -C "$FORK" status --porcelain) ]] ||
@@ -46,13 +47,19 @@ bye() {
 }
 trap bye EXIT; trap 'exit 130' INT TERM
 log "instance $ID up; $(vastai show instance "$ID" --raw | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["dph_total"], "$/h", d.get("cpu_name"), d.get("geolocation"))')"
+push() {   # 3 tries: an ssh hiccup right after boot dropped three boxes as "push failed" (10/29 pe08/14/28)
 P "mkdir -p /workspace/shadow/gt /workspace/results/$NAME" && scp -q -F "$SSHC" "$LOCAL/shadow_src.tar" pod:/workspace/shadow/ &&
-  rsync -rlt -e "ssh -F $SSHC" --include '*.py' --exclude '*' "$GT/" pod:/workspace/shadow/gt/ || { log "push failed"; exit 1; }
-P "${RANGE:+RANGE='$RANGE' }${LATE_SEED:+LATE_SEED=$LATE_SEED }setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/dagger_box.sh $NAME $K $D $SEED > /workspace/results/$NAME.log 2>&1 < /dev/null &"
+  rsync -rlt -e "ssh -F $SSHC" --include '*.py' --exclude '*' "$GT/" pod:/workspace/shadow/gt/ &&
+  P "mkdir -p /workspace/Alpamayo-Cosmos/train" && AC=$REPO/../Alpamayo-Cosmos &&   # popout: step0 + synthetic labels on the box
+  rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ "$AC/tools/coc_labeler" "$AC/tools/step0" pod:/workspace/Alpamayo-Cosmos/tools/ &&
+  rsync -rlt -e "ssh -F $SSHC" --exclude __pycache__ --exclude '*.bak*' "$AC/train/morai_vla" "$AC/train/scripts" pod:/workspace/Alpamayo-Cosmos/train/
+}
+for t in 1 2 3 4 5 6 7 8; do push && break; log "push try $t failed"; sleep 15; [[ $t == 8 ]] && { log "push failed"; exit 1; }; done
+P "${POP_MIX:+POP_MIX=$POP_MIX }${POP_STARTS:+POP_STARTS='$POP_STARTS' }${RANGE:+RANGE='$RANGE' }${LATE_SEED:+LATE_SEED=$LATE_SEED }setsid nohup bash /workspace/MORAI-Autonomous-Driving-System/src/e2e_driver/tools/pod/$BOX $NAME $K $D $SEED > /workspace/results/$NAME.log 2>&1 < /dev/null &"
 for i in $(seq 30); do P "test -s /workspace/results/$NAME/timeline.txt" && break; sleep 2; done
-log "dagger_box running: ssh -F $SSHC pod tail -f /workspace/results/$NAME/timeline.txt"
+log "$BOX running: ssh -F $SSHC pod tail -f /workspace/results/$NAME/timeline.txt"
 seen=0
-state() { P "test -e /workspace/results/$NAME/DONE && echo done || (pgrep -f '[d]agger_box.sh $NAME' > /dev/null && echo run || echo dead)" 2> /dev/null; }
+state() { P "test -e /workspace/results/$NAME/DONE && echo done || (pgrep -f '[${BOX:0:1}]${BOX:1} $NAME' > /dev/null && echo run || echo dead)" 2> /dev/null; }
 gone=0
 while :; do   # an ssh hiccup is not an end (10/28: "connection refused" for a minute read as dagger_box gone)
   st=$(state); [[ $st == done ]] && break

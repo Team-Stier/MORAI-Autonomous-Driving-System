@@ -10,7 +10,7 @@ pack  (on a pod booted from the network volume, setup.sh done): ROOTS -> regular
 fetch (a fresh host's start command, eval_pod.sh BUNDLE=TAG): every shard of MANIFEST into tar -x under / (FETCH_ROOT),
       32 MB ranges, STREAMS (48) at a time, links.tgz last; B2 keys from the environment or PID 1's (the image has no curl).
 """
-import base64, json, os, subprocess, sys, threading, time, urllib.request
+import random, base64, json, os, subprocess, sys, threading, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 BUCKET, SHARD = "morai2026-alpamayo", 1 << 30
@@ -88,15 +88,16 @@ def fetch(tag):
     auth = base64.b64encode(f"{k['B2_APPLICATION_KEY_ID']}:{k['B2_APPLICATION_KEY']}".encode()).decode()
     a = json.load(urllib.request.urlopen(urllib.request.Request(
         "https://api.backblazeb2.com/b2api/v2/b2_authorize_account", headers={"Authorization": "Basic " + auth}), timeout=30))
-    url, tok, root, CH = f"{a['downloadUrl']}/file/{BUCKET}/podimg/{tag}", a["authorizationToken"], os.environ.get("FETCH_ROOT", "/"), 32 << 20
+    url, tok, root, CH = f"{a['downloadUrl']}/file/{BUCKET}/podimg/{tag}", a["authorizationToken"], os.environ.get("FETCH_ROOT", "/"), int(os.environ.get("CHUNK_MB", 128)) << 20   # 10/29: 32 MB ranges x 50 boxes drew B2 429s; fewer, larger requests
 
     def get(name, lo=None, hi=None):
         h = {"Authorization": tok, **({"Range": f"bytes={lo}-{hi}"} if lo is not None else {})}
         for n in range(6):
             try:
                 return urllib.request.urlopen(urllib.request.Request(f"{url}/{name}", headers=h), timeout=60).read()
-            except OSError as e:
-                err = e; time.sleep(2 + 3 * n)
+            except Exception as e:   # http.client.IncompleteRead is no OSError
+                err = e   # 429 (10/29, 50 boxes at once): B2 asks to slow down; wait longer, with jitter so boxes spread out
+                time.sleep(15 + 10 * n + random.random() * 10 if getattr(e, "code", None) in (429, 503) else 2 + 3 * n)
         raise err
     t0, failed = time.time(), []
     manifest = [l.split() for l in get("MANIFEST").decode().splitlines() if l.strip()]
@@ -104,21 +105,26 @@ def fetch(tag):
     pool = ThreadPoolExecutor(int(os.environ.get("STREAMS", 48)))
 
     def one(m):
-        name, size, t = m[0], int(m[1]), time.time()
-        tar = subprocess.Popen(["tar", "-xzf" if name.endswith(".tgz") else "-xf", "-", "-C", root], stdin=subprocess.PIPE)
-        try:
-            ahead, pos = [], 0
-            while pos < size or ahead:
-                while pos < size and len(ahead) < 12:
-                    ahead.append(pool.submit(get, name, pos, min(pos + CH, size) - 1)); pos += CH
-                tar.stdin.write(ahead.pop(0).result())
-            tar.stdin.close()
-            ok = tar.wait() == 0
-        except OSError as e:
-            print(f"[fetch] {name}: {e}", flush=True); tar.kill(); ok = False
-        if not ok:
-            failed.append(name)
-        print(f"[fetch +{time.time() - t0:.0f}s] {name} {size / 1e9:.2f} GB in {time.time() - t:.0f} s{'' if ok else ' FAILED'}", flush=True)
+        name, size = m[0], int(m[1])
+        for attempt in range(4):   # 10/29: one shard's B2 error left the box without setup.sh; fetch the whole shard again
+            t = time.time()
+            tar = subprocess.Popen(["tar", "-xzf" if name.endswith(".tgz") else "-xf", "-", "-C", root], stdin=subprocess.PIPE)
+            try:
+                ahead, pos = [], 0
+                while pos < size or ahead:
+                    while pos < size and len(ahead) < int(os.environ.get("AHEAD", 3)):   # 3 x 128 MB read ahead per shard (was 12 x 32 MB)
+                        ahead.append(pool.submit(get, name, pos, min(pos + CH, size) - 1)); pos += CH
+                    tar.stdin.write(ahead.pop(0).result())
+                tar.stdin.close()
+                ok = tar.wait() == 0
+            except Exception as e:   # not "[fetch] ": eval_pod.sh waits for that prefix as the end of the fetch
+                print(f"[fetch-retry] {name}: {e}", flush=True); tar.kill(); ok = False
+                for f in ahead: f.cancel()
+            print(f"[fetch +{time.time() - t0:.0f}s] {name} {size / 1e9:.2f} GB in {time.time() - t:.0f} s{'' if ok else f' FAILED try {attempt + 1}'}", flush=True)
+            if ok:
+                return
+            time.sleep(5 + 10 * attempt)
+        failed.append(name)
     with ThreadPoolExecutor(len(manifest)) as ex:
         list(ex.map(one, [m for m in manifest if m[0] != "links.tgz"]))
     one(next(m for m in manifest if m[0] == "links.tgz"))
